@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useGPS } from '../hooks/useGPS'
 import {
   getPermissionSnapshot,
   requestCameraPermission,
@@ -11,8 +12,13 @@ import {
 } from '../lib/devicePermissions'
 
 const KEY = 'hud_permission_overlay_seen_v1'
+const APPLE_GPS_STUCK_MS = 10_000
 
 export default function PermissionPromptOverlay() {
+  const gps = useGPS()
+  const gpsRef = useRef(gps)
+  gpsRef.current = gps
+  const noLockSinceRef = useRef<number | null>(null)
   const [visible, setVisible] = useState(false)
   const [geo, setGeo] = useState<PermissionStateLike>('unknown')
   const [mic, setMic] = useState<PermissionStateLike>('unknown')
@@ -21,6 +27,27 @@ export default function PermissionPromptOverlay() {
   const [orient, setOrient] = useState<PermissionStateLike>('unknown')
   const [motion, setMotion] = useState<PermissionStateLike>('unknown')
   const [busy, setBusy] = useState(false)
+  const isAppleMobile = useMemo(() => {
+    const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : ''
+    return /iPhone|iPad|iPod/i.test(ua)
+  }, [])
+
+  const platformHint = useMemo(() => {
+    const ua = navigator.userAgent || ''
+    const isAndroid = /Android/i.test(ua)
+    const isWindows = /Windows/i.test(ua)
+    const isApple = /iPhone|iPad|iPod|Macintosh/i.test(ua)
+    if (isAndroid) {
+      return 'Android: allow prompts, then check Chrome site settings if any permission stays blocked.'
+    }
+    if (isWindows) {
+      return 'Windows: allow browser prompts and confirm Location/Microphone are enabled in browser + OS privacy settings.'
+    }
+    if (isApple) {
+      return 'Apple: iOS/Safari requires explicit user taps for each permission prompt.'
+    }
+    return 'Allow each browser prompt. If blocked, reopen site permissions from your browser address bar.'
+  }, [])
 
   useEffect(() => {
     const seen = localStorage.getItem(KEY) === '1'
@@ -33,6 +60,46 @@ export default function PermissionPromptOverlay() {
       }
     })
   }, [])
+
+  /** Apple: re-open overlay if GPS denied or no fix after prolonged search (user may have dismissed early). */
+  useEffect(() => {
+    if (!isAppleMobile) return
+    const refreshSnapshot = () => {
+      void getPermissionSnapshot().then((s) => {
+        setGeo(s.geolocation)
+        setMic(s.microphone)
+        setNotif(s.notifications)
+      })
+    }
+    const id = window.setInterval(() => {
+      const g = gpsRef.current
+      const locked = g.lat != null && g.lng != null
+      if (locked) {
+        noLockSinceRef.current = null
+        return
+      }
+      if (g.status === 'denied') {
+        noLockSinceRef.current = null
+        setVisible(true)
+        refreshSnapshot()
+        return
+      }
+      const pending = g.status === 'searching' || g.status === 'idle' || g.status === 'error'
+      if (!pending) {
+        noLockSinceRef.current = null
+        return
+      }
+      if (noLockSinceRef.current == null) {
+        noLockSinceRef.current = Date.now()
+      } else if (Date.now() - noLockSinceRef.current >= APPLE_GPS_STUCK_MS) {
+        setVisible(true)
+        refreshSnapshot()
+      }
+    }, 1000)
+    return () => {
+      window.clearInterval(id)
+    }
+  }, [isAppleMobile])
 
   const permissionRowStyle: React.CSSProperties = {
     minHeight: 40,
@@ -112,7 +179,13 @@ export default function PermissionPromptOverlay() {
           DEVICE PERMISSIONS REQUIRED
         </div>
         <div style={{ fontSize: 11, color: '#b8c4b8' }}>
-          Tap each prompt below on Apple devices. iOS requires explicit user actions for these popups.
+          {platformHint}
+          {isAppleMobile && (
+            <span style={{ display: 'block', marginTop: 6, color: '#9ec4a8' }}>
+              If GPS stays on SEARCH or DENIED, tap LOCATION below — Safari only grants location after a direct user
+              action.
+            </span>
+          )}
         </div>
         <button type="button" onClick={() => void runAll()} disabled={busy} style={permissionRowStyle}>
           {busy ? 'REQUESTING…' : 'REQUEST ALL NOW'}
