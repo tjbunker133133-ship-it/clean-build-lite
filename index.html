@@ -3673,6 +3673,22 @@ function loadLayout(){
   }catch(e){}
 }
 
+function ensureMapPanelVisible(){
+  var panel=document.querySelector('[data-panel-id="map"]');
+  if(!panel)return;
+  panel.classList.remove('collapsed');
+  panel.style.display='';
+  panel.style.visibility='visible';
+  var left=parseFloat(panel.style.left);
+  var top=parseFloat(panel.style.top);
+  var maxLeft=Math.max(8,window.innerWidth-Math.max(panel.offsetWidth||320,320)-8);
+  var maxTop=Math.max(72,window.innerHeight-96);
+  if(!Number.isFinite(left)||left<8||left>window.innerWidth-40)panel.style.left='12px';
+  else panel.style.left=Math.max(8,Math.min(left,maxLeft))+'px';
+  if(!Number.isFinite(top)||top<72||top>window.innerHeight-40)panel.style.top='415px';
+  else panel.style.top=Math.max(72,Math.min(top,maxTop))+'px';
+}
+
 function saveLayout(){
   var panels={};
   document.querySelectorAll('.elite-panel[data-panel-id]').forEach(function(el){
@@ -4038,6 +4054,7 @@ void loadAuthSession();
 loadRoute();
 renderEmergencyContactsUI();
 loadLayout();
+ensureMapPanelVisible();
 initVoiceDirectoryPanel();
 window.hudVoiceSystem=new HUDVoiceSystem();
 window.hudVoiceSystem.init();
