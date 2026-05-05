@@ -125,10 +125,17 @@ export default function StatusRail() {
     if (requestingGeo) return
     setRequestingGeo(true)
     try {
-      await requestGeolocationPermission()
+      const s = await requestGeolocationPermission()
+      if (s === 'denied') {
+        window.dispatchEvent(new CustomEvent('hud:show-permissions'))
+      }
     } finally {
       setRequestingGeo(false)
     }
+  }
+
+  const openPermissionHelp = () => {
+    window.dispatchEvent(new CustomEvent('hud:show-permissions'))
   }
 
   useEffect(() => {
@@ -205,25 +212,47 @@ export default function StatusRail() {
         }}
       >
         {gps.status !== 'locked' && (
-          <button
-            type="button"
-            onClick={() => void promptLocation()}
-            disabled={requestingGeo}
-            style={{
-              pointerEvents: 'auto',
-              minHeight: 26,
-              borderRadius: 999,
-              border: '1px solid rgba(125,255,138,0.45)',
-              background: 'rgba(125,255,138,0.16)',
-              color: '#d8f6de',
-              padding: '0 10px',
-              fontSize: 10,
-              letterSpacing: '0.08em',
-              cursor: requestingGeo ? 'wait' : 'pointer',
-            }}
-          >
-            {requestingGeo ? 'PROMPTING GPS…' : 'PROMPT GPS'}
-          </button>
+          <>
+            <button
+              type="button"
+              onClick={() => void promptLocation()}
+              disabled={requestingGeo}
+              style={{
+                pointerEvents: 'auto',
+                minHeight: 26,
+                borderRadius: 999,
+                border: '1px solid rgba(125,255,138,0.45)',
+                background: 'rgba(125,255,138,0.16)',
+                color: '#d8f6de',
+                padding: '0 10px',
+                fontSize: 10,
+                letterSpacing: '0.08em',
+                cursor: requestingGeo ? 'wait' : 'pointer',
+              }}
+            >
+              {requestingGeo ? 'PROMPTING GPS…' : 'PROMPT GPS'}
+            </button>
+            {gps.status === 'denied' && (
+              <button
+                type="button"
+                onClick={openPermissionHelp}
+                style={{
+                  pointerEvents: 'auto',
+                  minHeight: 26,
+                  borderRadius: 999,
+                  border: '1px solid rgba(255,107,135,0.55)',
+                  background: 'rgba(255,80,100,0.2)',
+                  color: '#ffd0d8',
+                  padding: '0 10px',
+                  fontSize: 10,
+                  letterSpacing: '0.08em',
+                  cursor: 'pointer',
+                }}
+              >
+                LOCATION DENIED — HELP
+              </button>
+            )}
+          </>
         )}
         <span>{gpsText}</span>
         <span>BAT {battPct}</span>

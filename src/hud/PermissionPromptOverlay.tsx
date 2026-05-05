@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useGPS } from '../hooks/useGPS'
 import {
   getPermissionSnapshot,
@@ -31,6 +31,13 @@ export default function PermissionPromptOverlay() {
     const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : ''
     return /iPhone|iPad|iPod/i.test(ua)
   }, [])
+
+  const isAndroid = useMemo(() => {
+    const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : ''
+    return /Android/i.test(ua)
+  }, [])
+
+  const locationDenied = geo === 'denied' || gps.status === 'denied'
 
   const platformHint = useMemo(() => {
     const ua = navigator.userAgent || ''
@@ -101,6 +108,19 @@ export default function PermissionPromptOverlay() {
     }
   }, [isAppleMobile])
 
+  useEffect(() => {
+    const onShow = () => {
+      setVisible(true)
+      void getPermissionSnapshot().then((s) => {
+        setGeo(s.geolocation)
+        setMic(s.microphone)
+        setNotif(s.notifications)
+      })
+    }
+    window.addEventListener('hud:show-permissions', onShow)
+    return () => window.removeEventListener('hud:show-permissions', onShow)
+  }, [])
+
   const permissionRowStyle: React.CSSProperties = {
     minHeight: 40,
     borderRadius: 8,
@@ -118,14 +138,12 @@ export default function PermissionPromptOverlay() {
     [geo, mic, camera, notif, orient, motion],
   )
 
-  if (!visible) return null
-
-  const close = () => {
+  const close = useCallback(() => {
     localStorage.setItem(KEY, '1')
     setVisible(false)
-  }
+  }, [])
 
-  const runOne = async (fn: () => Promise<PermissionStateLike>, set: (s: PermissionStateLike) => void) => {
+  const runOne = useCallback(async (fn: () => Promise<PermissionStateLike>, set: (s: PermissionStateLike) => void) => {
     if (busy) return
     setBusy(true)
     try {
@@ -133,9 +151,9 @@ export default function PermissionPromptOverlay() {
     } finally {
       setBusy(false)
     }
-  }
+  }, [busy])
 
-  const runAll = async () => {
+  const runAll = useCallback(async () => {
     if (busy) return
     setBusy(true)
     try {
@@ -148,7 +166,9 @@ export default function PermissionPromptOverlay() {
     } finally {
       setBusy(false)
     }
-  }
+  }, [busy])
+
+  if (!visible) return null
 
   return (
     <div
@@ -187,6 +207,72 @@ export default function PermissionPromptOverlay() {
             </span>
           )}
         </div>
+        {locationDenied && (
+          <div
+            style={{
+              padding: '10px 12px',
+              borderRadius: 10,
+              border: '1px solid rgba(255,107,135,0.55)',
+              background: 'rgba(40,12,20,0.55)',
+              fontSize: 11,
+              color: '#ffd0d8',
+              lineHeight: 1.45,
+            }}
+          >
+            <div style={{ fontWeight: 800, letterSpacing: '0.1em', color: '#ff8a9d', marginBottom: 6 }}>
+              LOCATION DENIED — FIX IN SYSTEM SETTINGS
+            </div>
+            {isAppleMobile ? (
+              <ol style={{ margin: 0, paddingLeft: 18 }}>
+                <li>
+                  Open <strong>Settings</strong> → <strong>Privacy &amp; Security</strong> → <strong>Location Services</strong>{' '}
+                  (must be ON).
+                </li>
+                <li>
+                  <strong>Safari</strong> → <strong>Location</strong> → choose <strong>While Using</strong> or{' '}
+                  <strong>Ask</strong>. Then return here and tap <strong>LOCATION</strong> again.
+                </li>
+                <li>
+                  If you added this app to the Home Screen, also check <strong>Settings</strong> → your <strong>app name</strong>{' '}
+                  → <strong>Location</strong> → <strong>While Using</strong>.
+                </li>
+                <li>
+                  In Safari, tap <strong>aA</strong> (or address bar) → <strong>Website Settings</strong> → set Location to{' '}
+                  <strong>Ask</strong> or <strong>Allow</strong>.
+                </li>
+              </ol>
+            ) : isAndroid ? (
+              <ol style={{ margin: 0, paddingLeft: 18 }}>
+                <li>
+                  Chrome: <strong>⋮</strong> → <strong>Settings</strong> → <strong>Site settings</strong> → <strong>Location</strong>{' '}
+                  → allow this site, or clear Block for this origin.
+                </li>
+                <li>
+                  System: <strong>Settings</strong> → <strong>Location</strong> ON, and app/browser location allowed.
+                </li>
+              </ol>
+            ) : (
+              <p style={{ margin: 0 }}>
+                Allow location for this site in your browser&apos;s site permissions (lock icon or address bar), then tap{' '}
+                <strong>LOCATION</strong> again.
+              </p>
+            )}
+            <button
+              type="button"
+              onClick={() => void runOne(requestGeolocationPermission, setGeo)}
+              disabled={busy}
+              style={{
+                ...permissionRowStyle,
+                marginTop: 10,
+                borderColor: 'rgba(255,138,160,0.65)',
+                background: 'rgba(255,80,120,0.2)',
+                color: '#ffe8ec',
+              }}
+            >
+              RETRY LOCATION AFTER SETTINGS
+            </button>
+          </div>
+        )}
         <button type="button" onClick={() => void runAll()} disabled={busy} style={permissionRowStyle}>
           {busy ? 'REQUESTING…' : 'REQUEST ALL NOW'}
         </button>
