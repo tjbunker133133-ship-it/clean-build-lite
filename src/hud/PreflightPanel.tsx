@@ -11,6 +11,7 @@ import {
   requestOrientationPermission,
   type PermissionStateLike,
 } from '../lib/devicePermissions'
+import { COCKPIT_STORAGE_KEY } from '../types/cockpit'
 
 type CheckState = 'pass' | 'warn' | 'fail'
 type ManualCheckKey =
@@ -29,6 +30,7 @@ type CheckRow = {
 }
 
 const MANUAL_KEY = 'tactical_preflight_manual_v1'
+const DEVICE_TUNE_KEY = `${COCKPIT_STORAGE_KEY}_device_tune`
 
 function stateColor(state: CheckState) {
   if (state === 'pass') return '#7dff8a'
@@ -165,6 +167,20 @@ export default function PreflightPanel() {
 
   const endpoint = useMemo(() => readRapidEndpoint(), [])
   const speechSupported = !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)
+  const deviceTuneMeta = useMemo(() => {
+    try {
+      const raw = localStorage.getItem(DEVICE_TUNE_KEY)
+      if (!raw) return null
+      const parsed = JSON.parse(raw) as { v?: string; device?: string; ts?: number }
+      return {
+        device: typeof parsed?.device === 'string' ? parsed.device : 'unknown',
+        version: typeof parsed?.v === 'string' ? parsed.v : 'unknown',
+        ts: typeof parsed?.ts === 'number' && Number.isFinite(parsed.ts) ? parsed.ts : null,
+      }
+    } catch {
+      return null
+    }
+  }, [recheckTick])
 
   const checks: CheckRow[] = useMemo(() => {
     const gpsLock = gps.lat != null && gps.lng != null
@@ -491,6 +507,31 @@ export default function PreflightPanel() {
             Last recheck: {new Date(lastRecheckAt).toLocaleTimeString()}
           </div>
         )}
+        <div
+          style={{
+            display: 'grid',
+            gap: 2,
+            fontSize: 10,
+            color: '#9ea7a0',
+            padding: '6px 8px',
+            borderRadius: 8,
+            border: '1px solid rgba(199,206,198,0.18)',
+            background: 'rgba(12,16,14,0.45)',
+          }}
+        >
+          <div>
+            Device profile: <strong style={{ color: '#d6ddd6' }}>{(deviceTuneMeta?.device ?? 'unknown').toUpperCase()}</strong>
+          </div>
+          <div>
+            Tune version: <strong style={{ color: '#d6ddd6' }}>{deviceTuneMeta?.version ?? 'not applied'}</strong>
+          </div>
+          <div>
+            Last optimized:{' '}
+            <strong style={{ color: '#d6ddd6' }}>
+              {deviceTuneMeta?.ts ? new Date(deviceTuneMeta.ts).toLocaleString() : 'not recorded'}
+            </strong>
+          </div>
+        </div>
 
         <div style={{ maxHeight: 180, overflowY: 'auto', border: '1px solid rgba(199,206,198,0.16)', borderRadius: 8, padding: 6 }}>
           {checks.map((check) => (

@@ -464,18 +464,18 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
     const patch = deviceOptimizationPrefs(device)
     setPrefs((prev) => {
       const next = { ...prev, ...patch }
-      persist(panels, next)
+      saveState(panels, next)
       return next
     })
     try {
       localStorage.setItem(
         `${COCKPIT_STORAGE_KEY}_device_tune`,
-        JSON.stringify({ v: DEVICE_TUNE_VERSION, device }),
+        JSON.stringify({ v: DEVICE_TUNE_VERSION, device, ts: Date.now() }),
       )
     } catch {
       /* ignore */
     }
-  }, [panels, persist])
+  }, [panels])
 
   useEffect(() => {
     let alreadyApplied = false
