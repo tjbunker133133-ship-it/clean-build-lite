@@ -10,6 +10,14 @@ import {
   requestOrientationPermission,
   type PermissionStateLike,
 } from '../lib/devicePermissions'
+import {
+  androidLocationFixClipboardLines,
+  copyTextToClipboard,
+  safariLocationFixClipboardLines,
+  tryOpenAndroidLocationSettings,
+  tryOpenIosLocationPrivacySettings,
+  tryOpenIosLocationPrivacySettingsAlternate,
+} from '../lib/systemSettingsLinks'
 
 const KEY = 'hud_permission_overlay_seen_v1'
 const APPLE_GPS_STUCK_MS = 10_000
@@ -27,6 +35,7 @@ export default function PermissionPromptOverlay() {
   const [orient, setOrient] = useState<PermissionStateLike>('unknown')
   const [motion, setMotion] = useState<PermissionStateLike>('unknown')
   const [busy, setBusy] = useState(false)
+  const [linkHint, setLinkHint] = useState<string | null>(null)
   const isAppleMobile = useMemo(() => {
     const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : ''
     return /iPhone|iPad|iPod/i.test(ua)
@@ -207,6 +216,94 @@ export default function PermissionPromptOverlay() {
             </span>
           )}
         </div>
+        {(isAppleMobile || isAndroid) && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div style={{ fontSize: 10, letterSpacing: '0.08em', color: '#8a9a8c' }}>QUICK OPEN (USER TAP REQUIRED)</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {isAppleMobile && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLinkHint(
+                        'Leaving HUD briefly — if Settings does not open, iOS blocked the link. Use COPY SAFARI STEPS.',
+                      )
+                      window.setTimeout(() => setLinkHint(null), 9000)
+                      tryOpenIosLocationPrivacySettings()
+                    }}
+                    style={{
+                      ...permissionRowStyle,
+                      flex: '1 1 140px',
+                      borderColor: 'rgba(125,255,138,0.55)',
+                      background: 'rgba(125,255,138,0.18)',
+                      color: '#e4fcea',
+                    }}
+                  >
+                    OPEN IPHONE SETTINGS · LOCATION
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLinkHint('Trying alternate deep link…')
+                      window.setTimeout(() => setLinkHint(null), 5000)
+                      tryOpenIosLocationPrivacySettingsAlternate()
+                    }}
+                    style={{ ...permissionRowStyle, flex: '1 1 120px' }}
+                  >
+                    TRY ALT SETTINGS LINK
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void copyTextToClipboard(safariLocationFixClipboardLines()).then((ok) => {
+                        setLinkHint(ok ? 'Safari steps copied — paste in Notes if useful.' : 'Copy failed — use list below.')
+                        window.setTimeout(() => setLinkHint(null), 6000)
+                      })
+                    }}
+                    style={{ ...permissionRowStyle, flex: '1 1 120px' }}
+                  >
+                    COPY SAFARI STEPS
+                  </button>
+                </>
+              )}
+              {isAndroid && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLinkHint('Opening Android location settings…')
+                      window.setTimeout(() => setLinkHint(null), 6000)
+                      tryOpenAndroidLocationSettings()
+                    }}
+                    style={{
+                      ...permissionRowStyle,
+                      flex: '1 1 160px',
+                      borderColor: 'rgba(125,255,138,0.55)',
+                      background: 'rgba(125,255,138,0.14)',
+                    }}
+                  >
+                    OPEN ANDROID LOCATION SETTINGS
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void copyTextToClipboard(androidLocationFixClipboardLines()).then((ok) => {
+                        setLinkHint(ok ? 'Android steps copied.' : 'Copy failed — use list in red box if shown.')
+                        window.setTimeout(() => setLinkHint(null), 6000)
+                      })
+                    }}
+                    style={{ ...permissionRowStyle, flex: '1 1 120px' }}
+                  >
+                    COPY ANDROID STEPS
+                  </button>
+                </>
+              )}
+            </div>
+            {linkHint && (
+              <div style={{ fontSize: 10, color: '#a8d4b8', lineHeight: 1.35 }}>{linkHint}</div>
+            )}
+          </div>
+        )}
         {locationDenied && (
           <div
             style={{

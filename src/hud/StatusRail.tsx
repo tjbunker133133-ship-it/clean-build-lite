@@ -3,6 +3,12 @@ import { useGPS } from '../hooks/useGPS'
 import { useAppContext } from '../context/AppContext'
 import { requestGeolocationPermission } from '../lib/devicePermissions'
 import {
+  isAndroidUa,
+  isAppleMobileUa,
+  tryOpenAndroidLocationSettings,
+  tryOpenIosLocationPrivacySettings,
+} from '../lib/systemSettingsLinks'
+import {
   HALF_CORRIDOR_FEET,
   corridorSeverity,
   corridorZoneLabel,
@@ -138,6 +144,18 @@ export default function StatusRail() {
     window.dispatchEvent(new CustomEvent('hud:show-permissions'))
   }
 
+  const openSystemLocationSettings = () => {
+    if (isAppleMobileUa()) {
+      tryOpenIosLocationPrivacySettings()
+      return
+    }
+    if (isAndroidUa()) {
+      tryOpenAndroidLocationSettings()
+      return
+    }
+    openPermissionHelp()
+  }
+
   useEffect(() => {
     if (!corridor) {
       setShowCorridorBanner(false)
@@ -233,24 +251,44 @@ export default function StatusRail() {
               {requestingGeo ? 'PROMPTING GPS…' : 'PROMPT GPS'}
             </button>
             {gps.status === 'denied' && (
-              <button
-                type="button"
-                onClick={openPermissionHelp}
-                style={{
-                  pointerEvents: 'auto',
-                  minHeight: 26,
-                  borderRadius: 999,
-                  border: '1px solid rgba(255,107,135,0.55)',
-                  background: 'rgba(255,80,100,0.2)',
-                  color: '#ffd0d8',
-                  padding: '0 10px',
-                  fontSize: 10,
-                  letterSpacing: '0.08em',
-                  cursor: 'pointer',
-                }}
-              >
-                LOCATION DENIED — HELP
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={openSystemLocationSettings}
+                  style={{
+                    pointerEvents: 'auto',
+                    minHeight: 26,
+                    borderRadius: 999,
+                    border: '1px solid rgba(125,255,138,0.5)',
+                    background: 'rgba(125,255,138,0.14)',
+                    color: '#d8f6de',
+                    padding: '0 10px',
+                    fontSize: 10,
+                    letterSpacing: '0.08em',
+                    cursor: 'pointer',
+                  }}
+                >
+                  OPEN SYSTEM LOCATION
+                </button>
+                <button
+                  type="button"
+                  onClick={openPermissionHelp}
+                  style={{
+                    pointerEvents: 'auto',
+                    minHeight: 26,
+                    borderRadius: 999,
+                    border: '1px solid rgba(255,107,135,0.55)',
+                    background: 'rgba(255,80,100,0.2)',
+                    color: '#ffd0d8',
+                    padding: '0 10px',
+                    fontSize: 10,
+                    letterSpacing: '0.08em',
+                    cursor: 'pointer',
+                  }}
+                >
+                  HUD HELP
+                </button>
+              </>
             )}
           </>
         )}
