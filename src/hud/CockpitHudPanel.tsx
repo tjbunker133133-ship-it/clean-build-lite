@@ -22,7 +22,7 @@ const DOCK_PEEK_STRIP_PX = 74
 const DOCK_UNDOCK_SWIPE_PX = 18
 const EDGE_DOCK_ZONE_PX = 22
 const DOCKED_PANEL_STACK_PX = 8
-const DOCKED_PANEL_MIN_HEIGHT_PX = 64
+const DOCKED_PANEL_MIN_HEIGHT_PX = 76
 const DOCKED_PANEL_MAX_HEIGHT_PX = 92
 const PANEL_SNAP_THRESHOLD_PX = 10
 const DOCK_RELOCK_GUARD_PX = 42
@@ -152,18 +152,20 @@ export default function CockpitHudPanel({
     (x: number, y: number, w: number, h: number) => {
       let nx = x
       let ny = y
-      const pad = 12
+      const pad = 14
       const { vw, vh } = viewportSize()
       const panelsOnScreen = Array.from(document.querySelectorAll<HTMLElement>('.cockpit-panel'))
-      for (let iter = 0; iter < 10; iter++) {
-        let collided = false
+      for (let iter = 0; iter < 36; iter++) {
         const a = { l: nx, t: ny, r: nx + w, b: ny + h }
+        let collided = false
         for (const el of panelsOnScreen) {
           if (el.dataset.panelId === panelId) continue
           const r = el.getBoundingClientRect()
+          if (r.width < 2 || r.height < 2) continue
           const b = { l: r.left, t: r.top, r: r.right, b: r.bottom }
           const overlap = !(a.r <= b.l + pad || a.l >= b.r - pad || a.b <= b.t + pad || a.t >= b.b - pad)
           if (!overlap) continue
+          collided = true
           const overlapX = Math.min(a.r - b.l, b.r - a.l)
           const overlapY = Math.min(a.b - b.t, b.b - a.t)
           if (overlapX < overlapY) {
@@ -175,8 +177,10 @@ export default function CockpitHudPanel({
           }
           nx = Math.max(0, Math.min(nx, vw - w))
           ny = Math.max(36, Math.min(ny, vh - h))
-          collided = true
-          break
+          a.l = nx
+          a.t = ny
+          a.r = nx + w
+          a.b = ny + h
         }
         if (!collided) break
       }
@@ -347,7 +351,11 @@ export default function CockpitHudPanel({
     const rect = el?.getBoundingClientRect()
     const s = sizeRef.current
     const p = posRef.current
-    const height = s.h ?? Math.ceil(rect?.height ?? minHeight)
+    const height = minimized
+      ? isCoarsePointer
+        ? 46
+        : 44
+      : s.h ?? Math.ceil(rect?.height ?? minHeight)
     let sx = snapCoord(p.x)
     let sy = snapCoord(p.y)
     const resolved = resolveCollisions(panelId, sx, sy, s.w, height)
@@ -416,6 +424,7 @@ export default function CockpitHudPanel({
     dockRelockGuard,
     edgeDockZone,
     avoidRuntimeOverlap,
+    isCoarsePointer,
   ])
 
   useEffect(() => {
@@ -438,7 +447,11 @@ export default function CockpitHudPanel({
         const s = sizeRef.current
         const pw = s.w
         const measuredH = rootRef.current?.getBoundingClientRect().height
-        const ph = minimized ? 44 : Math.max(minHeight, s.h ?? Math.ceil(measuredH ?? minHeight))
+        const ph = minimized
+          ? isCoarsePointer
+            ? 46
+            : 44
+          : Math.max(minHeight, s.h ?? Math.ceil(measuredH ?? minHeight))
         const minX = 0
         const maxX = vw - pw
         nx = Math.max(minX, Math.min(nx, maxX))
@@ -477,10 +490,11 @@ export default function CockpitHudPanel({
           const resolved = resolveCollisions(panelId, nx, ny, pw, ph)
           nx = resolved.x
           ny = resolved.y
-          const runtimeResolved = avoidRuntimeOverlap(nx, ny, pw, ph)
-          nx = runtimeResolved.x
-          ny = runtimeResolved.y
         }
+        // Always enforce separation during drag (including near dock edges — preview only).
+        const runtimeResolved = avoidRuntimeOverlap(nx, ny, pw, ph)
+        nx = runtimeResolved.x
+        ny = runtimeResolved.y
         setSnapGuide({ x: guideX, y: guideY })
         const next = { x: nx, y: ny }
         posRef.current = next
@@ -536,7 +550,20 @@ export default function CockpitHudPanel({
       document.removeEventListener('pointerup', onUp)
       document.removeEventListener('pointercancel', onUp)
     }
-  }, [commitPosition, dragMode, minimized, minHeight, minWidth, dragThreshold, edgeDockZone, panelSnapThreshold])
+  }, [
+    commitPosition,
+    dragMode,
+    minimized,
+    minHeight,
+    minWidth,
+    dragThreshold,
+    edgeDockZone,
+    panelSnapThreshold,
+    isCoarsePointer,
+    panels,
+    resolveCollisions,
+    avoidRuntimeOverlap,
+  ])
 
   const onHeaderPointerDown = (e: React.PointerEvent) => {
     if ((e.target as HTMLElement).closest('[data-no-drag]')) return
@@ -683,6 +710,8 @@ export default function CockpitHudPanel({
     ).length,
   )
   const dockedHeight = computeDockMetrics(viewportSize().vh, sideDockCount).height
+  const dockHeaderHeight = docked ? (isCoarsePointer ? 36 : 34) : (isCoarsePointer ? 46 : 44)
+  const dockActionHeight = docked ? (isCoarsePointer ? 36 : 34) : (isCoarsePointer ? 48 : 44)
 
   const onDockPointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
     if (!docked) return
@@ -709,7 +738,7 @@ export default function CockpitHudPanel({
           : DOCK_EDGE_INSET_PX
       const baseY = posRef.current.y
       const { vw, vh } = viewportSize()
-      const ph = minimized ? 44 : s.h ?? minHeight
+      const ph = minimized ? (isCoarsePointer ? 46 : 44) : s.h ?? minHeight
       const nx = Math.max(0, Math.min(baseX + dx, vw - s.w))
       const ny = Math.max(36, Math.min(baseY + dy, vh - ph))
       const next = { x: nx, y: ny }
@@ -811,7 +840,7 @@ export default function CockpitHudPanel({
         style={{
           cursor: docked ? 'pointer' : 'grab',
           padding: isCoarsePointer ? '11px 12px' : '10px 12px',
-          minHeight: isCoarsePointer ? 46 : 44,
+          minHeight: dockHeaderHeight,
           borderBottom: minimized ? 'none' : `1px solid ${accent}33`,
           fontFamily: 'var(--font-ui, system-ui)',
           fontSize: 10,
@@ -910,7 +939,7 @@ export default function CockpitHudPanel({
             }
           }}
           style={{
-            height: isCoarsePointer ? 48 : 44,
+            height: dockActionHeight,
             width: '100%',
             borderTop: `1px solid ${accent}33`,
             display: 'flex',

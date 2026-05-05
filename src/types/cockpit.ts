@@ -31,10 +31,11 @@ export interface CockpitPrefs {
   red_brightness: number
 }
 
-export const COCKPIT_STORAGE_KEY = 'titanium_cockpit_state_v2'
+/** Bump key to invalidate stale layouts (fresh start for all clients). */
+export const COCKPIT_STORAGE_KEY = 'titanium_cockpit_state_v3'
 
-/** Magnetic grid snap (COCKPIT_UX v2: 20px) */
-export const SNAP_PX = 20
+/** Magnetic grid snap (COCKPIT_UX v2: 16px — tighter, less post-snap overlap) */
+export const SNAP_PX = 16
 
 export const EASE = 'cubic-bezier(0.25, 0.1, 0.25, 1)'
 export const DURATION_MS = 200

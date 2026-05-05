@@ -27,7 +27,7 @@ const PREFS_DEFAULT: CockpitPrefs = {
   hud_color: 'white',
   panel_opacity: 0.45,
   animations_enabled: true,
-  layout_version: 'nightforce_v2',
+  layout_version: 'nightforce_v3',
   screen_hue: 'low_light',
   low_hud_brightness: 0.9,
   low_map_brightness: 0.14,
@@ -47,7 +47,7 @@ interface StoredState {
 type DevicePreset = 'iphone' | 'android' | 'tablet' | 'desktop'
 const DOCK_EDGE_INSET_PX = 8
 const DOCKED_PANEL_STACK_PX = 8
-const DOCKED_PANEL_MIN_HEIGHT_PX = 64
+const DOCKED_PANEL_MIN_HEIGHT_PX = 76
 const DOCKED_PANEL_MAX_HEIGHT_PX = 92
 
 function snap(n: number): number {
@@ -72,7 +72,7 @@ function loadState(): StoredState | null {
     const raw = localStorage.getItem(COCKPIT_STORAGE_KEY)
     if (!raw) return null
     const o = JSON.parse(raw) as StoredState
-    if (!o || o.v !== 1 || !o.panels || !o.prefs) return null
+    if (!o || o.v !== 2 || !o.panels || !o.prefs) return null
     return o
   } catch {
     return null
@@ -155,7 +155,7 @@ function firstRunPreset(device: DevicePreset): {
 
 function saveState(panels: PanelMap, prefs: CockpitPrefs) {
   try {
-    const body: StoredState = { v: 1, panels, prefs }
+    const body: StoredState = { v: 2, panels, prefs }
     localStorage.setItem(COCKPIT_STORAGE_KEY, JSON.stringify(body))
   } catch {
     /* ignore */
@@ -178,7 +178,8 @@ function panelHeightGuess(pid: string, p: CockpitPanelRect): number {
     sos: 300,
     preflight: 300,
   }
-  return Math.max(44, p.h ?? (p.minimized ? 44 : (defaults[pid] ?? 220)))
+  const minBar = 46
+  return Math.max(minBar, p.h ?? (p.minimized ? minBar : (defaults[pid] ?? 220)))
 }
 
 function computeDockMetrics(vh: number, count: number) {
@@ -193,7 +194,7 @@ function computeDockMetrics(vh: number, count: number) {
   )
   const step = height + DOCKED_PANEL_STACK_PX
   const maxY = Math.max(minY, vh - height - 4)
-  return { minY, maxY, step }
+  return { minY, maxY, step, height }
 }
 
 function normalizeNoOverlapLayout(panels: PanelMap): PanelMap {
@@ -202,15 +203,17 @@ function normalizeNoOverlapLayout(panels: PanelMap): PanelMap {
   )
   const vw = typeof window !== 'undefined' ? window.innerWidth : 1440
   const vh = typeof window !== 'undefined' ? window.innerHeight : 900
-  const pad = 12
-  const minY = 36
+  const pad = 14
+  const topMinY = 36
 
   const dockedIds = Object.keys(next).filter((id) => next[id]?.docked)
+  const dockObstacles: Array<{ l: number; t: number; r: number; b: number }> = []
+
   for (const side of ['left', 'right'] as const) {
     const lane = dockedIds
       .filter((id) => (next[id].dockSide ?? 'left') === side)
       .sort((a, b) => (next[a].y === next[b].y ? a.localeCompare(b) : next[a].y - next[b].y))
-    const { minY, maxY, step } = computeDockMetrics(vh, lane.length)
+    const { minY, maxY, step, height: dockRowH } = computeDockMetrics(vh, lane.length)
     const slotCount = Math.max(1, Math.floor((maxY - minY) / step) + 1)
     lane.forEach((id, idx) => {
       const slot = Math.min(slotCount - 1, idx)
@@ -222,24 +225,31 @@ function normalizeNoOverlapLayout(panels: PanelMap): PanelMap {
           : DOCK_EDGE_INSET_PX
       p.dockSide = side
       p.docked = true
+      dockObstacles.push({
+        l: p.x,
+        t: p.y,
+        r: p.x + p.w,
+        b: p.y + dockRowH,
+      })
     })
   }
 
   const floating = Object.entries(next)
     .filter(([, p]) => !p.docked)
     .sort((a, b) => a[1].z - b[1].z)
-  const placed: Array<{ l: number; t: number; r: number; b: number }> = []
+  const placed: Array<{ l: number; t: number; r: number; b: number }> = [...dockObstacles]
   for (const [id, p] of floating) {
     const w = p.w
     const h = panelHeightGuess(id, p)
     let x = snap(Math.max(0, Math.min(p.x, vw - w)))
-    let y = snap(Math.max(minY, Math.min(p.y, vh - h)))
-    for (let iter = 0; iter < 16; iter++) {
-      let hit = false
+    let y = snap(Math.max(topMinY, Math.min(p.y, vh - h)))
+    for (let iter = 0; iter < 28; iter++) {
       const a = { l: x, t: y, r: x + w, b: y + h }
+      let hit = false
       for (const b of placed) {
         const overlap = !(a.r <= b.l + pad || a.l >= b.r - pad || a.b <= b.t + pad || a.t >= b.b - pad)
         if (!overlap) continue
+        hit = true
         const overlapX = Math.min(a.r - b.l, b.r - a.l)
         const overlapY = Math.min(a.b - b.t, b.b - a.t)
         if (overlapX < overlapY) {
@@ -250,9 +260,11 @@ function normalizeNoOverlapLayout(panels: PanelMap): PanelMap {
           y = pushUp ? b.t - h - pad : b.b + pad
         }
         x = snap(Math.max(0, Math.min(x, vw - w)))
-        y = snap(Math.max(minY, Math.min(y, vh - h)))
-        hit = true
-        break
+        y = snap(Math.max(topMinY, Math.min(y, vh - h)))
+        a.l = x
+        a.t = y
+        a.r = x + w
+        a.b = y + h
       }
       if (!hit) break
     }
@@ -459,8 +471,8 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
     (id: string, x: number, y: number, width: number, height: number) => {
       x = snap(x)
       y = snap(y)
-      const pad = 12
-      const selfH = Math.max(44, height || 200)
+      const pad = 14
+      const selfH = Math.max(46, height || 200)
       const vw = typeof window !== 'undefined' ? window.innerWidth : 1440
       const vh = typeof window !== 'undefined' ? window.innerHeight : 900
 
@@ -480,33 +492,43 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
           sos: 300,
           preflight: 300,
         }
-        return Math.max(44, p.h ?? (p.minimized ? 44 : (defaults[pid] ?? 220)))
+        if (p.docked) {
+          const side = p.dockSide ?? 'left'
+          const laneCount = Object.values(panels).filter(
+            (q) => q?.docked && (q.dockSide ?? 'left') === side,
+          ).length
+          return computeDockMetrics(vh, laneCount).height
+        }
+        return Math.max(46, p.h ?? (p.minimized ? 46 : (defaults[pid] ?? 220)))
       }
 
-      for (let iter = 0; iter < 8; iter++) {
+      for (let iter = 0; iter < 24; iter++) {
+        const a = { l: x, t: y, r: x + width, b: y + selfH }
         let hit = false
         for (const oid of Object.keys(panels)) {
           if (oid === id) continue
           const o = panels[oid]
           const ow = o.w
           const oh = panelHeight(oid, o)
-          const a = { l: x, t: y, r: x + width, b: y + selfH }
           const b = { l: o.x, t: o.y, r: o.x + ow, b: o.y + oh }
           const overlap = !(a.r <= b.l + pad || a.l >= b.r - pad || a.b <= b.t + pad || a.t >= b.b - pad)
-          if (overlap) {
-            const overlapX = Math.min(a.r - b.l, b.r - a.l)
-            const overlapY = Math.min(a.b - b.t, b.b - a.t)
-            if (overlapX < overlapY) {
-              const pushLeft = a.l + width / 2 < b.l + ow / 2
-              x = pushLeft ? b.l - width - pad : b.r + pad
-            } else {
-              const pushUp = a.t + selfH / 2 < b.t + oh / 2
-              y = pushUp ? b.t - selfH - pad : b.b + pad
-            }
-            x = snap(Math.max(0, Math.min(x, vw - width)))
-            y = snap(Math.max(36, Math.min(y, vh - selfH)))
-            hit = true
+          if (!overlap) continue
+          hit = true
+          const overlapX = Math.min(a.r - b.l, b.r - a.l)
+          const overlapY = Math.min(a.b - b.t, b.b - a.t)
+          if (overlapX < overlapY) {
+            const pushLeft = a.l + width / 2 < b.l + ow / 2
+            x = pushLeft ? b.l - width - pad : b.r + pad
+          } else {
+            const pushUp = a.t + selfH / 2 < b.t + oh / 2
+            y = pushUp ? b.t - selfH - pad : b.b + pad
           }
+          x = snap(Math.max(0, Math.min(x, vw - width)))
+          y = snap(Math.max(36, Math.min(y, vh - selfH)))
+          a.l = x
+          a.t = y
+          a.r = x + width
+          a.b = y + selfH
         }
         if (!hit) break
       }
@@ -526,7 +548,7 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
     try {
       localStorage.setItem(
         COCKPIT_STORAGE_KEY + '_scene_backup',
-        JSON.stringify({ v: 1, panels, prefs }),
+        JSON.stringify({ v: 2, panels, prefs }),
       )
     } catch {
       /* ignore */
