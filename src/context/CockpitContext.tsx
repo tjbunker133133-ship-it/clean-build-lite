@@ -101,9 +101,13 @@ function firstRunPreset(device: DevicePreset): {
         low_map_brightness: 0.16,
       },
       panelPatches: {
-        location: { x: 940, y: 60, w: 300, h: null, z: 430, minimized: false, docked: false },
-        voice: { x: 940, y: 260, w: 330, h: null, z: 431, minimized: false, docked: false },
-        sos: { x: 940, y: 470, w: 260, h: null, z: 432, minimized: false, docked: false },
+        layers: { x: 8, y: 48, w: 176, h: null, z: 430, minimized: false, docked: true, dockSide: 'left' },
+        waypoints: { x: 8, y: 148, w: 300, h: null, z: 431, minimized: false, docked: true, dockSide: 'left' },
+        location: { x: 8, y: 248, w: 300, h: null, z: 432, minimized: false, docked: true, dockSide: 'right' },
+        voice: { x: 8, y: 348, w: 320, h: null, z: 433, minimized: false, docked: true, dockSide: 'right' },
+        sos: { x: 8, y: 448, w: 264, h: null, z: 434, minimized: false, docked: true, dockSide: 'right' },
+        weather: { x: 8, y: 548, w: 300, h: null, z: 435, minimized: false, docked: true, dockSide: 'right' },
+        display: { x: 8, y: 648, w: 260, h: null, z: 436, minimized: false, docked: true, dockSide: 'left' },
       },
     }
   }
@@ -117,9 +121,13 @@ function firstRunPreset(device: DevicePreset): {
         low_map_brightness: 0.14,
       },
       panelPatches: {
-        location: { x: 980, y: 60, w: 300, h: null, z: 430, minimized: false, docked: false },
-        voice: { x: 980, y: 280, w: 330, h: null, z: 431, minimized: false, docked: false },
-        sos: { x: 980, y: 500, w: 260, h: null, z: 432, minimized: false, docked: false },
+        layers: { x: 8, y: 48, w: 176, h: null, z: 430, minimized: false, docked: true, dockSide: 'left' },
+        waypoints: { x: 8, y: 148, w: 300, h: null, z: 431, minimized: false, docked: true, dockSide: 'left' },
+        location: { x: 8, y: 248, w: 300, h: null, z: 432, minimized: false, docked: true, dockSide: 'right' },
+        voice: { x: 8, y: 348, w: 320, h: null, z: 433, minimized: false, docked: true, dockSide: 'right' },
+        sos: { x: 8, y: 448, w: 264, h: null, z: 434, minimized: false, docked: true, dockSide: 'right' },
+        weather: { x: 8, y: 548, w: 300, h: null, z: 435, minimized: false, docked: true, dockSide: 'right' },
+        display: { x: 8, y: 648, w: 260, h: null, z: 436, minimized: false, docked: true, dockSide: 'left' },
       },
     }
   }
@@ -339,18 +347,34 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
     [persist, prefs],
   )
 
-  /** Estimate stack when rects overlap */
+  /** Magnetic no-overlap resolution for floating panels */
   const resolveCollisions = useCallback(
     (id: string, x: number, y: number, width: number, height: number) => {
       x = snap(x)
       y = snap(y)
       const pad = 12
-      const estHeights: Record<string, number> = {
-        layers: 220,
-        waypoints: 72,
-        deadman: 300,
+      const selfH = Math.max(44, height || 200)
+      const vw = typeof window !== 'undefined' ? window.innerWidth : 1440
+      const vh = typeof window !== 'undefined' ? window.innerHeight : 900
+
+      const panelHeight = (pid: string, p: CockpitPanelRect) => {
+        const defaults: Record<string, number> = {
+          layers: 230,
+          waypoints: 92,
+          deadman: 320,
+          coords: 160,
+          elevation: 150,
+          clock: 120,
+          display: 220,
+          location: 240,
+          voice: 360,
+          weather: 180,
+          presets: 220,
+          sos: 300,
+          preflight: 300,
+        }
+        return Math.max(44, p.h ?? (p.minimized ? 44 : (defaults[pid] ?? 220)))
       }
-      const selfH = height || estHeights[id] || 200
 
       for (let iter = 0; iter < 8; iter++) {
         let hit = false
@@ -358,12 +382,22 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
           if (oid === id) continue
           const o = panels[oid]
           const ow = o.w
-          const oh = estHeights[oid] || 200
+          const oh = panelHeight(oid, o)
           const a = { l: x, t: y, r: x + width, b: y + selfH }
           const b = { l: o.x, t: o.y, r: o.x + ow, b: o.y + oh }
-          const overlap = !(a.r < b.l + pad || a.l > b.r - pad || a.b < b.t + pad || a.t > b.b - pad)
+          const overlap = !(a.r <= b.l + pad || a.l >= b.r - pad || a.b <= b.t + pad || a.t >= b.b - pad)
           if (overlap) {
-            y = snap(b.b + pad)
+            const overlapX = Math.min(a.r - b.l, b.r - a.l)
+            const overlapY = Math.min(a.b - b.t, b.b - a.t)
+            if (overlapX < overlapY) {
+              const pushLeft = a.l + width / 2 < b.l + ow / 2
+              x = pushLeft ? b.l - width - pad : b.r + pad
+            } else {
+              const pushUp = a.t + selfH / 2 < b.t + oh / 2
+              y = pushUp ? b.t - selfH - pad : b.b + pad
+            }
+            x = snap(Math.max(0, Math.min(x, vw - width)))
+            y = snap(Math.max(36, Math.min(y, vh - selfH)))
             hit = true
           }
         }

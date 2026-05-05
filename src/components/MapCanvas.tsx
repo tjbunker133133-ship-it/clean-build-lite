@@ -182,7 +182,7 @@ export default function MapCanvas() {
         zIndex: 0,
         width: '100%',
         height: '100%',
-        minHeight: '100vh',
+        minHeight: '100dvh',
         background: '#1a1f24',
         ...mapScreenFilter(prefs.screen_hue, prefs),
         transition: 'filter 180ms var(--cockpit-ease, ease)',

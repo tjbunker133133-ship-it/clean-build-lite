@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useGPS } from '../hooks/useGPS'
 import { useAppContext } from '../context/AppContext'
 import {
@@ -17,6 +17,9 @@ export default function StatusRail() {
   const [online, setOnline] = useState(navigator.onLine)
   const [weatherAgeMin, setWeatherAgeMin] = useState<number | null>(null)
   const [showCorridorBanner, setShowCorridorBanner] = useState(false)
+  const [corridorArmed, setCorridorArmed] = useState(false)
+  const routeChangeAtRef = useRef<number>(Date.now())
+  const lastRouteSigRef = useRef<string>('')
 
   useEffect(() => {
     const nav = navigator as any
@@ -74,14 +77,45 @@ export default function StatusRail() {
   }, [gps.lat, gps.lng, state.waypoints])
 
   useEffect(() => {
+    const sig = state.waypoints.map((w) => `${w.id}:${w.lat.toFixed(5)}:${w.lng.toFixed(5)}`).join('|')
+    if (sig !== lastRouteSigRef.current) {
+      lastRouteSigRef.current = sig
+      routeChangeAtRef.current = Date.now()
+      setCorridorArmed(false)
+    }
+  }, [state.waypoints])
+
+  useEffect(() => {
     if (!corridor) {
+      setCorridorArmed(false)
+      return
+    }
+    if (corridorArmed) return
+    // Arm only after user has truly entered corridor bounds at least once.
+    if (corridor.severity < 6) {
+      setCorridorArmed(true)
+    }
+  }, [corridor, corridorArmed])
+
+  useEffect(() => {
+    if (!corridor) {
+      setShowCorridorBanner(false)
+      return
+    }
+    // Avoid false alarm flashes while actively editing/planning route points.
+    const recentlyEditedRoute = Date.now() - routeChangeAtRef.current < 15000
+    if (recentlyEditedRoute) {
+      setShowCorridorBanner(false)
+      return
+    }
+    if (!corridorArmed) {
       setShowCorridorBanner(false)
       return
     }
     const breach = corridor.severity >= 6
     setShowCorridorBanner(breach)
     if (breach && navigator.vibrate) navigator.vibrate([120, 80, 120])
-  }, [corridor])
+  }, [corridor, corridorArmed])
 
   return (
     <>
@@ -123,10 +157,10 @@ export default function StatusRail() {
           justifyContent: 'center',
           padding: '6px 10px',
           borderRadius: 999,
-          border: corridor?.severity && corridor.severity >= 5
+          border: corridorArmed && corridor?.severity && corridor.severity >= 5
             ? '1px solid rgba(255,88,122,0.45)'
             : '1px solid rgba(199,206,198,0.24)',
-          background: corridor?.severity && corridor.severity >= 5
+          background: corridorArmed && corridor?.severity && corridor.severity >= 5
             ? 'rgba(35,8,15,0.72)'
             : 'rgba(10,12,13,0.6)',
           backdropFilter: 'blur(10px)',
@@ -143,7 +177,11 @@ export default function StatusRail() {
         <span>SYS {runtimeGuards ? 'GUARDS ON' : 'GUARDS OFF'}</span>
         <span>BUILD {buildStamp}</span>
         <span>
-          CORRIDOR {corridor ? `${corridor.zone} · EDGE ${corridor.edgeFt}FT` : '--'}
+          CORRIDOR {corridor
+            ? corridorArmed
+              ? `${corridor.zone} · EDGE ${corridor.edgeFt}FT`
+              : 'PLANNING · ENTER CORRIDOR TO ARM'
+            : '--'}
         </span>
       </div>
     </>

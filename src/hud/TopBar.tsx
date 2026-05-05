@@ -1,11 +1,26 @@
 import React from 'react'
 import { useCockpit } from '../context/CockpitContext'
+import { useMapContext } from '../context/MapContext'
+import { useGPS } from '../hooks/useGPS'
 
 export default function TopBar() {
   const { prefs } = useCockpit()
+  const { map } = useMapContext()
+  const gps = useGPS()
   const isCompact =
     typeof window !== 'undefined' &&
     (window.matchMedia('(max-width: 720px)').matches || window.matchMedia('(pointer: coarse)').matches)
+  const hasFix = gps.lat != null && gps.lng != null
+
+  const locateMe = () => {
+    if (!map || !hasFix) return
+    map.easeTo({
+      center: [gps.lng!, gps.lat!],
+      zoom: Math.max(map.getZoom(), 14),
+      duration: 750,
+      essential: true,
+    })
+  }
 
   return (
     <div
@@ -65,10 +80,11 @@ export default function TopBar() {
         )}
       </div>
 
-      <div />
-
       <div
         style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
           fontFamily: 'var(--font-ui, system-ui)',
           fontSize: isCompact ? 9 : 10,
           color: '#9ea7a0',
@@ -76,7 +92,27 @@ export default function TopBar() {
           textTransform: 'uppercase',
         }}
       >
-        {prefs.screen_hue.replace('_', ' ')}
+        <button
+          type="button"
+          onClick={locateMe}
+          disabled={!hasFix}
+          style={{
+            minHeight: isCompact ? 34 : 32,
+            padding: isCompact ? '0 10px' : '0 12px',
+            borderRadius: 8,
+            border: hasFix ? '1px solid rgba(125,255,138,0.65)' : '1px solid rgba(130,138,132,0.45)',
+            background: hasFix ? 'rgba(125,255,138,0.14)' : 'rgba(60,66,62,0.35)',
+            color: hasFix ? '#b8f7c1' : '#8e9992',
+            cursor: hasFix ? 'pointer' : 'not-allowed',
+            letterSpacing: '0.08em',
+            fontSize: isCompact ? 9 : 10,
+            fontWeight: 700,
+          }}
+          title={hasFix ? 'Center map on live GPS' : 'Waiting for GPS fix'}
+        >
+          LOCATE ME
+        </button>
+        <span>{prefs.screen_hue.replace('_', ' ')}</span>
       </div>
     </div>
   )

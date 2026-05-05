@@ -1,0 +1,36 @@
+{
+  "name": "tactical-hud",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "ensure:index": "node scripts/ensure-index.mjs",
+    "predev": "npm run ensure:index",
+    "prebuild": "npm run ensure:index",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "verify": "tsc --noEmit && vitest run && vite build",
+    "smoke": "npm run verify"
+  },
+  "dependencies": {
+    "maplibre-gl": "^5.0.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "vite-plugin-pwa": "^1.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.43",
+    "@types/react-dom": "^18.2.17",
+    "@typescript-eslint/eslint-plugin": "^8.59.1",
+    "@typescript-eslint/parser": "^8.59.1",
+    "@vitejs/plugin-react": "^4.2.1",
+    "eslint": "^10.3.0",
+    "playwright": "^1.59.1",
+    "prettier": "^3.8.3",
+    "typescript": "^5.2.2",
+    "vite": "^5.0.0",
+    "vitest": "^3.0.0"
+  }
+}

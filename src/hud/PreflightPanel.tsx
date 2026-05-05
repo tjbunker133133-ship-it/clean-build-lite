@@ -9,6 +9,8 @@ type CheckRow = {
   label: string
   state: CheckState
   detail: string
+  weight?: number
+  critical?: boolean
 }
 
 const MANUAL_KEY = 'tactical_preflight_manual_v1'
@@ -17,6 +19,24 @@ function stateColor(state: CheckState) {
   if (state === 'pass') return '#7dff8a'
   if (state === 'warn') return '#ffd166'
   return '#ff6b87'
+}
+
+function scoreForState(state: CheckState, critical = false) {
+  if (state === 'pass') return 1
+  if (state === 'warn') return critical ? 0.5 : 0.7
+  return 0
+}
+
+function readinessBand(score: number): {
+  label: 'GREEN' | 'YELLOW-GREEN' | 'YELLOW' | 'ORANGE' | 'RED'
+  color: string
+  detail: string
+} {
+  if (score >= 90) return { label: 'GREEN', color: '#7dff8a', detail: 'Field Ready' }
+  if (score >= 80) return { label: 'YELLOW-GREEN', color: '#a9f58f', detail: 'Pilot Ready' }
+  if (score >= 70) return { label: 'YELLOW', color: '#ffd166', detail: 'Fix Soon' }
+  if (score >= 60) return { label: 'ORANGE', color: '#ffb570', detail: 'Hold' }
+  return { label: 'RED', color: '#ff6b87', detail: 'No-Go' }
 }
 
 function readRapidEndpoint(): string {
@@ -145,49 +165,88 @@ export default function PreflightPanel() {
         label: 'Network',
         state: online ? 'pass' : 'warn',
         detail: online ? 'Online' : 'Offline mode',
+        weight: 1.2,
+        critical: true,
       },
       {
         label: 'PWA Install',
         state: isStandalone ? 'pass' : 'warn',
         detail: isStandalone ? 'Standalone' : 'Browser tab',
+        weight: 0.8,
       },
       {
         label: 'GPS Permission',
-        state: geoPerm === 'granted' ? 'pass' : geoPerm === 'prompt' ? 'warn' : 'fail',
+        state: geoPerm === 'granted' ? 'pass' : geoPerm === 'prompt' ? 'warn' : 'warn',
         detail: geoPerm,
+        weight: 1.4,
+        critical: true,
       },
       {
         label: 'GPS Lock',
         state: gpsLock ? 'pass' : 'warn',
         detail: gpsLock ? `Lat ${gps.lat?.toFixed(5)} / Lng ${gps.lng?.toFixed(5)}` : 'Awaiting fix',
+        weight: 1.6,
+        critical: true,
       },
       {
         label: 'Mic Permission',
-        state: micPerm === 'granted' ? 'pass' : micPerm === 'prompt' ? 'warn' : 'fail',
+        state: micPerm === 'granted' ? 'pass' : micPerm === 'prompt' ? 'warn' : 'warn',
         detail: micPerm,
+        weight: 1,
       },
       {
         label: 'Voice Recognition',
         state: speechSupported ? 'pass' : 'warn',
         detail: speechSupported ? 'Supported' : 'Fallback typed mode',
+        weight: 1,
       },
       {
         label: 'Rescue Endpoint',
-        state: endpoint ? 'pass' : 'fail',
-        detail: endpoint ? 'Configured' : 'Missing',
+        state: endpoint ? 'pass' : 'warn',
+        detail: endpoint ? 'Configured' : 'Missing (recommended for live rescue ops)',
+        weight: 1.4,
+        critical: true,
       },
       {
         label: 'Emergency Contacts',
         state: savedContactsCount > 0 ? 'pass' : 'warn',
         detail: `${savedContactsCount} saved`,
+        weight: 1.2,
+        critical: true,
       },
     ]
   }, [endpoint, geoPerm, gps.lat, gps.lng, isStandalone, micPerm, online, savedContactsCount, speechSupported, recheckTick])
 
-  const passCount = checks.filter((c) => c.state === 'pass').length
-  const manualPass = Object.values(manual).filter(Boolean).length
-  const total = checks.length + 4
-  const score = Math.round(((passCount + manualPass) / total) * 100)
+  const checksWeight = checks.reduce((sum, c) => sum + (c.weight ?? 1), 0)
+  const checksScore = checks.reduce(
+    (sum, c) => sum + scoreForState(c.state, c.critical) * (c.weight ?? 1),
+    0,
+  )
+  const manualRows: Array<{ key: ManualCheckKey; label: string; weight: number }> = [
+    { key: 'contactsLoaded', label: 'Contacts loaded and route-selected', weight: 1.1 },
+    { key: 'audioAudible', label: 'Alarm is clearly audible on device', weight: 0.8 },
+    { key: 'corridorVerified', label: 'Corridor warning verified with live GPS', weight: 0.8 },
+    { key: 'sosDryRun', label: 'SOS dry-run + disarm tested', weight: 1.3 },
+  ]
+  const manualWeight = manualRows.reduce((sum, row) => sum + row.weight, 0)
+  const manualScore = manualRows.reduce(
+    (sum, row) => sum + (manual[row.key] ? 1 : 0.6) * row.weight,
+    0,
+  )
+  const score = Math.round(((checksScore + manualScore) / (checksWeight + manualWeight)) * 100)
+  const band = readinessBand(score)
+  const gpsLock = gps.lat != null && gps.lng != null
+  const hardGates = [
+    { label: 'Rescue endpoint configured', pass: !!endpoint },
+    { label: 'Emergency contact loaded', pass: savedContactsCount > 0 },
+    { label: 'GPS permission granted', pass: geoPerm === 'granted' },
+    { label: 'GPS lock acquired', pass: gpsLock },
+    { label: 'Deadman renew verified', pass: manual.corridorVerified },
+    { label: 'SOS dry-run verified', pass: manual.sosDryRun },
+  ]
+  const hardGatePass = hardGates.every((g) => g.pass)
+  const goHold = hardGatePass && score >= 80 ? 'GO' : 'HOLD'
+  const goHoldColor = goHold === 'GO' ? '#7dff8a' : '#ff6b87'
   const runAutoRecheck = () => {
     setRecheckTick((v) => v + 1)
     setLastRecheckAt(Date.now())
@@ -210,6 +269,23 @@ export default function PreflightPanel() {
         >
           <span>Readiness Score</span>
           <strong style={{ color: score >= 80 ? '#7dff8a' : score >= 60 ? '#ffd166' : '#ff6b87' }}>{score}%</strong>
+        </div>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            padding: '6px 8px',
+            borderRadius: 8,
+            border: `1px solid ${band.color}66`,
+            background: 'rgba(10,12,13,0.6)',
+            color: '#d8e3d8',
+          }}
+        >
+          <span>
+            Readiness Band: <strong style={{ color: band.color }}>{band.label}</strong> ({band.detail})
+          </span>
+          <strong style={{ color: goHoldColor }}>{goHold}</strong>
         </div>
         <button
           type="button"
@@ -258,23 +334,37 @@ export default function PreflightPanel() {
           ))}
         </div>
 
+        <div style={{ fontSize: 10, color: '#9ea7a0', letterSpacing: '0.08em' }}>HARD GATE CHECKS (REQUIRED)</div>
+        <div style={{ maxHeight: 140, overflowY: 'auto', border: '1px solid rgba(199,206,198,0.16)', borderRadius: 8, padding: 6 }}>
+          {hardGates.map((gate) => (
+            <div
+              key={gate.label}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr auto',
+                gap: 6,
+                padding: '5px 4px',
+                borderBottom: '1px solid rgba(199,206,198,0.08)',
+              }}
+            >
+              <div style={{ color: '#d6ddd6' }}>{gate.label}</div>
+              <div style={{ color: gate.pass ? '#7dff8a' : '#ff6b87', fontWeight: 700 }}>
+                {gate.pass ? 'PASS' : 'BLOCK'}
+              </div>
+            </div>
+          ))}
+        </div>
+
         <div style={{ fontSize: 10, color: '#9ea7a0', letterSpacing: '0.08em' }}>MANUAL CHECKS</div>
         <div style={{ display: 'grid', gap: 6 }}>
-          {(
-            [
-              ['contactsLoaded', 'Contacts loaded and route-selected'],
-              ['audioAudible', 'Alarm is clearly audible on device'],
-              ['corridorVerified', 'Corridor warning verified with live GPS'],
-              ['sosDryRun', 'SOS dry-run + disarm tested'],
-            ] as Array<[ManualCheckKey, string]>
-          ).map(([key, label]) => (
-            <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#d6ddd6' }}>
+          {manualRows.map((row) => (
+            <label key={row.key} style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#d6ddd6' }}>
               <input
                 type="checkbox"
-                checked={manual[key]}
-                onChange={(e) => setManual((prev) => ({ ...prev, [key]: e.target.checked }))}
+                checked={manual[row.key]}
+                onChange={(e) => setManual((prev) => ({ ...prev, [row.key]: e.target.checked }))}
               />
-              {label}
+              {row.label}
             </label>
           ))}
         </div>

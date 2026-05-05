@@ -1,4 +1,8 @@
-<!doctype html>
+import { readFileSync, writeFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+
+const indexPath = resolve(process.cwd(), 'index.html')
+const expected = `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
@@ -15,3 +19,18 @@
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
+`
+
+let current = ''
+try {
+  current = readFileSync(indexPath, 'utf8')
+} catch {
+  // File missing or unreadable; rewrite below.
+}
+
+if (current !== expected) {
+  writeFileSync(indexPath, expected, 'utf8')
+  console.log('[ensure:index] Repaired index.html to Vite entry shell')
+} else {
+  console.log('[ensure:index] index.html is clean')
+}

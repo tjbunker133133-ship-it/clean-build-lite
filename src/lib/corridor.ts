@@ -46,11 +46,12 @@ export function corridorSeverity(distanceFeet: number, halfCorridorFeet = HALF_C
   if (!Number.isFinite(distanceFeet)) return 0
   if (distanceFeet > halfCorridorFeet) return 6
   const edge = halfCorridorFeet - distanceFeet
+  if (edge > 1500) return 0
   if (edge <= 250) return 5
   if (edge <= 500) return 4
   if (edge <= 1000) return 3
   if (edge <= 1500) return 2
-  return 1
+  return 0
 }
 
 export function corridorZoneLabel(severity: number) {

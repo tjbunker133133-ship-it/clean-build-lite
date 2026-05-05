@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import * as maplibregl from 'maplibre-gl'
 import { useMapContext } from '../context/MapContext'
 import { useAppContext } from '../context/AppContext'
@@ -22,6 +22,13 @@ export default function WaypointLayer() {
   const segmentMarkersRef = useRef<maplibregl.Marker[]>([])
   const rebuildRafRef = useRef<number | null>(null)
   const [overlaysReady, setOverlaysReady] = useState(false)
+  const lowPowerMode = useMemo(() => {
+    const nav = navigator as Navigator & { deviceMemory?: number }
+    const cores = nav.hardwareConcurrency ?? 8
+    const mem = nav.deviceMemory ?? 8
+    const coarse = window.matchMedia('(pointer: coarse)').matches
+    return coarse && (cores <= 6 || mem <= 4)
+  }, [])
 
   useEffect(() => {
     if (!map) return
@@ -60,17 +67,19 @@ export default function WaypointLayer() {
 
         const el = document.createElement('div')
         const v = markerVisual(wp.type)
-        el.style.width = '26px'
-        el.style.height = '26px'
+        el.style.width = lowPowerMode ? '22px' : '26px'
+        el.style.height = lowPowerMode ? '22px' : '26px'
         el.style.borderRadius = '999px'
-        el.style.background = `radial-gradient(circle at 30% 25%, #ffffff, ${v.color})`
-        el.style.border = '2px solid rgba(255,255,255,0.9)'
-        el.style.boxShadow = `0 0 16px ${v.color}66, 0 2px 8px rgba(0,0,0,0.45)`
+        el.style.background = lowPowerMode
+          ? v.color
+          : `radial-gradient(circle at 30% 25%, #ffffff, ${v.color})`
+        el.style.border = lowPowerMode ? '1px solid rgba(255,255,255,0.8)' : '2px solid rgba(255,255,255,0.9)'
+        el.style.boxShadow = lowPowerMode ? '0 1px 3px rgba(0,0,0,0.3)' : `0 0 16px ${v.color}66, 0 2px 8px rgba(0,0,0,0.45)`
         el.style.cursor = 'pointer'
         el.style.display = 'flex'
         el.style.alignItems = 'center'
         el.style.justifyContent = 'center'
-        el.style.fontSize = '13px'
+        el.style.fontSize = lowPowerMode ? '11px' : '13px'
         el.style.userSelect = 'none'
         el.textContent = v.symbol
 
@@ -87,7 +96,7 @@ export default function WaypointLayer() {
           label.style.padding = '3px 8px'
           label.style.borderRadius = '999px'
           label.style.border = '1px solid #3a4250'
-          label.style.boxShadow = '0 1px 4px rgba(0,0,0,0.45)'
+          label.style.boxShadow = lowPowerMode ? 'none' : '0 1px 4px rgba(0,0,0,0.45)'
           label.style.whiteSpace = 'nowrap'
           label.innerText = wp.label ?? ''
           el.appendChild(label)
@@ -110,12 +119,14 @@ export default function WaypointLayer() {
           segEl.style.padding = '2px 7px'
           segEl.style.borderRadius = '999px'
           segEl.style.border = '1px solid #1f8f76'
-          segEl.style.background = 'linear-gradient(180deg, rgba(4,30,26,0.88), rgba(5,20,18,0.72))'
+          segEl.style.background = lowPowerMode
+            ? 'rgba(4,30,26,0.82)'
+            : 'linear-gradient(180deg, rgba(4,30,26,0.88), rgba(5,20,18,0.72))'
           segEl.style.color = '#81f7dd'
           segEl.style.fontSize = '10px'
           segEl.style.fontWeight = '700'
           segEl.style.letterSpacing = '0.03em'
-          segEl.style.boxShadow = '0 0 8px rgba(0,255,180,0.3)'
+          segEl.style.boxShadow = lowPowerMode ? 'none' : '0 0 8px rgba(0,255,180,0.3)'
           segEl.style.whiteSpace = 'nowrap'
           segEl.textContent = text
 
@@ -132,7 +143,7 @@ export default function WaypointLayer() {
         rebuildRafRef.current = null
       }
     }
-  }, [waypoints, map, showMapLabels, showMapDistances, overlaysReady])
+  }, [waypoints, map, showMapLabels, showMapDistances, overlaysReady, lowPowerMode])
 
   useEffect(() => {
     return () => {

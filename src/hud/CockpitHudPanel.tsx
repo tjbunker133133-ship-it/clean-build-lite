@@ -22,7 +22,7 @@ const DOCK_PEEK_STRIP_PX = 74
 const DOCK_UNDOCK_SWIPE_PX = 18
 const EDGE_DOCK_ZONE_PX = 22
 const DOCKED_PANEL_STACK_PX = 8
-const DOCKED_PANEL_HEIGHT_PX = 88
+const DOCKED_PANEL_HEIGHT_PX = 92
 const PANEL_SNAP_THRESHOLD_PX = 10
 const DOCK_RELOCK_GUARD_PX = 42
 
@@ -48,6 +48,15 @@ function dockBadge(panelId: string, title: string): { icon: string; abbr: string
 }
 
 type DragMode = 'none' | 'pending' | 'move' | 'resize'
+
+function viewportSize() {
+  if (typeof window === 'undefined') return { vw: 1280, vh: 720 }
+  const vv = window.visualViewport
+  // iOS Safari address bar can change visible viewport without resizing layout viewport.
+  const vw = Math.round(vv?.width ?? window.innerWidth)
+  const vh = Math.round(vv?.height ?? window.innerHeight)
+  return { vw, vh }
+}
 
 export default function CockpitHudPanel({
   panelId,
@@ -112,6 +121,52 @@ export default function CockpitHudPanel({
   const wantsReducedMotion =
     typeof window !== 'undefined' &&
     window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  const isIOSWebKit =
+    typeof window !== 'undefined' &&
+    /iPhone|iPad|iPod/i.test(navigator.userAgent || '')
+  const isCoarsePointer =
+    typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
+  const dragThreshold = isIOSWebKit ? 14 : isCoarsePointer ? 10 : DRAG_THRESHOLD_PX
+  const edgeDockZone = isIOSWebKit ? 44 : isCoarsePointer ? 34 : EDGE_DOCK_ZONE_PX
+  const panelSnapThreshold = isIOSWebKit ? 14 : isCoarsePointer ? 10 : PANEL_SNAP_THRESHOLD_PX
+  const dockRelockGuard = isIOSWebKit ? 72 : isCoarsePointer ? 64 : DOCK_RELOCK_GUARD_PX
+
+  const avoidRuntimeOverlap = useCallback(
+    (x: number, y: number, w: number, h: number) => {
+      let nx = x
+      let ny = y
+      const pad = 12
+      const { vw, vh } = viewportSize()
+      const panelsOnScreen = Array.from(document.querySelectorAll<HTMLElement>('.cockpit-panel'))
+      for (let iter = 0; iter < 10; iter++) {
+        let collided = false
+        const a = { l: nx, t: ny, r: nx + w, b: ny + h }
+        for (const el of panelsOnScreen) {
+          if (el.dataset.panelId === panelId) continue
+          const r = el.getBoundingClientRect()
+          const b = { l: r.left, t: r.top, r: r.right, b: r.bottom }
+          const overlap = !(a.r <= b.l + pad || a.l >= b.r - pad || a.b <= b.t + pad || a.t >= b.b - pad)
+          if (!overlap) continue
+          const overlapX = Math.min(a.r - b.l, b.r - a.l)
+          const overlapY = Math.min(a.b - b.t, b.b - a.t)
+          if (overlapX < overlapY) {
+            const pushLeft = a.l + w / 2 < b.l + (b.r - b.l) / 2
+            nx = pushLeft ? b.l - w - pad : b.r + pad
+          } else {
+            const pushUp = a.t + h / 2 < b.t + (b.b - b.t) / 2
+            ny = pushUp ? b.t - h - pad : b.b + pad
+          }
+          nx = Math.max(0, Math.min(nx, vw - w))
+          ny = Math.max(36, Math.min(ny, vh - h))
+          collided = true
+          break
+        }
+        if (!collided) break
+      }
+      return { x: nx, y: ny }
+    },
+    [panelId],
+  )
 
   useEffect(() => {
     if (seeded.current) return
@@ -153,25 +208,48 @@ export default function CockpitHudPanel({
 
   const getDockedY = useCallback(
     (side: 'left' | 'right', desiredY: number) => {
-      const lane = Object.entries(panels)
-        .filter(([id, panel]) => id !== panelId && panel?.docked && (panel.dockSide ?? 'left') === side)
-        .map(([, panel]) => panel.y)
-        .sort((a, b) => a - b)
       const minY = 36
-      const maxY = window.innerHeight - DOCKED_PANEL_HEIGHT_PX - 4
-      let y = Math.max(minY, Math.min(snapCoord(desiredY), maxY))
+      const { vh } = viewportSize()
+      const maxY = vh - DOCKED_PANEL_HEIGHT_PX - 4
       const step = DOCKED_PANEL_HEIGHT_PX + DOCKED_PANEL_STACK_PX
-      for (let pass = 0; pass < 24; pass++) {
-        let collided = false
-        for (const oy of lane) {
-          if (Math.abs(y - oy) < DOCKED_PANEL_HEIGHT_PX) {
-            y = oy + step
-            collided = true
+      const slotCount = Math.max(1, Math.floor((maxY - minY) / step) + 1)
+
+      // Magnetic lane stacking: assign each docked panel to a unique slot.
+      // This keeps the dock rail clean and prevents overlap even after reloads.
+      const lane = Object.entries(panels)
+        .filter(([, panel]) => panel?.docked && (panel.dockSide ?? 'left') === side)
+        .map(([id, panel]) => ({ id, y: panel.y }))
+
+      if (!lane.some((p) => p.id === panelId)) {
+        lane.push({ id: panelId, y: desiredY })
+      }
+
+      lane.sort((a, b) => (a.y === b.y ? a.id.localeCompare(b.id) : a.y - b.y))
+
+      const usedSlots = new Set<number>()
+      let selfSlot = 0
+
+      for (const entry of lane) {
+        const raw = Math.round((entry.y - minY) / step)
+        let slot = Math.max(0, Math.min(slotCount - 1, raw))
+        if (usedSlots.has(slot)) {
+          let found = false
+          for (let i = 0; i < slotCount; i++) {
+            if (!usedSlots.has(i)) {
+              slot = i
+              found = true
+              break
+            }
+          }
+          if (!found) {
+            slot = slotCount - 1
           }
         }
-        if (y > maxY) y = minY
-        if (!collided) break
+        usedSlots.add(slot)
+        if (entry.id === panelId) selfSlot = slot
       }
+
+      const y = minY + selfSlot * step
       return Math.max(minY, Math.min(snapCoord(y), maxY))
     },
     [panelId, panels, snapCoord],
@@ -182,11 +260,46 @@ export default function CockpitHudPanel({
   useEffect(() => {
     if (!layout?.docked) return
     const targetY = getDockedY(layout.dockSide ?? 'left', layout.y)
-    if (Math.abs(targetY - layout.y) < 1) return
-    setPos((prev) => ({ ...prev, y: targetY }))
-    posRef.current = { x: posRef.current.x, y: targetY }
-    updatePanel(panelId, { y: targetY, docked: true, dockSide: layout.dockSide ?? 'left' })
+    const side = layout.dockSide ?? 'left'
+    const targetX =
+      side === 'right'
+        ? Math.max(0, viewportSize().vw - (layout.w ?? sizeRef.current.w) - DOCK_EDGE_INSET_PX)
+        : DOCK_EDGE_INSET_PX
+    if (Math.abs(targetY - layout.y) < 1 && Math.abs(targetX - layout.x) < 1) return
+    setPos({ x: targetX, y: targetY })
+    posRef.current = { x: targetX, y: targetY }
+    updatePanel(panelId, { x: targetX, y: targetY, docked: true, dockSide: side })
   }, [layout?.docked, layout?.dockSide, layout?.y, getDockedY, panelId, updatePanel])
+
+  useEffect(() => {
+    if (!layout) return
+    const { vw, vh } = viewportSize()
+    const w = Math.min(layout.w ?? sizeRef.current.w, Math.max(140, vw - 8))
+    const h = minimized ? (isCoarsePointer ? 46 : 44) : layout.h ?? sizeRef.current.h ?? minHeight
+
+    if (layout.docked) {
+      const side = layout.dockSide ?? 'left'
+      const x =
+        side === 'right'
+          ? Math.max(0, vw - w - DOCK_EDGE_INSET_PX)
+          : DOCK_EDGE_INSET_PX
+      const y = getDockedY(side, layout.y)
+      if (Math.abs(layout.x - x) > 1 || Math.abs(layout.y - y) > 1) {
+        setPos({ x, y })
+        posRef.current = { x, y }
+        updatePanel(panelId, { x, y, docked: true, dockSide: side })
+      }
+      return
+    }
+
+    const x = Math.max(0, Math.min(layout.x, vw - w))
+    const y = Math.max(36, Math.min(layout.y, vh - h))
+    if (Math.abs(layout.x - x) > 1 || Math.abs(layout.y - y) > 1) {
+      setPos({ x, y })
+      posRef.current = { x, y }
+      updatePanel(panelId, { x, y, docked: false })
+    }
+  }, [layout, panelId, updatePanel, minimized, isCoarsePointer, minHeight, getDockedY])
 
   const commitPosition = useCallback(() => {
     const el = rootRef.current
@@ -199,12 +312,12 @@ export default function CockpitHudPanel({
     const resolved = resolveCollisions(panelId, sx, sy, s.w, height)
     sx = resolved.x
     sy = resolved.y
-    const vw = window.innerWidth
+    const { vw } = viewportSize()
     const movedAwayFromUndock =
-      !undockedAt.current || Math.abs(sx - undockedAt.current.x) > DOCK_RELOCK_GUARD_PX
-    const shouldDockLeft = movedAwayFromUndock && (dockPreview === 'left' || sx <= EDGE_DOCK_ZONE_PX)
+      !undockedAt.current || Math.abs(sx - undockedAt.current.x) > dockRelockGuard
+    const shouldDockLeft = movedAwayFromUndock && (dockPreview === 'left' || sx <= edgeDockZone)
     const shouldDockRight =
-      movedAwayFromUndock && (dockPreview === 'right' || sx + s.w >= vw - EDGE_DOCK_ZONE_PX)
+      movedAwayFromUndock && (dockPreview === 'right' || sx + s.w >= vw - edgeDockZone)
     const shouldDock = shouldDockLeft || shouldDockRight
     const nextDockSide: 'left' | 'right' = shouldDockRight ? 'right' : 'left'
     if (shouldDock) {
@@ -224,7 +337,7 @@ export default function CockpitHudPanel({
         x: dockX,
         y: dockY,
         w: s.w,
-        h: s.h,
+        h: Math.max(minHeight, s.h ?? Math.ceil(rect?.height ?? minHeight)),
         minimized,
         docked: true,
         dockSide: nextDockSide,
@@ -241,7 +354,7 @@ export default function CockpitHudPanel({
       x: sx,
       y: sy,
       w: s.w,
-      h: s.h,
+      h: Math.max(minHeight, s.h ?? Math.ceil(rect?.height ?? minHeight)),
       minimized,
       docked: false,
       dockSide,
@@ -258,6 +371,8 @@ export default function CockpitHudPanel({
     updatePanel,
     minHeight,
     getDockedY,
+    dockRelockGuard,
+    edgeDockZone,
   ])
 
   useEffect(() => {
@@ -271,40 +386,40 @@ export default function CockpitHudPanel({
             e.clientX - dragStartScreen.current.x,
             e.clientY - dragStartScreen.current.y,
           )
-          if (d < DRAG_THRESHOLD_PX) return
+          if (d < dragThreshold) return
           setDragMode('move')
         }
         let nx = e.clientX - drag.current.dx
         let ny = e.clientY - drag.current.dy
-        const vw = window.innerWidth
-        const vh = window.innerHeight
+        const { vw, vh } = viewportSize()
         const s = sizeRef.current
         const pw = s.w
-        const ph = minimized ? 44 : s.h ?? minHeight
-        const minX = -pw + DOCK_PEEK_STRIP_PX
-        const maxX = vw - DOCK_PEEK_STRIP_PX
+        const measuredH = rootRef.current?.getBoundingClientRect().height
+        const ph = minimized ? 44 : Math.max(minHeight, s.h ?? Math.ceil(measuredH ?? minHeight))
+        const minX = 0
+        const maxX = vw - pw
         nx = Math.max(minX, Math.min(nx, maxX))
         ny = Math.max(36, Math.min(ny, vh - ph))
         let nextDockPreview: 'left' | 'right' | null = null
-        if (nx <= EDGE_DOCK_ZONE_PX) nextDockPreview = 'left'
-        else if (nx + pw >= vw - EDGE_DOCK_ZONE_PX) nextDockPreview = 'right'
+        if (nx <= edgeDockZone) nextDockPreview = 'left'
+        else if (nx + pw >= vw - edgeDockZone) nextDockPreview = 'right'
         setDockPreview(nextDockPreview)
 
         let guideX: number | null = null
         let guideY: number | null = null
         if (!nextDockPreview) {
-          let bestDx = PANEL_SNAP_THRESHOLD_PX + 1
-          let bestDy = PANEL_SNAP_THRESHOLD_PX + 1
+          let bestDx = panelSnapThreshold + 1
+          let bestDy = panelSnapThreshold + 1
           for (const [id, panel] of Object.entries(panels)) {
             if (id === panelId) continue
             const dx = Math.abs(nx - panel.x)
-            if (dx < bestDx && dx <= PANEL_SNAP_THRESHOLD_PX) {
+            if (dx < bestDx && dx <= panelSnapThreshold) {
               bestDx = dx
               nx = panel.x
               guideX = panel.x
             }
             const dy = Math.abs(ny - panel.y)
-            if (dy < bestDy && dy <= PANEL_SNAP_THRESHOLD_PX) {
+            if (dy < bestDy && dy <= panelSnapThreshold) {
               bestDy = dy
               ny = panel.y
               guideY = panel.y
@@ -312,10 +427,16 @@ export default function CockpitHudPanel({
           }
           const centerX = Math.round((vw - pw) / 2)
           const dxCenter = Math.abs(nx - centerX)
-          if (dxCenter <= PANEL_SNAP_THRESHOLD_PX && dxCenter < bestDx) {
+          if (dxCenter <= panelSnapThreshold && dxCenter < bestDx) {
             nx = centerX
             guideX = centerX + Math.round(pw / 2)
           }
+          const resolved = resolveCollisions(panelId, nx, ny, pw, ph)
+          nx = resolved.x
+          ny = resolved.y
+          const runtimeResolved = avoidRuntimeOverlap(nx, ny, pw, ph)
+          nx = runtimeResolved.x
+          ny = runtimeResolved.y
         }
         setSnapGuide({ x: guideX, y: guideY })
         const next = { x: nx, y: ny }
@@ -326,8 +447,7 @@ export default function CockpitHudPanel({
         if (!rect) return
         let nw = Math.max(minWidth, e.clientX - rect.left)
         let nh = Math.max(minHeight, e.clientY - rect.top)
-        const vw = window.innerWidth
-        const vh = window.innerHeight
+        const { vw, vh } = viewportSize()
         const p = posRef.current
         if (p.x + nw > vw - 4) {
           nw = vw - p.x - 4
@@ -362,21 +482,28 @@ export default function CockpitHudPanel({
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
     window.addEventListener('pointercancel', onUp)
+    document.addEventListener('pointermove', onMove)
+    document.addEventListener('pointerup', onUp)
+    document.addEventListener('pointercancel', onUp)
     return () => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
       window.removeEventListener('pointercancel', onUp)
+      document.removeEventListener('pointermove', onMove)
+      document.removeEventListener('pointerup', onUp)
+      document.removeEventListener('pointercancel', onUp)
     }
-  }, [commitPosition, dragMode, minimized, minHeight, minWidth])
+  }, [commitPosition, dragMode, minimized, minHeight, minWidth, dragThreshold, edgeDockZone, panelSnapThreshold])
 
   const onHeaderPointerDown = (e: React.PointerEvent) => {
     if ((e.target as HTMLElement).closest('[data-no-drag]')) return
-    if (e.button !== 0) return
+    // Browser compatibility: some touch/pen implementations report non-zero button values.
+    if (e.pointerType === 'mouse' && e.button !== 0) return
     if (docked) {
       const s = sizeRef.current
       const baseX =
         dockSide === 'right'
-          ? Math.max(0, window.innerWidth - s.w - DOCK_EDGE_INSET_PX)
+          ? Math.max(0, viewportSize().vw - s.w - DOCK_EDGE_INSET_PX)
           : DOCK_EDGE_INSET_PX
       const baseY = posRef.current.y
       setDocked(false)
@@ -391,6 +518,11 @@ export default function CockpitHudPanel({
     setGlow(true)
     dragStartScreen.current = { x: e.clientX, y: e.clientY }
     drag.current = { dx: e.clientX - posRef.current.x, dy: e.clientY - posRef.current.y }
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId)
+    } catch {
+      // ignore capture failures
+    }
     setDragMode('pending')
     e.preventDefault()
   }
@@ -418,7 +550,7 @@ export default function CockpitHudPanel({
       if (next) {
         const x =
           dockSide === 'right'
-            ? Math.max(0, window.innerWidth - sizeRef.current.w - DOCK_EDGE_INSET_PX)
+            ? Math.max(0, viewportSize().vw - sizeRef.current.w - DOCK_EDGE_INSET_PX)
             : DOCK_EDGE_INSET_PX
         const dockPos = { x, y: getDockedY(dockSide, posRef.current.y) }
         posRef.current = dockPos
@@ -472,8 +604,7 @@ export default function CockpitHudPanel({
         ? '#d66179'
         : '#9ea7a0'
   const dockReveal = glow ? DOCK_PEEK_STRIP_PX : DOCK_VISIBLE_STRIP_PX
-  const isCoarsePointer =
-    typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
+  const dockedHeight = DOCKED_PANEL_HEIGHT_PX
 
   const onDockPointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
     if (!docked) return
@@ -496,11 +627,10 @@ export default function CockpitHudPanel({
       const s = sizeRef.current
       const baseX =
         dockSide === 'right'
-          ? Math.max(0, window.innerWidth - s.w - DOCK_EDGE_INSET_PX)
+          ? Math.max(0, viewportSize().vw - s.w - DOCK_EDGE_INSET_PX)
           : DOCK_EDGE_INSET_PX
       const baseY = posRef.current.y
-      const vw = window.innerWidth
-      const vh = window.innerHeight
+      const { vw, vh } = viewportSize()
       const ph = minimized ? 44 : s.h ?? minHeight
       const nx = Math.max(0, Math.min(baseX + dx, vw - s.w))
       const ny = Math.max(36, Math.min(baseY + dy, vh - ph))
@@ -529,15 +659,28 @@ export default function CockpitHudPanel({
   const shell = (
     <div
       ref={rootRef}
+      data-panel-id={panelId}
       className={resizeBump ? 'cockpit-panel cockpit-panel-bump' : 'cockpit-panel'}
       style={{
         position: 'absolute',
         left: pos.x,
         top: pos.y,
         width: size.w,
-        height: minimized ? (isCoarsePointer ? 46 : 44) : size.h ?? undefined,
-        minHeight: minimized ? (isCoarsePointer ? 46 : 44) : minHeight,
-        maxHeight: minimized ? (isCoarsePointer ? 46 : 44) : undefined,
+        height: docked
+          ? dockedHeight
+          : minimized
+            ? (isCoarsePointer ? 46 : 44)
+            : size.h ?? undefined,
+        minHeight: docked
+          ? dockedHeight
+          : minimized
+            ? (isCoarsePointer ? 46 : 44)
+            : minHeight,
+        maxHeight: docked
+          ? dockedHeight
+          : minimized
+            ? (isCoarsePointer ? 46 : 44)
+            : undefined,
         zIndex: layout?.z ?? 400,
         pointerEvents: 'auto',
         background: panelBg,
@@ -600,6 +743,7 @@ export default function CockpitHudPanel({
           textShadow: lowLightGlow,
           textTransform: 'uppercase',
           userSelect: 'none',
+          touchAction: isCoarsePointer ? 'none' : 'manipulation',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
@@ -658,7 +802,7 @@ export default function CockpitHudPanel({
             }
           }}
           style={{
-            height: 44,
+            height: isCoarsePointer ? 48 : 44,
             width: '100%',
             borderTop: `1px solid ${accent}33`,
             display: 'flex',
@@ -676,6 +820,7 @@ export default function CockpitHudPanel({
             cursor: 'pointer',
             paddingInline: 10,
             backgroundImage: `linear-gradient(90deg, transparent, ${accent}12, transparent)`,
+            touchAction: 'none',
           }}
         >
           <span
@@ -705,13 +850,23 @@ export default function CockpitHudPanel({
             position: 'absolute',
             right: 0,
             bottom: 0,
-            width: 44,
-            height: 44,
+            width: isCoarsePointer ? 56 : 46,
+            height: isCoarsePointer ? 56 : 46,
             cursor: 'nwse-resize',
             touchAction: 'none',
             background: `linear-gradient(135deg, transparent 52%, ${accent}38 52%)`,
+            display: 'flex',
+            alignItems: 'flex-end',
+            justifyContent: 'flex-end',
+            padding: 6,
+            color: `${accent}cc`,
+            fontSize: 12,
+            fontWeight: 800,
+            letterSpacing: '0.04em',
           }}
-        />
+        >
+          ↘
+        </div>
       )}
     </div>
   )

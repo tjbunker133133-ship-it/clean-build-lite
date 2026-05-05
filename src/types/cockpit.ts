@@ -31,7 +31,7 @@ export interface CockpitPrefs {
   red_brightness: number
 }
 
-export const COCKPIT_STORAGE_KEY = 'titanium_cockpit_state_v1'
+export const COCKPIT_STORAGE_KEY = 'titanium_cockpit_state_v2'
 
 /** Magnetic grid snap (COCKPIT_UX v2: 20px) */
 export const SNAP_PX = 20
