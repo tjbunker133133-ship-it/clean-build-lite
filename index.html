@@ -567,7 +567,7 @@ try{
 
 <div id="appBrightness">
   <div class="elite-toolbar" id="eliteToolbar">
-    <span class="tb-label">Titanium HUD Elite v2 — Mapbox token required (paste pk.… below or use saved token). Do not commit tokens to source control.</span>
+    <span class="tb-label">Titanium HUD Elite v2 — Map auto-loads using embedded token (falls back to OSM if unavailable).</span>
     <button type="button" class="tool-btn" id="btnLowLight" title="Dim viewport 30%"><span>🌙</span><span class="lbl">LOW LIGHT</span></button>
     <button type="button" class="tool-btn" id="btnBright" title="Maximum screen brightness / contrast"><span>☀️</span><span class="lbl">BRIGHT</span></button>
     <button type="button" class="tool-btn" id="btnNightOps" title="Night-vision red (soft glow, low eye adaptation shock)"><span>🔴</span><span class="lbl">NIGHT OPS</span></button>
@@ -655,7 +655,7 @@ try{
       <header class="elite-head"><h2 class="htitle">Tactical map</h2><span class="sub">drag · dock · swipe → · map: long-press pin</span></header>
       <div class="elite-body">
         <div class="token-row">
-          <input id="mapboxToken" type="password" autocomplete="off" placeholder="Mapbox pk. token" value="pk.eyJ1IjoiZ2NtMTMzIiwiYSI6ImNtb3MxOTJodTFydmoycXBzMG4xeXV2bDgifQ.O0i0OGrfit8bVB0Vm5kzew">
+          <input id="mapboxToken" type="text" autocomplete="off" placeholder="Mapbox pk. token" value="pk.eyJ1IjoiZ2NtMTMzIiwiYSI6ImNtb3MxOTJodTFydmoycXBzMG4xeXV2bDgifQ.O0i0OGrfit8bVB0Vm5kzew">
           <button type="button" class="tool-btn" id="applyToken">Apply</button>
         </div>
         <div class="layer-controls">
@@ -3085,7 +3085,7 @@ function setPfRow(rowId,state){
 }
 
 function refreshPreflight(){
-  var tok=(document.getElementById('mapboxToken')&&document.getElementById('mapboxToken').value.trim())||'';
+  var tok=(document.getElementById('mapboxToken')&&document.getElementById('mapboxToken').value.trim())||HARDCODED_MAPBOX_TOKEN||'';
   try{if(!tok)tok=localStorage.getItem(STORAGE_TOKEN)||'';}catch(e){}
   setPfRow('pfToken',/^pk\./.test(tok)?'ok':'bad');
   setPfRow('pfStorage',testLocalStorage()?'ok':'bad');
@@ -3548,9 +3548,17 @@ function addTerrain(){
 
 function initMap(useFallback){
   if(!useFallback)mapStyleFallbackTried=false;
-  var tok=document.getElementById('mapboxToken').value.trim()||HARDCODED_MAPBOX_TOKEN||localStorage.getItem(STORAGE_TOKEN)||'';
+  if(typeof window.mapboxgl==='undefined'||!window.mapboxgl||typeof window.mapboxgl.Map!=='function'){
+    document.getElementById('map').innerHTML='<div style="display:flex;height:400px;align-items:center;justify-content:center;background:#111;color:#e0e0e0;padding:16px;text-align:center;">Map engine failed to load. Check network/ad blocker settings and reload.</div>';
+    return;
+  }
+  var tokenInput=document.getElementById('mapboxToken');
+  var storedTok='';
+  try{storedTok=localStorage.getItem(STORAGE_TOKEN)||'';}catch(e){}
+  var tok=(tokenInput&&tokenInput.value?tokenInput.value.trim():'')||HARDCODED_MAPBOX_TOKEN||storedTok||'';
+  if(tokenInput&&!tokenInput.value.trim()&&tok)tokenInput.value=tok;
   if(!useFallback&&(!tok||tok.indexOf('pk.')!==0)){
-    document.getElementById('map').innerHTML='<div style="display:flex;height:400px;align-items:center;justify-content:center;background:#111;color:#e0e0e0;">Enter Mapbox pk token</div>';
+    initMap(true);
     return;
   }
   if(map){try{map.remove();}catch(e){}map=null;gpsMarker=null;}
@@ -4005,8 +4013,10 @@ window.hudVoiceSystem.init();
 syncVoicePillIdle();
 setupPanels();
 initTacticalSuite();
-document.getElementById('mapboxToken').value=HARDCODED_MAPBOX_TOKEN;
-if(document.getElementById('mapboxToken').value.trim().indexOf('pk.')===0)initMap(false);
+if(document.getElementById('mapboxToken').value.trim().indexOf('pk.')!==0&&HARDCODED_MAPBOX_TOKEN){
+  document.getElementById('mapboxToken').value=HARDCODED_MAPBOX_TOKEN;
+}
+initMap(false);
 
 refreshPreflight();
 window.addEventListener('orientationchange',function(){refreshPreflight();});
