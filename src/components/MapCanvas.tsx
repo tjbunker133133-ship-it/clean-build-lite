@@ -62,7 +62,7 @@ export default function MapCanvas() {
     let readyOnce = false
     let fallbackLocked = false
     let map: maplibregl.Map | null = null
-    let lastTouchAt = 0
+    let lastTouchDropAt = 0
     let touchMoved = false
     let multiTouchActive = false
     let touchStart: { x: number; y: number } | null = null
@@ -271,8 +271,8 @@ export default function MapCanvas() {
       const placeWaypoint = (
         e: { lngLat?: { lng: number; lat: number }; points?: Array<{ x: number; y: number }> } | null,
         source: 'click' | 'touch',
-      ) => {
-        if (!map) return
+      ): boolean => {
+        if (!map) return false
         let lngLat = e?.lngLat
         if (!lngLat) {
           const p = e?.points?.[0] ?? touchLast ?? touchStart
@@ -281,14 +281,14 @@ export default function MapCanvas() {
             lngLat = { lng: unproj.lng, lat: unproj.lat }
           }
         }
-        if (!lngLat) return
+        if (!lngLat) return false
         const now = Date.now()
         // Stability guard: prevent accidental double-drops from rapid taps/clicks.
-        if (now - lastDropAtRef.current < 220) return
+        if (now - lastDropAtRef.current < 220) return false
         lastDropAtRef.current = now
 
         // Ignore placement while camera is moving, except deliberate touch taps.
-        if (source !== 'touch' && map.isMoving()) return
+        if (source !== 'touch' && map.isMoving()) return false
         // Allow iOS/mobile waypoint drops even when the panel is docked.
         // Users may keep the tool rail docked while actively placing pins.
         const nextIdx = waypointCountRef.current + 1
@@ -313,15 +313,16 @@ export default function MapCanvas() {
           })
         } catch (err) {
           console.error('[MapCanvas] waypoint add failed', err)
-          return
+          return false
         }
         if (!keepArmedRef.current) setPendingType('default')
         if (clearLabelAfterDropRef.current && manualLabel) setNextWaypointLabel('')
+        return true
       }
 
       map.on('click', (e: any) => {
-        // iOS emits synthetic click shortly after touchend; suppress duplicate drops.
-        if (Date.now() - lastTouchAt < 550) return
+        // iOS emits synthetic click shortly after a successful touch drop.
+        if (Date.now() - lastTouchDropAt < 550) return
         placeWaypoint(e, 'click')
       })
       map.on('touchstart', (e: any) => {
@@ -342,14 +343,14 @@ export default function MapCanvas() {
         }
       })
       map.on('touchend', (e: any) => {
-        lastTouchAt = Date.now()
         if (multiTouchActive) {
           const remaining = Array.isArray(e?.points) ? e.points.length : 0
           if (remaining <= 1) multiTouchActive = false
           return
         }
         if (touchMoved) return
-        placeWaypoint(e, 'touch')
+        const dropped = placeWaypoint(e, 'touch')
+        if (dropped) lastTouchDropAt = Date.now()
       })
     }
 
