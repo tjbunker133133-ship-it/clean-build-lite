@@ -860,7 +860,7 @@ export default function CockpitHudPanel({
           : minimized
             ? (isCoarsePointer ? 46 : 44)
             : undefined,
-        zIndex: 400,
+        zIndex: layout?.z ?? 400,
         pointerEvents: 'auto',
         background: panelBg,
         color: panelTextColor,

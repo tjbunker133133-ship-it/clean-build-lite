@@ -64,7 +64,9 @@ export default function MapCanvas() {
     let map: maplibregl.Map | null = null
     let lastTouchAt = 0
     let touchMoved = false
+    let multiTouchActive = false
     let touchStart: { x: number; y: number } | null = null
+    let touchLast: { x: number; y: number } | null = null
     const isAppleWebKit =
       typeof navigator !== 'undefined' &&
       /AppleWebKit/i.test(navigator.userAgent || '') &&
@@ -156,9 +158,6 @@ export default function MapCanvas() {
         zoom: 10,
         attributionControl: { compact: true },
         renderWorldCopies: false,
-        // Safari/WebKit can reject contexts under performance caveats.
-        failIfMajorPerformanceCaveat: false,
-        antialias: false,
       })
 
       mapRef.current = map
@@ -269,15 +268,27 @@ export default function MapCanvas() {
         hardReset()
       })
 
-      const placeWaypoint = (e: { lngLat: { lng: number; lat: number } }) => {
-        if (!map || !e?.lngLat) return
+      const placeWaypoint = (
+        e: { lngLat?: { lng: number; lat: number }; points?: Array<{ x: number; y: number }> } | null,
+        source: 'click' | 'touch',
+      ) => {
+        if (!map) return
+        let lngLat = e?.lngLat
+        if (!lngLat) {
+          const p = e?.points?.[0] ?? touchLast ?? touchStart
+          if (p) {
+            const unproj = map.unproject([p.x, p.y])
+            lngLat = { lng: unproj.lng, lat: unproj.lat }
+          }
+        }
+        if (!lngLat) return
         const now = Date.now()
         // Stability guard: prevent accidental double-drops from rapid taps/clicks.
         if (now - lastDropAtRef.current < 220) return
         lastDropAtRef.current = now
 
-        // Ignore placement while map camera is moving (drag/pan/kinetic movement).
-        if (map.isMoving()) return
+        // Ignore placement while camera is moving, except deliberate touch taps.
+        if (source !== 'touch' && map.isMoving()) return
         // Allow iOS/mobile waypoint drops even when the panel is docked.
         // Users may keep the tool rail docked while actively placing pins.
         const nextIdx = waypointCountRef.current + 1
@@ -293,8 +304,8 @@ export default function MapCanvas() {
         try {
           addWaypoint({
             id: `wp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-            lng: e.lngLat.lng,
-            lat: e.lngLat.lat,
+            lng: lngLat.lng,
+            lat: lngLat.lat,
             label: manualLabel || `${autoBase}-${nextIdx}`,
             type,
             createdAt: Date.now(),
@@ -310,24 +321,34 @@ export default function MapCanvas() {
       map.on('click', (e: any) => {
         // iOS emits synthetic click shortly after touchend; suppress duplicate drops.
         if (Date.now() - lastTouchAt < 550) return
-        placeWaypoint(e)
+        placeWaypoint(e, 'click')
       })
       map.on('touchstart', (e: any) => {
+        const pointCount = Array.isArray(e?.points) ? e.points.length : 0
+        multiTouchActive = pointCount > 1
         const p = e?.points?.[0]
         touchStart = p ? { x: p.x, y: p.y } : null
+        touchLast = touchStart
         touchMoved = false
       })
       map.on('touchmove', (e: any) => {
         const p = e?.points?.[0]
         if (!p || !touchStart) return
-        if (Math.hypot(p.x - touchStart.x, p.y - touchStart.y) > 10) {
+        touchLast = { x: p.x, y: p.y }
+        const moveTolerance = isAppleWebKit ? 18 : 10
+        if (Math.hypot(p.x - touchStart.x, p.y - touchStart.y) > moveTolerance) {
           touchMoved = true
         }
       })
       map.on('touchend', (e: any) => {
         lastTouchAt = Date.now()
+        if (multiTouchActive) {
+          const remaining = Array.isArray(e?.points) ? e.points.length : 0
+          if (remaining <= 1) multiTouchActive = false
+          return
+        }
         if (touchMoved) return
-        placeWaypoint(e)
+        placeWaypoint(e, 'touch')
       })
     }
 
@@ -386,6 +407,33 @@ export default function MapCanvas() {
     const style = MAP_STYLES[activeLayer] ?? FALLBACK_MAP_STYLE
     let cancelled = false
     let styleFallbackTimer: number | null = null
+    let styleReady = false
+
+    const markStyleReady = () => {
+      if (cancelled || styleReady) return
+      styleReady = true
+      if (styleFallbackTimer != null) {
+        window.clearTimeout(styleFallbackTimer)
+        styleFallbackTimer = null
+      }
+      setStaticFallbackVisible(false)
+      setStatus('ready')
+      try {
+        map.resize()
+      } catch {
+        // ignore resize errors
+      }
+      try {
+        map.off('data', onData)
+      } catch {
+        // ignore
+      }
+    }
+
+    const onData = () => {
+      if (!map) return
+      if (map.isStyleLoaded()) markStyleReady()
+    }
 
     try {
       // Do not flash fallback immediately on style switches.
@@ -398,17 +446,12 @@ export default function MapCanvas() {
       map.setStyle(style)
       map.once('load', () => {
         if (cancelled) return
-        map.resize()
+        markStyleReady()
       })
       map.once('idle', () => {
-        if (cancelled) return
-        if (styleFallbackTimer != null) {
-          window.clearTimeout(styleFallbackTimer)
-          styleFallbackTimer = null
-        }
-        setStaticFallbackVisible(false)
-        setStatus('ready')
+        markStyleReady()
       })
+      map.on('data', onData)
     } catch (e) {
       console.warn('[MapCanvas] setStyle failed', e)
       setStaticFallbackVisible(true)
@@ -419,6 +462,11 @@ export default function MapCanvas() {
       cancelled = true
       if (styleFallbackTimer != null) {
         window.clearTimeout(styleFallbackTimer)
+      }
+      try {
+        map.off('data', onData)
+      } catch {
+        // ignore
       }
     }
   }, [activeLayer, setStatus])

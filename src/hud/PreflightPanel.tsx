@@ -286,6 +286,7 @@ export default function PreflightPanel() {
   }
 
   const requestAllPermissions = async () => {
+    if (requestingPerms) return
     setRequestingPerms(true)
     try {
       // Run sequentially from the same user gesture for better iOS Safari reliability.
@@ -301,6 +302,18 @@ export default function PreflightPanel() {
       setNotifPerm(notif)
       setOrientationPerm(orientation)
       setMotionPerm(motion)
+      setLastRecheckAt(Date.now())
+      setRecheckTick((v) => v + 1)
+    } finally {
+      setRequestingPerms(false)
+    }
+  }
+
+  const requestOne = async (fn: () => Promise<void>) => {
+    if (requestingPerms) return
+    setRequestingPerms(true)
+    try {
+      await fn()
       setLastRecheckAt(Date.now())
       setRecheckTick((v) => v + 1)
     } finally {
@@ -396,10 +409,13 @@ export default function PreflightPanel() {
             type="button"
             data-no-drag
             style={permissionButtonStyle}
-            onClick={async () => {
-              const s = await requestGeolocationPermission()
-              setGeoPerm(s === 'unsupported' ? 'unknown' : s)
-            }}
+            disabled={requestingPerms}
+            onClick={() =>
+              void requestOne(async () => {
+                const s = await requestGeolocationPermission()
+                setGeoPerm(s === 'unsupported' ? 'unknown' : s)
+              })
+            }
           >
             PROMPT LOCATION
           </button>
@@ -407,10 +423,13 @@ export default function PreflightPanel() {
             type="button"
             data-no-drag
             style={permissionButtonStyle}
-            onClick={async () => {
-              const s = await requestMicrophonePermission()
-              setMicPerm(s === 'unsupported' ? 'unknown' : s)
-            }}
+            disabled={requestingPerms}
+            onClick={() =>
+              void requestOne(async () => {
+                const s = await requestMicrophonePermission()
+                setMicPerm(s === 'unsupported' ? 'unknown' : s)
+              })
+            }
           >
             PROMPT MIC
           </button>
@@ -418,7 +437,12 @@ export default function PreflightPanel() {
             type="button"
             data-no-drag
             style={permissionButtonStyle}
-            onClick={async () => setCameraPerm(await requestCameraPermission())}
+            disabled={requestingPerms}
+            onClick={() =>
+              void requestOne(async () => {
+                setCameraPerm(await requestCameraPermission())
+              })
+            }
           >
             PROMPT CAMERA
           </button>
@@ -426,7 +450,12 @@ export default function PreflightPanel() {
             type="button"
             data-no-drag
             style={permissionButtonStyle}
-            onClick={async () => setNotifPerm(await requestNotificationPermission())}
+            disabled={requestingPerms}
+            onClick={() =>
+              void requestOne(async () => {
+                setNotifPerm(await requestNotificationPermission())
+              })
+            }
           >
             PROMPT NOTIFY
           </button>
@@ -434,7 +463,12 @@ export default function PreflightPanel() {
             type="button"
             data-no-drag
             style={permissionButtonStyle}
-            onClick={async () => setOrientationPerm(await requestOrientationPermission())}
+            disabled={requestingPerms}
+            onClick={() =>
+              void requestOne(async () => {
+                setOrientationPerm(await requestOrientationPermission())
+              })
+            }
           >
             PROMPT ORIENT
           </button>
@@ -442,7 +476,12 @@ export default function PreflightPanel() {
             type="button"
             data-no-drag
             style={permissionButtonStyle}
-            onClick={async () => setMotionPerm(await requestMotionPermission())}
+            disabled={requestingPerms}
+            onClick={() =>
+              void requestOne(async () => {
+                setMotionPerm(await requestMotionPermission())
+              })
+            }
           >
             PROMPT MOTION
           </button>
