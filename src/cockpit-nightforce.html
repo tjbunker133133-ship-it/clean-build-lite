@@ -1,0 +1,802 @@
+<!DOCTYPE html>
+<html lang="en" data-hue="low_light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nightforce Cockpit — Tactical Map</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.0.0/mapbox-gl.js"></script>
+<link href="https://api.mapbox.com/mapbox-gl-js/v3.0.0/mapbox-gl.css" rel="stylesheet">
+<style>
+/* COCKPIT_UX_DIRECTIVE v2.0 — Nightforce: see_through = blur(16px) + panel fill 0.45 */
+:root{
+  --nf-text:#e0e0e0;
+  --nf-accent-cyan:#00e5ff;
+  --nf-green:#00ff88;
+  --nf-red:#ff1133;
+  --nf-grey:#88aacc;
+  --nf-label:#88aacc; /* labels vs data — both muted blue-grey */
+  --nf-panel-o:0.45;
+  --nf-blur:16px;
+  --nf-bg-base:radial-gradient(circle at 50% 50%,#0a0a0f,#050508);
+  --nf-danger:#ff4466;
+  --nf-border-subtle:rgba(0,229,255,0.2);
+  --nf-panel-fill:rgba(8,8,12,0.45);
+}
+/* v2 modes (+ legacy aliases for saved layouts) */
+html[data-hue="low_light"],html[data-hue="lowlight"]{
+  --nf-blur:8px;
+  --nf-panel-fill:rgba(0,0,0,0.7);
+  --nf-accent-cyan:#0088aa;
+}
+html[data-hue="bright_day"],html[data-hue="bright"]{
+  --nf-blur:20px;
+  --nf-panel-fill:rgba(30,30,40,0.35);
+  --nf-accent-cyan:#00ffff;
+}
+html[data-hue="red_tactical"],html[data-hue="red_screen"],html[data-hue="redops"]{
+  --nf-blur:12px;
+  --nf-panel-fill:rgba(20,0,0,0.5);
+  --nf-accent-cyan:#ff3355;
+  --nf-green:#ff3355;
+  --nf-text:#e8c8cc;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;background:var(--nf-bg-base);color:var(--nf-text);
+  font-family:'Share Tech Mono',ui-monospace,monospace;font-size:13px;overflow-x:hidden;min-height:100vh;
+  box-shadow:inset 0 0 120px rgba(0,229,255,0.04);
+}
+html[data-hue="bright_day"] body,html[data-hue="bright"] body{color:#e8f0f8}
+/* low_light: brightness 30% on HUD chrome */
+html[data-hue="low_light"] .nf-chrome,
+html[data-hue="low_light"] .nf-topbar,
+html[data-hue="low_light"] .nf-elev,
+html[data-hue="lowlight"] .nf-chrome,
+html[data-hue="lowlight"] .nf-topbar,
+html[data-hue="lowlight"] .nf-elev{
+  filter:brightness(0.3);
+}
+html[data-hue="bright_day"] .nf-chrome,
+html[data-hue="bright_day"] .nf-topbar,
+html[data-hue="bright_day"] .nf-elev,
+html[data-hue="bright"] .nf-chrome,
+html[data-hue="bright"] .nf-topbar,
+html[data-hue="bright"] .nf-elev{filter:brightness(1)}
+html[data-hue="red_tactical"] .nf-chrome,
+html[data-hue="red_tactical"] .nf-topbar,
+html[data-hue="red_tactical"] .nf-elev,
+html[data-hue="red_screen"] .nf-chrome,
+html[data-hue="red_screen"] .nf-topbar,
+html[data-hue="red_screen"] .nf-elev,
+html[data-hue="redops"] .nf-chrome,
+html[data-hue="redops"] .nf-topbar,
+html[data-hue="redops"] .nf-elev{
+  filter:brightness(0.6) sepia(0.5) saturate(1.5) hue-rotate(0deg);
+}
+html[data-hue="red_tactical"] .mapboxgl-map,
+html[data-hue="red_screen"] .mapboxgl-map,
+html[data-hue="redops"] .mapboxgl-map{
+  filter:brightness(0.85) sepia(0.35) saturate(1.15);
+}
+
+/* Top bar + hue (v2 HUE_BUTTONS) */
+.nf-topbar{
+  position:fixed;top:0;left:0;right:0;height:48px;z-index:800;
+  display:flex;align-items:center;gap:12px;padding:0 14px;
+  background:rgba(5,5,8,0.88);border-bottom:1px solid var(--nf-border-subtle);
+  backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  box-shadow:0 0 40px rgba(0,229,255,0.06);
+}
+.nf-brand{font-family:Orbitron,sans-serif;font-size:11px;letter-spacing:0.25em;color:var(--nf-green);text-shadow:0 0 4px currentColor,0 0 14px rgba(0,255,136,0.45),0 0 28px rgba(0,255,136,0.2)}
+.nf-hue-group{display:flex;gap:8px;margin-left:auto;flex-wrap:wrap;justify-content:flex-end}
+.nf-hue{
+  min-width:44px;min-height:36px;padding:6px 10px;border-radius:8px;cursor:pointer;font-size:10px;letter-spacing:0.06em;
+  border:1px solid var(--nf-border-subtle);background:rgba(0,0,0,0.4);color:var(--nf-label);
+  text-shadow:0 0 4px currentColor;
+  transition:box-shadow .2s cubic-bezier(0.25,0.1,0.25,1),border-color .2s,color .2s,background .2s;
+}
+.nf-hue:hover{box-shadow:0 0 0 1px rgba(0,255,136,0.4),0 8px 32px rgba(0,0,0,0.3),0 0 12px rgba(0,255,136,0.35);border-color:rgba(0,255,136,0.5);color:var(--nf-green)}
+.nf-hue.active{
+  border-color:rgba(0,255,136,0.45);color:var(--nf-green);
+  background:rgba(0,255,136,0.15);box-shadow:0 0 0 1px var(--nf-green),0 0 12px rgba(0,255,136,0.6);
+}
+html[data-hue="red_tactical"] .nf-hue.active,
+html[data-hue="red_screen"] .nf-hue.active,
+html[data-hue="redops"] .nf-hue.active{box-shadow:0 0 0 1px #ff3355,0 0 16px rgba(255,51,85,0.55);color:#ff6b81;border-color:#ff3355}
+
+/* Elevation readout v2: top center, 48px / 200px, trend + grade + band color */
+.nf-elev{
+  position:fixed;top:56px;left:50%;transform:translateX(-50%);z-index:750;
+  min-width:200px;min-height:48px;padding:6px 16px;border-radius:24px;
+  background:rgba(0,0,0,0.6);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  border:1px solid rgba(0,255,136,0.3);
+  font-variant-numeric:tabular-nums;font-size:12px;letter-spacing:0.04em;
+  box-shadow:0 4px 24px rgba(0,0,0,0.45);
+  pointer-events:none;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
+  font-weight:600;
+}
+.nf-elev-main{font-size:14px;font-weight:700}
+.nf-elev-meta{font-size:10px;opacity:0.9;white-space:nowrap}
+.nf-elev--low .nf-elev-main,.nf-elev--low .nf-elev-meta{color:#00ff88}
+.nf-elev--mid .nf-elev-main,.nf-elev--mid .nf-elev-meta{color:var(--nf-accent-cyan)}
+.nf-elev--high .nf-elev-main,.nf-elev--high .nf-elev-meta{color:#ffcc66}
+.nf-elev--na .nf-elev-main,.nf-elev--na .nf-elev-meta{color:var(--nf-label)}
+
+/* Floating panels — panel_bg from mode vars */
+.nf-panel{
+  position:fixed;
+  --w:320px;
+  width:var(--w);
+  max-width:calc(100vw - 80px);
+  background:var(--nf-panel-fill);
+  backdrop-filter:blur(var(--nf-blur)) saturate(1.15);
+  -webkit-backdrop-filter:blur(var(--nf-blur)) saturate(1.15);
+  border:1px solid var(--nf-border-subtle);
+  border-radius:10px;
+  box-shadow:0 8px 32px rgba(0,0,0,0.45);
+  display:flex;flex-direction:column;
+  overflow:hidden;
+  transition:transform .28s cubic-bezier(0.25,0.1,0.25,1),width .2s cubic-bezier(0.25,0.1,0.25,1),box-shadow .2s,border-color .2s;
+  z-index:400;
+}
+.nf-panel:hover{box-shadow:0 0 0 1px rgba(0,255,136,0.4),0 8px 32px rgba(0,0,0,0.3),0 0 18px rgba(0,255,136,0.15);border-color:rgba(0,255,136,0.35)}
+.nf-panel.is-dragging{z-index:9000!important;box-shadow:0 0 32px rgba(0,255,136,0.45)}
+/* close_to_sidebar + sidebar strip blur; hover expand after 200ms */
+.nf-panel.collapsed{
+  right:0!important;left:auto!important;
+  transform:translateX(calc(100% - 60px));
+  transform-origin:right center;
+  border-radius:10px 0 0 10px;
+  background:rgba(5,5,8,0.85);
+  backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  transition:transform .28s cubic-bezier(0.25,0.1,0.25,1) 0s,box-shadow .2s;
+}
+.nf-panel.collapsed::before{
+  content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--nf-green);
+  box-shadow:0 0 10px var(--nf-green);border-radius:1px 0 0 1px;pointer-events:none;z-index:2;
+}
+.nf-panel.collapsed:hover{
+  transition-delay:0.2s,0s;
+  transform:translateX(0);
+  z-index:8500!important;
+  box-shadow:-8px 0 40px rgba(0,0,0,0.55),0 0 26px rgba(0,255,136,0.28);
+}
+.nf-panel.collapsed .nf-body{opacity:0;max-height:0;padding:0;overflow:hidden;pointer-events:none}
+.nf-panel.collapsed:hover .nf-body{opacity:1;max-height:none;padding:12px;pointer-events:auto}
+.nf-panel.collapsed .nf-head .nf-title{
+  writing-mode:vertical-rl;text-orientation:mixed;letter-spacing:0.15em;
+  color:#00ff88;text-shadow:0 0 12px rgba(0,255,136,0.45);
+}
+.nf-panel.collapsed:hover .nf-head .nf-title{writing-mode:horizontal-tb}
+
+.nf-head{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding:10px 12px;min-height:44px;cursor:grab;
+  border-bottom:1px solid rgba(136,170,204,0.2);
+  background:rgba(0,0,0,0.2);
+  user-select:none;touch-action:none;
+}
+.nf-head:active{cursor:grabbing}
+.nf-title{font-family:Orbitron,sans-serif;font-size:10px;letter-spacing:0.14em;color:#00ff88;text-transform:uppercase;text-shadow:0 0 12px rgba(0,255,136,0.4),0 0 24px rgba(0,255,136,0.15)}
+html[data-hue="red_tactical"] .nf-title,
+html[data-hue="red_screen"] .nf-title,
+html[data-hue="redops"] .nf-title{color:#ff6b81;text-shadow:0 0 14px rgba(255,51,85,0.45)}
+.nf-dock{
+  min-width:36px;min-height:36px;border-radius:6px;border:1px solid rgba(136,170,204,0.35);
+  background:rgba(0,0,0,0.35);color:var(--nf-grey);cursor:pointer;font-size:11px;
+  transition:box-shadow .2s,color .2s,border-color .2s;
+}
+.nf-dock:hover,.nf-dock:focus-visible{color:var(--nf-green);border-color:var(--nf-green);box-shadow:0 0 12px rgba(0,255,136,0.3)}
+.nf-body{padding:12px;flex:1;overflow:auto}
+.nf-resize{
+  position:absolute;right:0;bottom:0;width:16px;height:16px;cursor:nwse-resize;
+  background:linear-gradient(135deg,transparent 55%,rgba(0,255,136,0.35) 55%);
+  touch-action:none;
+}
+
+.map-host #map{width:100%;height:420px;border-radius:8px}
+.layer-controls{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}
+.map-layer-btn,.action-btn{
+  padding:8px 14px;border-radius:6px;border:1px solid rgba(136,170,204,0.35);background:rgba(0,0,0,0.4);
+  color:var(--nf-grey);cursor:pointer;font:inherit;font-size:11px;letter-spacing:0.06em;
+  min-height:40px;transition:box-shadow .2s,border-color .2s,color .2s;
+}
+.map-layer-btn:hover,.action-btn:hover{border-color:var(--nf-green);color:var(--nf-green);box-shadow:0 0 10px rgba(0,255,136,0.25)}
+.map-layer-btn.active{background:rgba(0,255,136,0.15);border-color:var(--nf-green);color:var(--nf-green);box-shadow:0 0 14px rgba(0,255,136,0.35)}
+.glass-label{font-size:10px;color:var(--nf-grey);opacity:0.85}
+.offline-badge{display:none;background:var(--nf-danger);padding:2px 8px;border-radius:4px;font-size:10px}
+.offline-badge.show{display:inline-block}
+.layer-status{display:flex;justify-content:space-between;margin-top:8px;padding:8px;background:rgba(0,0,0,0.35);border-radius:6px;font-size:11px;color:var(--nf-grey)}
+.layer-name{color:var(--nf-green)}
+input[type=text],input[type=password]{width:100%;padding:10px;margin-top:8px;border-radius:6px;border:1px solid rgba(136,170,204,0.25);background:#080c10;color:#e8f0f8;font:inherit}
+.sos-rail{position:relative;height:48px;background:rgba(0,0,0,0.45);border:1px solid rgba(136,170,204,0.25);border-radius:24px;touch-action:none}
+#sosKnob{touch-action:none}
+/* snap clean: 12-column visual + 20px magnetic snap in JS */
+.nf-chrome{
+  margin-top:92px;padding:16px 16px 120px;max-width:1680px;margin-left:auto;margin-right:auto;
+  position:relative;
+  background:#0a0e12;
+  background-image:linear-gradient(90deg,rgba(136,170,204,0.07) 1px,transparent 1px);
+  background-size:calc(100% / 12) 100%;
+}
+
+@media (prefers-reduced-motion:reduce){
+  .nf-panel,.nf-hue,.nf-elev,.map-layer-btn,.action-btn{transition:none!important}
+}
+html.no-backdrop .nf-panel{background:rgba(12,16,20,0.92);backdrop-filter:none!important;-webkit-backdrop-filter:none!important}
+</style>
+</head>
+<body>
+<script>
+try{
+  if(!(window.CSS&&CSS.supports&&(CSS.supports('-webkit-backdrop-filter','blur(8px)')||CSS.supports('backdrop-filter','blur(8px)'))))
+    document.documentElement.classList.add('no-backdrop');
+}catch(e){document.documentElement.classList.add('no-backdrop');}
+</script>
+
+<header class="nf-topbar">
+  <span class="nf-brand">NIGHTFORCE</span>
+  <span style="font-size:10px;color:var(--nf-label);opacity:0.85">Ctrl+S save · Ctrl+L load · Ctrl+E export · Ctrl+Shift+E import</span>
+  <div class="nf-hue-group" role="group" aria-label="Screen hue">
+    <button type="button" class="nf-hue active" data-hue="low_light" title="Night ops / battery">🌙 LOW LIGHT</button>
+    <button type="button" class="nf-hue" data-hue="bright_day" title="High sun readability">☀️ BRIGHT</button>
+    <button type="button" class="nf-hue" data-hue="red_tactical" title="Night vision preservation">🔴 RED OPS</button>
+  </div>
+</header>
+
+<input type="file" id="nfImportFile" accept="application/json,.json" style="display:none" aria-hidden="true">
+
+<div class="nf-elev nf-elev--na" id="elevPill" title="Terrain elevation (Mapbox DEM) · trend vs last sample">
+  <div class="nf-elev-main" id="elevMain">— ft</div>
+  <div class="nf-elev-meta"><span id="elevTrend">—</span> · <span id="elevGrade">grade —</span></div>
+</div>
+
+<div class="nf-chrome" id="chromeRoot">
+  <div class="nf-panel" id="panel-gps" data-panel-id="gps" style="left:16px;top:100px;width:340px">
+    <header class="nf-head">
+      <span class="nf-title">GPS pulse</span>
+      <button type="button" class="nf-dock" data-dock="gps" title="Dock right">▸</button>
+    </header>
+    <div class="nf-body">
+      <p class="glass-label">2-minute poll · offline-first</p>
+      <div id="lastPollDisplay" style="color:var(--nf-green);font-size:15px;margin:8px 0">Last poll: —</div>
+      <div id="coordStatus" class="glass-label">Lat: —, Lon: —</div>
+      <button type="button" class="action-btn" id="pollNow" style="margin-top:10px">Poll now</button>
+    </div>
+    <div class="nf-resize" data-resize="gps"></div>
+  </div>
+
+  <div class="nf-panel" id="panel-vault" data-panel-id="vault" style="left:380px;top:100px;width:300px">
+    <header class="nf-head">
+      <span class="nf-title">Forensic vault</span>
+      <button type="button" class="nf-dock" data-dock="vault">▸</button>
+    </header>
+    <div class="nf-body">
+      <p class="glass-label">AES-GCM seal</p>
+      <input id="vaultInput" type="text" placeholder="Payload" autocomplete="off">
+      <button type="button" class="action-btn" id="vaultSeal" style="margin-top:8px;width:100%">Seal</button>
+      <div id="vaultEcho" class="glass-label" style="margin-top:8px;word-break:break-all"></div>
+    </div>
+    <div class="nf-resize" data-resize="vault"></div>
+  </div>
+
+  <div class="nf-panel" id="panel-sos" data-panel-id="sos" style="left:16px;top:320px;width:360px">
+    <header class="nf-head">
+      <span class="nf-title">SOS rail</span>
+      <button type="button" class="nf-dock" data-dock="sos">▸</button>
+    </header>
+    <div class="nf-body">
+      <p class="glass-label">3s sustained slide</p>
+      <div class="sos-rail" id="sosRail" role="slider">
+        <div id="sosFill" style="position:absolute;left:0;top:0;bottom:0;width:0%;background:linear-gradient(90deg,#331018,var(--nf-danger));border-radius:24px"></div>
+        <div id="sosKnob" tabindex="0" style="position:absolute;left:4px;top:50%;transform:translateY(-50%);width:40px;height:40px;border-radius:50%;background:#fff;cursor:grab;box-shadow:0 2px 8px rgba(0,0,0,0.5)"></div>
+      </div>
+      <div id="sosTimeBar" style="height:4px;margin-top:10px;background:#222;border-radius:2px"></div>
+      <div id="sosStatus" class="glass-label" style="margin-top:8px;color:var(--nf-green)"></div>
+    </div>
+    <div class="nf-resize" data-resize="sos"></div>
+  </div>
+
+  <div class="nf-panel" id="panel-field" data-panel-id="field" style="left:400px;top:320px;width:340px">
+    <header class="nf-head">
+      <span class="nf-title">Field card</span>
+      <button type="button" class="nf-dock" data-dock="field">▸</button>
+    </header>
+    <div class="nf-body">
+      <details><summary style="cursor:pointer;color:var(--nf-green)">16-3-311 Trespass</summary><p class="glass-label" style="margin-top:6px">Colorado criminal trespass — unlawful entry or remaining.</p></details>
+      <details><summary style="cursor:pointer;color:var(--nf-green)">18 USC 242</summary><p class="glass-label" style="margin-top:6px">Deprivation of rights under color of law.</p></details>
+    </div>
+    <div class="nf-resize" data-resize="field"></div>
+  </div>
+
+  <div class="nf-panel map-host" id="panel-map" data-panel-id="map" style="left:16px;top:520px;width:min(96vw,920px)">
+    <header class="nf-head">
+      <span class="nf-title">Tactical map</span>
+      <button type="button" class="nf-dock" data-dock="map">▸</button>
+    </header>
+    <div class="nf-body">
+      <p class="glass-label">Mapbox token (pk.) · terrain elevation enabled</p>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;margin:8px 0;align-items:center">
+        <input id="mapboxToken" type="password" placeholder="pk.…" style="max-width:280px;margin:0">
+        <button type="button" class="action-btn" id="applyToken">Apply</button>
+      </div>
+      <div class="layer-controls">
+        <button type="button" class="map-layer-btn active" data-layer="satellite" data-label="Satellite">Satellite</button>
+        <button type="button" class="map-layer-btn" data-layer="topo" data-label="Topo">Topo</button>
+        <button type="button" class="map-layer-btn" data-layer="outdoor" data-label="Outdoor">Outdoor</button>
+        <button type="button" class="map-layer-btn" data-layer="streets" data-label="Streets">Streets</button>
+      </div>
+      <div id="map" style="width:100%;height:420px;border-radius:8px;background:#111"></div>
+      <div class="layer-status">
+        <span class="layer-name" id="currentLayerLabel">Current: Satellite</span>
+        <span class="offline-badge" id="offlineBadge">Offline</span>
+      </div>
+    </div>
+    <div class="nf-resize" data-resize="map"></div>
+  </div>
+
+  <div class="nf-panel" id="panel-deadman" data-panel-id="deadman" style="left:960px;top:100px;width:280px">
+    <header class="nf-head">
+      <span class="nf-title">Deadman</span>
+      <button type="button" class="nf-dock" data-dock="deadman">▸</button>
+    </header>
+    <div class="nf-body">
+      <div id="deadmanStatus" style="color:var(--nf-green)">Monitoring</div>
+      <div id="deadmanLog" class="glass-label" style="margin-top:8px"></div>
+    </div>
+    <div class="nf-resize" data-resize="deadman"></div>
+  </div>
+</div>
+
+<script>
+(function(){
+var LAYOUT_KEY='cockpit_nightforce_layout_v2';
+var MAPBOX_KEY='titanium_mapbox_pk';
+var COLS=12;
+var SNAP_PX=20;
+var DRAG_MIN=5;
+
+function normalizeHue(h){
+  if(!h)return'low_light';
+  var m={lowlight:'low_light',bright:'bright_day',red_screen:'red_tactical',redops:'red_tactical',low_light:'low_light',bright_day:'bright_day',red_tactical:'red_tactical'};
+  return m[h]||h;
+}
+function colW(){return window.innerWidth/COLS}
+function snapMagnetic(x,y,w){
+  var cw=colW();
+  var sx=Math.round(x/cw)*cw;
+  var sy=Math.round(y/SNAP_PX)*SNAP_PX;
+  var sw=Math.max(cw,Math.round(w/cw)*cw);
+  return {x:Math.max(0,sx),y:Math.max(48,sy),w:Math.min(sw,window.innerWidth-16)};
+}
+
+function loadLayout(){
+  try{
+    var raw=localStorage.getItem(LAYOUT_KEY);
+    if(!raw)raw=localStorage.getItem('cockpit_nightforce_layout_v1');
+    if(!raw)return null;
+    return JSON.parse(raw);
+  }catch(e){return null}
+}
+function saveLayout(state){
+  try{localStorage.setItem(LAYOUT_KEY,JSON.stringify(state));}catch(e){}
+}
+
+function panelState(){
+  var out={};
+  document.querySelectorAll('.nf-panel').forEach(function(el){
+    var id=el.dataset.panelId;
+    var r=el.getBoundingClientRect();
+    out[id]={
+      x:parseFloat(el.style.left)||r.left,
+      y:parseFloat(el.style.top)||r.top,
+      w:parseFloat(el.style.width)||r.width,
+      collapsed:el.classList.contains('collapsed'),
+      z:parseInt(el.style.zIndex,10)||400
+    };
+  });
+  return out;
+}
+function applyLayout(data){
+  if(!data||!data.panels)return;
+  Object.keys(data.panels).forEach(function(id){
+    var p=data.panels[id];
+    var el=document.querySelector('[data-panel-id="'+id+'"]');
+    if(!el)return;
+    if(typeof p.x==='number')el.style.left=p.x+'px';
+    if(typeof p.y==='number')el.style.top=p.y+'px';
+    if(typeof p.w==='number')el.style.width=p.w+'px';
+    if(p.collapsed)el.classList.add('collapsed');else el.classList.remove('collapsed');
+    if(p.z)el.style.zIndex=String(p.z);
+  });
+  stackCollapsed();
+}
+
+function applyHue(h){
+  var H=normalizeHue(h);
+  document.documentElement.dataset.hue=H;
+  document.querySelectorAll('.nf-hue').forEach(function(b){b.classList.toggle('active',b.dataset.hue===H);});
+  try{localStorage.setItem('cockpit_nightforce_hue_v2',H);}catch(e){}
+}
+document.querySelectorAll('.nf-hue').forEach(function(btn){
+  btn.addEventListener('click',function(){
+    document.querySelectorAll('.nf-hue').forEach(function(b){b.classList.remove('active');});
+    btn.classList.add('active');
+    applyHue(btn.dataset.hue||'low_light');
+  });
+});
+
+function exportLayoutJson(){
+  var blob=new Blob([JSON.stringify({v:2,panels:panelState(),hue:normalizeHue(document.documentElement.dataset.hue)},null,2)],{type:'application/json'});
+  var a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download='nightforce-layout.json';
+  a.click();
+  setTimeout(function(){URL.revokeObjectURL(a.href);},2000);
+}
+function importLayoutFile(f){
+  var r=new FileReader();
+  r.onload=function(){
+    try{
+      var L=JSON.parse(r.result);
+      if(L.panels)applyLayout(L);
+      if(L.hue)applyHue(L.hue);
+      try{if(currentMap)currentMap.resize()}catch(e){}
+    }catch(e){console.warn('import',e);}
+  };
+  r.readAsText(f);
+}
+document.getElementById('nfImportFile').addEventListener('change',function(e){
+  var f=e.target.files&&e.target.files[0];
+  if(f)importLayoutFile(f);
+  e.target.value='';
+});
+
+window.addEventListener('keydown',function(e){
+  if(!e.ctrlKey&&!e.metaKey)return;
+  var k=e.key.toLowerCase();
+  if(k==='e'&&e.shiftKey){
+    e.preventDefault();
+    document.getElementById('nfImportFile').click();
+    return;
+  }
+  if(k==='e'){
+    e.preventDefault();
+    exportLayoutJson();
+    return;
+  }
+  if(k==='s'){
+    e.preventDefault();
+    saveLayout({v:2,panels:panelState(),hue:normalizeHue(document.documentElement.dataset.hue)||'low_light'});
+  }
+  if(k==='l'){
+    e.preventDefault();
+    var L=loadLayout();
+    if(L&&L.panels)applyLayout(L);
+    if(L&&L.hue)applyHue(L.hue);
+    try{if(currentMap)currentMap.resize()}catch(err){}
+  }
+});
+
+function stackCollapsed(){
+  var ys=104;var gap=8;
+  document.querySelectorAll('.nf-panel.collapsed').forEach(function(el){
+    el.style.left='auto';
+    el.style.right='0';
+    el.style.top=ys+'px';
+    ys+=Math.min(el.offsetHeight||80,200)+gap;
+  });
+}
+function dockPanel(id){
+  var el=document.querySelector('[data-panel-id="'+id+'"]');
+  if(!el)return;
+  el.classList.toggle('collapsed');
+  stackCollapsed();
+  if(!el.classList.contains('collapsed')){
+    el.style.right='auto';
+  }
+  try{if(currentMap)currentMap.resize()}catch(e){}
+}
+document.querySelectorAll('.nf-dock').forEach(function(b){
+  b.addEventListener('click',function(e){e.stopPropagation();dockPanel(b.dataset.dock);});
+});
+
+var zCounter=500;
+function initDragResize(){
+  document.querySelectorAll('.nf-panel').forEach(function(panel){
+    var head=panel.querySelector('.nf-head');
+    var grip=panel.querySelector('.nf-resize');
+    var pid=panel.dataset.panelId;
+    var drag={active:false,armed:false,mode:'',dx:0,dy:0,sx:0,sy:0};
+
+    function move(e){
+      if(drag.mode==='pending'){
+        if(Math.hypot(e.clientX-drag.sx,e.clientY-drag.sy)<DRAG_MIN)return;
+        drag.active=true;
+        drag.mode='move';
+      }
+      if(!drag.active)return;
+      if(drag.mode==='move'){
+        var nx=e.clientX-drag.dx;
+        var ny=e.clientY-drag.dy;
+        nx=Math.max(0,Math.min(nx,window.innerWidth-panel.offsetWidth-8));
+        ny=Math.max(48,Math.min(ny,window.innerHeight-40));
+        panel.style.left=nx+'px';
+        panel.style.top=ny+'px';
+        panel.style.right='auto';
+      }else if(drag.mode==='resize'){
+        var br=panel.getBoundingClientRect();
+        var nw=Math.max(220,e.clientX-br.left);
+        panel.style.width=nw+'px';
+      }
+    }
+    function up(){
+      var wasPending=drag.mode==='pending';
+      if(wasPending){
+        drag.mode='';drag.armed=false;
+        panel.classList.remove('is-dragging');
+        window.removeEventListener('pointermove',move);
+        window.removeEventListener('pointerup',up);
+        window.removeEventListener('pointercancel',up);
+        return;
+      }
+      if(!drag.active)return;
+      drag.active=false;
+      drag.mode='';
+      drag.armed=false;
+      panel.classList.remove('is-dragging');
+      window.removeEventListener('pointermove',move);
+      window.removeEventListener('pointerup',up);
+      window.removeEventListener('pointercancel',up);
+      var left=panel.offsetLeft;
+      var top=panel.offsetTop;
+      var w=panel.offsetWidth;
+      var sm=snapMagnetic(left,top,w);
+      panel.style.left=sm.x+'px';
+      panel.style.top=sm.y+'px';
+      panel.style.width=sm.w+'px';
+      if(panel.classList.contains('collapsed'))stackCollapsed();
+      try{if(pid==='map'&&currentMap)currentMap.resize()}catch(err){}
+    }
+
+    head.addEventListener('dblclick',function(e){
+      if(e.target.closest('.nf-dock'))return;
+      e.preventDefault();
+      dockPanel(pid);
+    });
+    head.addEventListener('pointerdown',function(e){
+      if(e.target.closest('.nf-dock'))return;
+      if(e.button!==0)return;
+      panel.classList.add('is-dragging');
+      panel.style.zIndex=++zCounter;
+      drag.armed=true;
+      drag.mode='pending';
+      drag.sx=e.clientX;
+      drag.sy=e.clientY;
+      drag.dx=e.clientX-panel.offsetLeft;
+      drag.dy=e.clientY-panel.offsetTop;
+      window.addEventListener('pointermove',move);
+      window.addEventListener('pointerup',up);
+      window.addEventListener('pointercancel',up);
+      e.preventDefault();
+    });
+    if(grip){
+      grip.addEventListener('pointerdown',function(e){
+        e.stopPropagation();
+        panel.style.zIndex=++zCounter;
+        drag.active=true;
+        drag.mode='resize';
+        drag.armed=true;
+        window.addEventListener('pointermove',move);
+        window.addEventListener('pointerup',up);
+        window.addEventListener('pointercancel',up);
+        e.preventDefault();
+      });
+    }
+  });
+}
+initDragResize();
+
+try{
+  var memHue=localStorage.getItem('cockpit_nightforce_hue_v2');
+  if(memHue)applyHue(memHue);
+}catch(e){}
+var saved=loadLayout();
+if(saved&&saved.panels)applyLayout(saved);
+if(saved&&saved.hue)applyHue(saved.hue);
+
+function saveTok(){try{localStorage.setItem(MAPBOX_KEY,document.getElementById('mapboxToken').value.trim());}catch(e){}}
+function getTok(){
+  var v=document.getElementById('mapboxToken').value.trim();
+  if(v)return v;
+  try{return localStorage.getItem(MAPBOX_KEY)||'';}catch(e){return '';}
+}
+try{var t=getTok();if(t)document.getElementById('mapboxToken').value=t;}catch(e){}
+
+mapboxgl.accessToken=getTok()||'';
+
+var layerStyles={satellite:'mapbox/satellite-v9',topo:'mapbox/outdoors-v12',outdoor:'mapbox/outdoors-v12',streets:'mapbox/standard'};
+var currentMap=null,currentLayer='satellite',gpsMarker=null;
+var currentLat=39.5501,currentLon=-105.7821,gpsFix=false;
+var elevPrev={ft:null,lat:null,lng:null};
+function distMi(lat1,lon1,lat2,lon2){
+  var R=3958.7613;
+  var p=Math.PI/180;
+  var a=0.5-Math.cos((lat2-lat1)*p)/2+Math.cos(lat1*p)*Math.cos(lat2*p)*(1-Math.cos((lon2-lon1)*p))/2;
+  return 2*R*Math.asin(Math.min(1,Math.sqrt(Math.max(0,a))));
+}
+
+function addTerrain(){
+  if(!currentMap||!currentMap.isStyleLoaded())return;
+  try{
+    if(currentMap.getSource('mapbox-dem')){currentMap.setTerrain({source:'mapbox-dem',exaggeration:1});return;}
+    currentMap.addSource('mapbox-dem',{type:'raster-dem',url:'mapbox://mapbox.mapbox-terrain-dem-v1',tileSize:512,maxzoom:14});
+    currentMap.setTerrain({source:'mapbox-dem',exaggeration:1});
+  }catch(e){console.warn('terrain',e);}
+}
+
+function updateElevation(){
+  var pill=document.getElementById('elevPill');
+  var main=document.getElementById('elevMain');
+  var tr=document.getElementById('elevTrend');
+  var gr=document.getElementById('elevGrade');
+  if(!currentMap||!pill||!main)return;
+  var c=gpsFix?{lng:currentLon,lat:currentLat}:currentMap.getCenter();
+  var m=null;
+  try{
+    if(typeof currentMap.queryTerrainElevation==='function')
+      m=currentMap.queryTerrainElevation(c);
+  }catch(e){}
+  pill.classList.remove('nf-elev--low','nf-elev--mid','nf-elev--high','nf-elev--na');
+  if(m==null||Number.isNaN(m)){
+    pill.classList.add('nf-elev--na');
+    main.textContent='— ft';
+    if(tr)tr.textContent='enable terrain + token';
+    if(gr)gr.textContent='grade —';
+    return;
+  }
+  var ft=m*3.28084;
+  var rounded=Math.round(ft);
+  main.textContent=rounded.toLocaleString('en-US')+' ft';
+  if(ft<8000)pill.classList.add('nf-elev--low');
+  else if(ft<=10000)pill.classList.add('nf-elev--mid');
+  else pill.classList.add('nf-elev--high');
+  var trendStr='—';
+  var gradeStr='—';
+  if(elevPrev.ft!=null&&elevPrev.lat!=null&&elevPrev.lng!=null&&tr&&gr){
+    var dMi=distMi(elevPrev.lat,elevPrev.lng,c.lat,c.lng);
+    var dFt=rounded-elevPrev.ft;
+    if(dMi>0.02){
+      var arrow=dFt>=0?'▲':'▼';
+      trendStr=arrow+' '+(dFt>=0?'+':'')+Math.round(dFt)+' ft / '+dMi.toFixed(2)+' mi';
+      var runFt=dMi*5280;
+      if(runFt>1){
+        var ang=Math.atan2(Math.abs(dFt),runFt)*180/Math.PI;
+        gradeStr=ang.toFixed(1)+'°';
+      }
+    }
+  }
+  if(tr)tr.textContent=trendStr;
+  if(gr)gr.textContent='grade '+gradeStr;
+  elevPrev={ft:rounded,lat:c.lat,lng:c.lng};
+}
+
+function initMap(layerType){
+  var token=getTok();
+  if(!token||!token.startsWith('pk.')){
+    document.getElementById('map').innerHTML='<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--nf-grey)">Enter Mapbox pk token</div>';
+    return;
+  }
+  mapboxgl.accessToken=token;
+  if(currentMap){currentMap.remove();currentMap=null;gpsMarker=null;}
+  document.getElementById('map').innerHTML='';
+  currentMap=new mapboxgl.Map({
+    container:'map',
+    style:'mapbox://styles/'+layerStyles[layerType],
+    center:[-105.7821,39.5501],
+    zoom:12
+  });
+  currentMap.addControl(new mapboxgl.NavigationControl(),'top-right');
+  currentMap.addControl(new mapboxgl.ScaleControl(),'bottom-left');
+  currentMap.on('load',function(){
+    addTerrain();
+    setTimeout(function(){addTerrain();updateElevation();},100);
+    if(!gpsMarker){
+      gpsMarker=new mapboxgl.Marker({color:'#ff4466'}).setLngLat([-105.7821,39.5501]).addTo(currentMap);
+    }
+  });
+  currentMap.on('moveend',updateElevation);
+  currentMap.on('idle',updateElevation);
+}
+
+document.getElementById('applyToken').addEventListener('click',function(){saveTok();initMap(currentLayer);});
+document.querySelectorAll('.map-layer-btn').forEach(function(btn){
+  btn.addEventListener('click',function(){
+    document.querySelectorAll('.map-layer-btn').forEach(function(b){b.classList.remove('active');});
+    btn.classList.add('active');
+    currentLayer=btn.dataset.layer||'satellite';
+    document.getElementById('currentLayerLabel').textContent='Current: '+(btn.dataset.label||currentLayer);
+    initMap(currentLayer);
+  });
+});
+if(getTok())initMap('satellite');
+
+function updateGPS(){
+  if(!navigator.geolocation)return;
+  navigator.geolocation.getCurrentPosition(function(pos){
+    currentLat=pos.coords.latitude;currentLon=pos.coords.longitude;
+    gpsFix=true;
+    document.getElementById('lastPollDisplay').textContent='Last poll: '+new Date().toLocaleTimeString();
+    document.getElementById('coordStatus').textContent='Lat: '+currentLat.toFixed(4)+', Lon: '+currentLon.toFixed(4);
+    if(currentMap){
+      if(!gpsMarker){gpsMarker=new mapboxgl.Marker({color:'#ff4466'}).setLngLat([currentLon,currentLat]).addTo(currentMap);}
+      else gpsMarker.setLngLat([currentLon,currentLat]);
+      currentMap.flyTo({center:[currentLon,currentLat],zoom:14});
+      updateElevation();
+    }
+  },function(err){document.getElementById('lastPollDisplay').textContent='GPS error: '+err.message;},{enableHighAccuracy:true,timeout:15000,maximumAge:0});
+}
+setInterval(updateGPS,120000);
+document.getElementById('pollNow').addEventListener('click',function(e){e.preventDefault();updateGPS();});
+updateGPS();
+
+var SOS_MS=3000;
+var rail=document.getElementById('sosRail'),knob=document.getElementById('sosKnob'),fill=document.getElementById('sosFill'),timeBar=document.getElementById('sosTimeBar'),sosStatus=document.getElementById('sosStatus');
+var dragging=false,railW=0,slideMs=0,lastPointerX=0,moveClock=0,knobFrac=0,armReady=false;
+function railMetrics(){var r=rail.getBoundingClientRect();railW=r.width-knob.offsetWidth-8;return r.left;}
+function setKnobFrac(f){f=Math.max(0,Math.min(1,f));knobFrac=f;knob.style.left=(4+f*railW)+'px';fill.style.width=(f*100)+'%';}
+function resetSos(){slideMs=0;setKnobFrac(0);timeBar.style.background='#222';sosStatus.textContent='';armReady=false;}
+function onPointerDown(e){if(e.target!==knob)return;e.preventDefault();dragging=true;slideMs=0;lastPointerX=e.clientX;moveClock=0;knob.setPointerCapture(e.pointerId);}
+function onPointerMove(e){
+  if(!dragging)return;
+  var dx=Math.abs(e.clientX-lastPointerX);lastPointerX=e.clientX;var now=performance.now();
+  if(dx>0.8){if(moveClock)slideMs+=Math.min(now-moveClock,35);moveClock=now;}
+  var origin=railMetrics();var frac=(e.clientX-origin)/railW;setKnobFrac(frac);
+  var pct=Math.min(100,slideMs/SOS_MS*100);
+  timeBar.style.background='linear-gradient(90deg,#ff4466 0%,#222 '+pct+'%)';
+  if(slideMs>=SOS_MS&&knobFrac>=0.94){armReady=true;sosStatus.textContent='Armed (mock)';}
+}
+function onPointerUp(e){if(!dragging)return;dragging=false;try{knob.releasePointerCapture(e.pointerId);}catch(_){}moveClock=0;if(!armReady)resetSos();}
+knob.addEventListener('pointerdown',onPointerDown);
+rail.addEventListener('pointermove',onPointerMove);
+knob.addEventListener('pointermove',onPointerMove);
+knob.addEventListener('pointerup',onPointerUp);
+
+function utf8Enc(s){return new TextEncoder().encode(s);}
+async function encryptPayload(buf){
+  var keyRaw=utf8Enc('forensic-vault-mock-key-v1');
+  var key=await crypto.subtle.importKey('raw',await crypto.subtle.digest('SHA-256',keyRaw),{name:'AES-GCM'},false,['encrypt']);
+  var iv=crypto.getRandomValues(new Uint8Array(12));
+  var ct=await crypto.subtle.encrypt({name:'AES-GCM',iv:iv},key,buf);
+  var out=new Uint8Array(iv.byteLength+ct.byteLength);out.set(iv,0);out.set(new Uint8Array(ct),iv.byteLength);return out.buffer;
+}
+async function payloadHash(buf){var h=await crypto.subtle.digest('SHA-256',buf);return Array.from(new Uint8Array(h)).map(function(b){return b.toString(16).padStart(2,'0');}).join('');}
+document.getElementById('vaultSeal').addEventListener('click',async function(){
+  var raw=utf8Enc(document.getElementById('vaultInput').value||'');
+  var enc=await encryptPayload(raw);var hex=await payloadHash(raw);
+  console.log('[FORENSIC]',hex);
+  document.getElementById('vaultEcho').textContent='Sealed '+hex.slice(0,16)+'…';
+});
+
+var missed=0,deadmanTriggered=false;
+function heartbeat(){
+  if(deadmanTriggered)return;
+  fetch('/api/heartbeat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ts:Date.now()})})
+    .then(function(r){if(r.ok){missed=0;document.getElementById('deadmanLog').textContent='Heartbeat OK';}else{missed++;document.getElementById('deadmanLog').textContent='Miss '+missed+'/2';if(missed>=2&&!deadmanTriggered){deadmanTriggered=true;document.getElementById('deadmanStatus').textContent='RESCUE ACTIVE';}}})
+    .catch(function(){missed++;document.getElementById('deadmanLog').textContent='Miss '+missed+'/2';});
+}
+setInterval(heartbeat,30000);heartbeat();
+
+function syncOffline(){var b=document.getElementById('offlineBadge');if(b)b.classList.toggle('show',!navigator.onLine);}
+window.addEventListener('online',syncOffline);window.addEventListener('offline',syncOffline);syncOffline();
+
+window.addEventListener('resize',function(){
+  try{if(currentMap)currentMap.resize()}catch(e){}
+});
+})();
+</script>
+</body>
+</html>

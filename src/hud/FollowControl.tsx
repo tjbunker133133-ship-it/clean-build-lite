@@ -3,7 +3,7 @@ import { useMapContext } from '../context/MapContext'
 import { useGPS } from '../hooks/useGPS'
 
 export default function FollowControl() {
-  const { mapRef } = useMapContext()
+  const { map } = useMapContext()
   const gps = useGPS()
 
   const [follow, setFollow] = useState(false)
@@ -12,7 +12,6 @@ export default function FollowControl() {
   useEffect(() => {
     if (!follow) return
 
-    const map = mapRef.current
     if (!map) return
     if (gps.lat === null || gps.lng === null) return
 
@@ -20,7 +19,7 @@ export default function FollowControl() {
       center: [gps.lng, gps.lat],
       duration: 600,
     })
-  }, [gps, follow, mapRef])
+  }, [gps, follow, map])
 
   return (
     <div

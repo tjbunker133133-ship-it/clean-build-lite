@@ -1,0 +1,3254 @@
+<!DOCTYPE html>
+<html lang="en" data-brightness="bright" data-theme="default">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Titanium HUD Elite v2</title>
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.0.0/mapbox-gl.js"></script>
+<link href="https://api.mapbox.com/mapbox-gl-js/v3.0.0/mapbox-gl.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.8/dist/umd/supabase.js"></script>
+<style>
+:root{
+  --body:#e0e0e0;
+  --data:#00ff88;
+  --muted:#b8c4d0;
+  --glass:rgba(5,5,10,0.75);
+  --glass-border:rgba(0,255,136,0.28);
+  --bg:#07070c;
+  --warn:#ffb020;
+  --danger:#ff4466;
+  --line-cyan:#00e5ff;
+  --shadow-t:0 0 2px rgba(0,0,0,0.85),0 1px 2px rgba(0,0,0,0.9);
+  --ease:200ms cubic-bezier(0.25,0.1,0.25,1);
+  --ease-panel:320ms cubic-bezier(0.22,1,0.36,1);
+}
+html[data-theme="red-night"]{
+  --body:#e0e0e0;
+  --data:#ffffff;
+  --muted:#e0e0e0;
+  --glass:rgba(30,0,0,0.85);
+  --glass-border:rgba(180,80,80,0.35);
+  --bg:#0a0202;
+  --line-cyan:#ffffff;
+  --shadow-t:0 0 2px rgba(0,0,0,0.9),0 1px 2px rgba(0,0,0,0.85);
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{
+  font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,sans-serif;
+  background:var(--bg);color:var(--body);
+  text-shadow:var(--shadow-t);
+  overflow-x:hidden;
+  transition:filter var(--ease);
+}
+html[data-brightness="low"] #appBrightness{filter:brightness(0.3);}
+/* Bright = maximize luminance for daylight / glare */
+html[data-brightness="bright"] #appBrightness{
+  filter:brightness(1.2) contrast(1.08) saturate(1.06);
+}
+/* Night ops: soft NV-style red glow — dim, low saturation, easy dark adaptation */
+html[data-theme="red-night"] #appBrightness{
+  filter:brightness(0.52) sepia(0.35) saturate(0.42) hue-rotate(312deg) contrast(0.96);
+}
+html[data-theme="red-night"][data-brightness="bright"] #appBrightness{
+  filter:brightness(0.78) sepia(0.28) saturate(0.48) hue-rotate(312deg) contrast(0.98);
+}
+html[data-theme="red-night"][data-brightness="low"] #appBrightness{
+  filter:brightness(0.34) sepia(0.32) saturate(0.38) hue-rotate(312deg) contrast(0.94);
+}
+
+#appBrightness{min-height:100%;will-change:filter;}
+.elite-toolbar{
+  position:fixed;top:0;left:0;right:0;z-index:950;
+  display:flex;flex-wrap:wrap;gap:8px;align-items:center;
+  padding:10px 12px;
+  background:rgba(5,5,10,0.92);
+  border-bottom:1px solid var(--glass-border);
+  backdrop-filter:blur(12px);
+  transform:translateZ(0);
+}
+html[data-theme="red-night"] .elite-toolbar{
+  background:rgba(30,0,0,0.92);
+  border-bottom-color:var(--glass-border);
+  box-shadow:0 4px 28px rgba(0,0,0,0.5);
+}
+html[data-theme="red-night"] .tool-btn{
+  background:#330000;
+  color:#ff6666;
+  border-color:rgba(255,102,102,0.45);
+}
+html[data-theme="red-night"] .tool-btn .lbl{color:#ff6666;}
+html[data-theme="red-night"] .tool-btn.accent{
+  border-color:#ff6666;
+  color:#ff6666;
+}
+html[data-theme="red-night"] .tool-btn:hover{
+  box-shadow:0 0 0 1px #ff6666,0 8px 32px rgba(0,0,0,0.55);
+}
+html[data-theme="red-night"] .layer-controls .map-layer-btn{
+  background:#330000;
+  color:#ff6666;
+  border-color:rgba(255,102,102,0.45);
+}
+html[data-theme="red-night"] .layer-controls .map-layer-btn.active{
+  background:#ff6666;
+  color:#330000;
+  border-color:#ff6666;
+}
+html[data-theme="red-night"] input,
+html[data-theme="red-night"] select,
+html[data-theme="red-night"] textarea{
+  color:#ffffff!important;
+}
+.elite-toolbar .tb-label{font-size:0.65rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.08em;width:100%;margin:0}
+.tool-btn{
+  min-height:44px;min-width:44px;padding:8px 12px;border-radius:10px;
+  border:1px solid var(--glass-border);background:rgba(0,0,0,0.45);color:var(--body);
+  font-size:0.72rem;font-weight:600;cursor:pointer;
+  text-shadow:var(--shadow-t);transition:box-shadow var(--ease),border-color var(--ease),transform var(--ease);
+  position:relative;overflow:hidden;transform:translateZ(0);
+}
+.tool-btn:hover{box-shadow:0 0 0 1px #00ff88,0 8px 32px rgba(0,0,0,0.55);}
+html[data-theme="red-night"] .tool-btn:hover{box-shadow:0 0 0 1px #ff8888,0 8px 32px rgba(0,0,0,0.55);}
+.tool-btn:active{transform:scale(0.98);}
+.tool-btn .lbl{display:block;font-size:0.58rem;color:var(--data);margin-top:2px;font-weight:700}
+.tool-btn.accent{border-color:#00ff88;color:var(--data);}
+.tool-btn.nightops-active{
+  border-color:rgba(180,72,82,0.85);
+  box-shadow:0 0 20px rgba(120,40,50,0.45),inset 0 0 12px rgba(80,24,32,0.25);
+  color:#e8b0b0;
+}
+.tool-btn.pending-type{outline:2px solid var(--data);}
+.tool-btn::after{
+  content:'';position:absolute;inset:0;border-radius:inherit;pointer-events:none;
+  background:radial-gradient(circle,rgba(0,255,136,0.35) 0%,transparent 70%);
+  opacity:0;transform:scale(0);transition:opacity .4s,transform .5s;
+}
+.tool-btn.ripple::after{opacity:1;transform:scale(2.5);transition:opacity 0s,transform 0s;}
+@media(prefers-reduced-motion:reduce){
+  .tool-btn,.toast{transition:none!important;}
+  .elite-panel{transition:box-shadow 0.15s ease,width 0.2s ease!important;}
+}
+
+.elite-stage{position:relative;min-height:100vh;padding-top:120px;padding-bottom:48px;}
+@media(min-width:900px){.elite-stage{padding-top:96px}}
+.elite-panel{
+  position:absolute;
+  z-index:800;
+  width:min(420px,calc(100vw - 24px));
+  background:linear-gradient(165deg,rgba(14,16,24,0.78) 0%,rgba(6,8,14,0.9) 100%);
+  border:1px solid rgba(255,255,255,0.09);
+  border-radius:18px;
+  backdrop-filter:blur(16px) saturate(1.15);
+  -webkit-backdrop-filter:blur(16px) saturate(1.15);
+  box-shadow:
+    0 8px 40px rgba(0,0,0,0.42),
+    inset 0 1px 0 rgba(255,255,255,0.07);
+  transition:box-shadow var(--ease-panel),width var(--ease-panel),filter var(--ease);
+  transform:translateZ(0);
+  will-change:transform;
+}
+html[data-theme="red-night"] .elite-panel{
+  background:rgba(30,0,0,0.85);
+  border-color:rgba(120,60,60,0.4);
+  box-shadow:
+    0 8px 40px rgba(0,0,0,0.55),
+    inset 0 1px 0 rgba(255,255,255,0.04);
+}
+.elite-panel:not(.dragging):hover{
+  box-shadow:
+    0 12px 44px rgba(0,0,0,0.48),
+    0 0 0 1px rgba(0,255,136,0.22),
+    inset 0 1px 0 rgba(255,255,255,0.08);
+}
+html[data-theme="red-night"] .elite-panel:not(.dragging):hover{
+  box-shadow:
+    0 12px 44px rgba(0,0,0,0.5),
+    0 0 0 1px rgba(180,70,80,0.28),
+    0 0 32px rgba(80,20,28,0.2),
+    inset 0 1px 0 rgba(200,90,100,0.07);
+}
+.elite-panel.dragging{
+  opacity:0.98;
+  filter:saturate(1.05);
+  transition:opacity 0.12s ease,filter 0.12s ease;
+  box-shadow:0 20px 56px rgba(0,0,0,0.55),0 0 0 1px rgba(0,255,136,0.35);
+}
+html[data-theme="red-night"] .elite-panel.dragging{
+  box-shadow:0 20px 56px rgba(0,0,0,0.6),0 0 0 1px rgba(160,60,70,0.4),0 0 36px rgba(60,16,24,0.25);
+}
+.elite-panel.collapsed{
+  z-index:900!important;
+  left:auto!important;
+  right:8px!important;
+  width:60px!important;min-height:auto!important;
+  transform:none!important;
+  overflow:hidden;
+  transition:width var(--ease-panel),box-shadow var(--ease-panel),filter var(--ease);
+}
+.elite-panel.collapsed:hover{width:250px!important;z-index:910!important;}
+.elite-panel.collapsed .elite-body{display:none;}
+.elite-panel.collapsed .elite-head .htitle{
+  writing-mode:vertical-rl;text-orientation:mixed;font-size:0.65rem;letter-spacing:0.12em;
+}
+.elite-panel.collapsed:hover .elite-head .htitle{writing-mode:horizontal-tb;}
+.panel-dock{
+  flex-shrink:0;min-width:36px;min-height:36px;padding:4px 8px;margin:-4px 0;
+  border-radius:8px;border:1px solid var(--glass-border);background:rgba(0,0,0,0.5);
+  color:var(--body);cursor:pointer;font-size:0.75rem;line-height:1;
+}
+.panel-dock:hover{border-color:var(--data);color:var(--data);}
+html[data-theme="red-night"] .panel-dock{
+  background:#330000;
+  color:#ff6666;
+  border-color:rgba(255,102,102,0.45);
+}
+html[data-theme="red-night"] .panel-dock:hover{border-color:#ff6666;color:#ffffff;}
+.sos-wrap{margin-top:4px}
+.sos-label{font-size:0.65rem;text-transform:uppercase;letter-spacing:0.08em;color:var(--muted);margin-bottom:6px}
+.sos-rail{
+  position:relative;height:48px;background:rgba(0,0,0,0.45);border:2px solid var(--glass-border);
+  border-radius:24px;overflow:hidden;touch-action:none;
+}
+.sos-fill{
+  position:absolute;left:0;top:0;bottom:0;width:0%;
+  background:linear-gradient(90deg,#331018,var(--danger));pointer-events:none;transition:width .05s linear;
+}
+.sos-knob{
+  position:absolute;left:4px;top:50%;transform:translateY(-50%);width:40px;height:40px;border-radius:50%;
+  background:var(--body);cursor:grab;filter:drop-shadow(0 2px 10px rgba(0,0,0,.5));touch-action:none;
+}
+.sos-knob:active{cursor:grabbing}
+.sos-hint{font-size:0.62rem;color:var(--muted);margin-top:6px}
+.sos-timebar{position:relative;height:5px;border-radius:3px;margin-top:8px;background:#222}
+.sos-status{font-size:0.72rem;color:var(--danger);margin-top:6px;min-height:1.2em}
+html[data-theme="red-night"] .sos-knob{background:#e0e0e0;color:#330000}
+.elite-head{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding:10px 12px;cursor:grab;user-select:none;touch-action:none;
+  border-bottom:1px solid rgba(255,255,255,0.08);
+  min-height:44px;
+}
+.elite-head:active{cursor:grabbing;}
+.elite-head h2{margin:0;font-size:0.75rem;letter-spacing:0.12em;color:var(--data);text-transform:uppercase;}
+.elite-body{padding:12px;font-size:0.82rem;line-height:1.45;color:var(--body);}
+.data{color:var(--data);font-weight:600;font-family:ui-monospace,Courier New,monospace;}
+.sub{font-size:0.68rem;color:var(--muted);}
+#panelMap{width:min(96vw,900px);max-width:none;}
+#panelMap .map-h{
+  width:100%;height:min(58vh,520px);border-radius:14px;overflow:hidden;
+  box-shadow:
+    inset 0 0 0 2px rgba(0,0,0,0.55),
+    inset 0 0 24px rgba(0,0,0,0.25),
+    0 0 0 1px var(--glass-border);
+}
+#panelMap .map-h .mapboxgl-map{
+  filter:contrast(1.07) saturate(1.06);
+}
+html[data-brightness="bright"] #panelMap .map-h .mapboxgl-map{
+  filter:contrast(1.12) saturate(1.1) brightness(1.03);
+}
+html[data-theme="red-night"] #panelMap .map-h .mapboxgl-map{
+  filter:contrast(1.05) saturate(0.85) brightness(1.02);
+}
+.token-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px;}
+.token-row input{flex:1;min-width:180px;padding:10px;border-radius:8px;border:1px solid #333;background:#0a0a0e;color:var(--body);font-size:0.75rem;}
+.layer-controls{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0;}
+.layer-controls .map-layer-btn{
+  padding:8px 14px;border-radius:8px;border:1px solid var(--glass-border);background:rgba(0,0,0,0.5);
+  color:var(--body);cursor:pointer;font-size:0.65rem;font-weight:700;
+}
+.layer-controls .map-layer-btn.active{background:var(--data);color:#050508;border-color:var(--data);}
+.banner-alerts{
+  position:absolute;top:0;left:0;right:0;z-index:50;padding:10px;text-align:center;font-weight:700;
+  font-size:0.8rem;background:linear-gradient(90deg,#441018,#661828);color:#fff;
+  transform:translateY(-100%);transition:transform var(--ease);
+}
+.banner-alerts.show{transform:translateY(0);}
+.toast-host{
+  position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(140%);z-index:1110;
+  background:rgba(12,8,12,0.96);border:1px solid var(--danger);color:#ffe0e0;padding:12px 18px;border-radius:12px;
+  max-width:92vw;font-size:0.85rem;transition:transform var(--ease);text-shadow:var(--shadow-t);
+}
+.toast-host.show{transform:translateX(-50%) translateY(0);}
+.modal-overlay{
+  position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:1120;display:none;align-items:center;justify-content:center;padding:16px;
+}
+.modal-overlay.show{display:flex;}
+#modalAuth{z-index:1130;}
+.modal-box{
+  background:var(--glass);border:1px solid var(--glass-border);border-radius:16px;padding:16px;max-width:400px;width:100%;
+  backdrop-filter:blur(12px);
+}
+.pin-list-row{display:flex;align-items:center;gap:8px;padding:8px;border-radius:8px;background:rgba(0,0,0,0.35);margin-bottom:6px;font-size:0.78rem;}
+.pin-list-row.selected{outline:1px solid var(--data);}
+.pin-list-row.arrived{opacity:0.45;filter:grayscale(0.85);}
+details.route-sum{border:1px solid var(--glass-border);border-radius:10px;padding:10px;background:rgba(0,0,0,0.25);}
+details.route-sum summary{cursor:pointer;color:var(--data);font-weight:700;}
+.ec-wrap{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;align-items:center;}
+.ec-pill{
+  display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;
+  background:rgba(0,255,136,0.12);border:1px solid var(--glass-border);font-size:0.68rem;
+}
+.ec-pill button{
+  margin:0;padding:0 4px;min-width:auto;min-height:auto;border:none;background:transparent;color:var(--danger);
+  cursor:pointer;font-size:1rem;line-height:1;font-weight:700;
+}
+html[data-theme="red-night"] .ec-pill{background:rgba(255,102,102,0.12);}
+.segment-line{font-size:0.72rem;color:var(--muted);font-family:ui-monospace,monospace;padding:4px 0;border-bottom:1px solid #222;}
+.grid-12{display:grid;grid-template-columns:repeat(12,1fr);gap:10px;}
+@media(max-width:719px){.grid-12{grid-template-columns:repeat(4,1fr);}}
+@media(min-width:720px) and (max-width:1023px){.grid-12{grid-template-columns:repeat(6,1fr);}}
+.corner-mini{position:absolute;width:14px;height:14px;border-color:rgba(0,255,136,0.35);border-style:solid;}
+.corner-mini.tl{top:6px;left:6px;border-width:2px 0 0 2px;}
+.corner-mini.br{bottom:6px;right:6px;border-width:0 2px 2px 0;}
+@keyframes pin-bounce{0%,100%{transform:translateY(0) scale(1);}40%{transform:translateY(-10px) scale(1.08);}}
+.pin-bounce{animation:pin-bounce 0.55s ease;}
+@keyframes dash-flow{to{stroke-dashoffset:-24;}}
+html[data-theme="red-night"] .corner-mini{border-color:rgba(255,102,102,0.45);}
+.pf-list{margin:0;padding:0;list-style:none;font-size:0.78rem;}
+.pf-row{display:flex;align-items:flex-start;gap:10px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.06);}
+.pf-row:last-child{border-bottom:none;}
+.pf-icon{flex-shrink:0;width:1.2em;text-align:center;font-weight:800;}
+.pf-row.ok .pf-icon{color:var(--data);}
+.pf-row.bad .pf-icon{color:var(--danger);}
+.pf-row.unk .pf-icon{color:var(--warn);}
+.pf-text{flex:1;line-height:1.35;}
+.pf-hint{font-size:0.62rem;color:var(--muted);margin-top:2px;}
+@keyframes voice-cyan-pulse-kf{
+  0%{box-shadow:0 0 0 0 rgba(0,229,255,0.75);}
+  45%{box-shadow:0 0 28px 6px rgba(0,229,255,0.5);}
+  100%{box-shadow:0 8px 32px rgba(0,0,0,0.45);}
+}
+.elite-panel.voice-cyan-pulse{animation:voice-cyan-pulse-kf 0.55s ease 2;}
+.tool-btn.voice-armed{
+  outline:2px solid var(--line-cyan);box-shadow:0 0 16px rgba(0,229,255,0.35);
+}
+#voiceFallbackBar{
+  position:fixed;bottom:0;left:0;right:0;z-index:1115;padding:10px 12px;
+  background:rgba(5,8,12,0.97);border-top:1px solid var(--line-cyan);
+  display:none;align-items:center;gap:8px;flex-wrap:wrap;
+  font-size:0.78rem;
+}
+#voiceFallbackBar.show{display:flex;}
+#voiceFallbackBar input{flex:1;min-width:200px;padding:10px;border-radius:8px;border:1px solid #333;background:#0a0a0e;color:var(--body);}
+#sosOverlay{
+  position:fixed;inset:0;z-index:1112;pointer-events:none;opacity:0;transition:opacity 0.4s;
+  background:radial-gradient(ellipse at center,rgba(220,30,30,0.4) 0%,rgba(10,0,0,0.75) 100%);
+}
+#sosOverlay.show{opacity:1;animation:sos-flash-anim 0.6s ease 3;}
+@keyframes sos-flash-anim{0%,100%{filter:brightness(1);}50%{filter:brightness(1.4);}}
+
+.voice-indicator-pill{
+  position:fixed;left:50%;bottom:max(20px,env(safe-area-inset-bottom,0px));transform:translateX(-50%);
+  z-index:1118;max-width:min(96vw,420px);min-height:48px;padding:10px 18px;border-radius:999px;
+  display:flex;align-items:center;justify-content:center;gap:10px;cursor:pointer;
+  font-size:0.78rem;font-weight:700;letter-spacing:0.04em;text-shadow:var(--shadow-t);
+  background:rgba(8,10,16,0.92);border:1px solid var(--glass-border);color:var(--body);
+  backdrop-filter:blur(12px);box-shadow:0 8px 32px rgba(0,0,0,0.45);
+  transition:border-color var(--ease),color var(--ease),box-shadow var(--ease),transform var(--ease);
+}
+.voice-indicator-pill:focus-visible{outline:2px solid var(--line-cyan);outline-offset:2px;}
+.voice-indicator-pill.voice-pill-above-fallback{bottom:max(88px,env(safe-area-inset-bottom,0px));}
+.voice-indicator-pill .voice-pill-spin{
+  display:none;font-size:1rem;line-height:1;animation:voice-spin 0.75s linear infinite;
+}
+@keyframes voice-spin{to{transform:rotate(360deg);}}
+.voice-pill-sleeping{border-color:rgba(255,255,255,0.12);}
+.voice-pill-waking{
+  border-color:rgba(0,229,255,0.65);color:#b8f8ff;
+  box-shadow:0 0 0 1px rgba(0,229,255,0.35),0 0 28px rgba(0,229,255,0.25);
+  animation:voice-pill-cyan-glow 1.1s ease-in-out infinite;
+}
+@keyframes voice-pill-cyan-glow{
+  0%,100%{box-shadow:0 0 0 1px rgba(0,229,255,0.35),0 0 20px rgba(0,229,255,0.2);}
+  50%{box-shadow:0 0 0 2px rgba(0,229,255,0.55),0 0 36px rgba(0,229,255,0.4);}
+}
+.voice-pill-processing{
+  border-color:rgba(255,200,80,0.55);color:#ffe8b0;
+}
+.voice-pill-processing .voice-pill-spin{display:inline-block;}
+.voice-pill-success{
+  border-color:rgba(0,220,130,0.75);color:#b8ffd8;
+  background:rgba(0,40,24,0.88);
+}
+.voice-pill-failure{
+  border-color:rgba(255,80,100,0.75);color:#ffc8d0;
+  background:rgba(50,8,16,0.9);
+}
+html[data-theme="red-night"] .voice-pill-waking{
+  border-color:rgba(255,120,120,0.55);color:#ffd0d0;
+  animation:voice-pill-red-glow 1.1s ease-in-out infinite;
+}
+@keyframes voice-pill-red-glow{
+  0%,100%{box-shadow:0 0 0 1px rgba(255,100,100,0.35),0 0 20px rgba(255,80,80,0.15);}
+  50%{box-shadow:0 0 0 2px rgba(255,120,120,0.5),0 0 32px rgba(255,80,80,0.3);}
+}
+@media(prefers-reduced-motion:reduce){
+  .voice-pill-waking,.voice-indicator-pill .voice-pill-spin{animation:none!important;}
+}
+</style>
+</head>
+<body>
+<script>
+try{
+  if(!(window.CSS&&CSS.supports&&(CSS.supports('-webkit-backdrop-filter','blur(8px)')||CSS.supports('backdrop-filter','blur(8px)'))))
+    document.documentElement.classList.add('no-backdrop');
+}catch(e){document.documentElement.classList.add('no-backdrop');}
+</script>
+
+<div id="appBrightness">
+  <div class="elite-toolbar" id="eliteToolbar">
+    <span class="tb-label">Titanium HUD Elite v2 — Mapbox token required (paste pk.… below or use saved token). Do not commit tokens to source control.</span>
+    <button type="button" class="tool-btn" id="btnLowLight" title="Dim viewport 30%"><span>🌙</span><span class="lbl">LOW LIGHT</span></button>
+    <button type="button" class="tool-btn" id="btnBright" title="Maximum screen brightness / contrast"><span>☀️</span><span class="lbl">BRIGHT</span></button>
+    <button type="button" class="tool-btn" id="btnNightOps" title="Night-vision red (soft glow, low eye adaptation shock)"><span>🔴</span><span class="lbl">NIGHT OPS</span></button>
+    <button type="button" class="tool-btn" id="btnWater" data-ptype="water"><span>💧</span><span class="lbl">WATER PIN</span></button>
+    <button type="button" class="tool-btn" id="btnCamp" data-ptype="camp"><span>🏕️</span><span class="lbl">CAMP PIN</span></button>
+    <button type="button" class="tool-btn" id="btnRest" data-ptype="rest"><span>🪑</span><span class="lbl">REST STOP</span></button>
+    <button type="button" class="tool-btn" id="btnDelPin"><span>🗑️</span><span class="lbl">DELETE</span></button>
+    <button type="button" class="tool-btn" id="btnRecenter"><span>📍</span><span class="lbl">RECENTER</span></button>
+    <button type="button" class="tool-btn" id="btnSaveGpx"><span>💾</span><span class="lbl">SAVE ROUTE</span></button>
+    <button type="button" class="tool-btn" id="btnImportGpx"><span>📥</span><span class="lbl">IMPORT GPX</span></button>
+    <button type="button" class="tool-btn" id="btnClearRoute"><span>🧹</span><span class="lbl">CLEAR ROUTE</span></button>
+    <button type="button" class="tool-btn" id="btnResetLayout"><span>🔄</span><span class="lbl">RESET LAYOUT</span></button>
+    <button type="button" class="tool-btn" id="btnAccount" title="Supabase sign-in / profile"><span>🔐</span><span class="lbl">SIGN IN</span></button>
+    <button type="button" class="tool-btn" id="btnSettings"><span>⚙️</span><span class="lbl">SETTINGS</span></button>
+    <button type="button" class="tool-btn" id="btnPreflightPanel" title="Scroll to preflight checklist"><span>📋</span><span class="lbl">PREFLIGHT</span></button>
+    <button type="button" class="tool-btn" id="btnVoice" title="Arm voice: say HUD, then a command (5s) or HUD continuous"><span>🎙️</span><span class="lbl">VOICE</span></button>
+  </div>
+
+  <input type="file" id="gpxFile" accept=".gpx,application/gpx+xml" style="display:none" aria-hidden="true">
+
+  <div class="elite-stage" id="eliteStage">
+    <div class="elite-panel" id="panelGps" data-panel-id="gps" style="left:12px;top:132px;width:300px;z-index:801">
+      <header class="elite-head"><h2 class="htitle">GPS pulse</h2><span class="sub">drag · − dock · swipe → sidebar</span></header>
+      <div class="elite-body">
+        <div class="data" id="lastPollDisplay">Last poll: —</div>
+        <div class="sub" id="pollCadence">Poll: —</div>
+        <div class="data" id="deadmanStatus" style="margin-top:8px;font-size:0.78rem;line-height:1.35;">💀 Deadman: —</div>
+        <div class="sub" id="deadmanLog" style="margin-top:6px;font-size:0.72rem;line-height:1.35;min-height:2.6em;font-family:ui-monospace,monospace;">Deadman log: —</div>
+        <button type="button" class="tool-btn" id="pollNow" style="margin-top:8px;width:100%">Poll now</button>
+        <button type="button" class="tool-btn" id="btnManualLoc" style="margin-top:8px;width:100%">Manual location</button>
+      </div>
+      <span class="corner-mini tl"></span><span class="corner-mini br"></span>
+    </div>
+
+    <div class="elite-panel" id="panelCoords" data-panel-id="coords" style="left:12px;top:268px;width:min(320px,calc(100vw - 24px));z-index:802">
+      <header class="elite-head"><h2 class="htitle">Position</h2><span class="sub">lat / lon · move anywhere</span></header>
+      <div class="elite-body" style="padding:14px 12px">
+        <div class="data" id="coordStatus" style="font-size:0.88rem;line-height:1.5;word-break:break-all">Lat — · Lon —</div>
+        <div class="sub" style="margin-top:8px">Independent of GPS controls — dock with − or swipe header right</div>
+      </div>
+      <span class="corner-mini tl"></span><span class="corner-mini br"></span>
+    </div>
+
+    <div class="elite-panel" id="panelAlerts" data-panel-id="alerts" style="left:340px;top:132px;width:300px;z-index:803">
+      <header class="elite-head"><h2 class="htitle">Corridor</h2><span class="sub">drag · dock · swipe →</span></header>
+      <div class="elite-body">
+        <div id="alertZone" class="data">Zone: —</div>
+        <div class="sub" id="distToRoute">Dist to path center: —</div>
+      </div>
+      <span class="corner-mini tl"></span><span class="corner-mini br"></span>
+    </div>
+
+    <div class="elite-panel" id="panelMap" data-panel-id="map" style="left:12px;top:415px;width:min(96vw,920px);z-index:804">
+      <header class="elite-head"><h2 class="htitle">Tactical map</h2><span class="sub">drag · dock · swipe → · map: long-press pin</span></header>
+      <div class="elite-body">
+        <div class="token-row">
+          <input id="mapboxToken" type="password" autocomplete="off" placeholder="Mapbox pk. token">
+          <button type="button" class="tool-btn" id="applyToken">Apply</button>
+        </div>
+        <div class="layer-controls">
+          <button type="button" class="map-layer-btn active" data-layer="hybrid">Hybrid</button>
+          <button type="button" class="map-layer-btn" data-layer="topo">Topo</button>
+          <button type="button" class="map-layer-btn" data-layer="outdoor">Outdoor</button>
+          <button type="button" class="map-layer-btn" data-layer="streets">Streets</button>
+        </div>
+        <div class="map-h" style="position:relative">
+          <div id="routeBanner" class="banner-alerts">Outside corridor</div>
+          <div id="map"></div>
+        </div>
+        <div class="sub" style="margin-top:8px">Hold empty map 500ms or right-click to drop pin · Middle pins drag · Types from toolbar</div>
+      </div>
+      <span class="corner-mini tl"></span><span class="corner-mini br"></span>
+    </div>
+
+    <div class="elite-panel" id="panelRoute" data-panel-id="route" style="right:12px;top:132px;width:min(360px,calc(100vw - 24px));z-index:805">
+      <header class="elite-head"><h2 class="htitle">Route</h2><span class="sub">drag · dock · swipe →</span></header>
+      <div class="elite-body">
+        <details class="route-sum" open id="routeTotals">
+          <summary>Route stats</summary>
+          <div id="totalsBody" style="margin-top:10px" class="sub">—</div>
+        </details>
+        <details class="route-sum" id="emergencyContactsSection" style="margin-top:10px;">
+          <summary>🚨 Emergency contacts (rescue)</summary>
+          <p class="sub" style="margin:8px 0 6px;line-height:1.35">Who should be notified if rescue triggers? They receive email when the deadman/SOS rescue path runs (requires your Supabase <code style="font-size:0.65rem">emergency-notify</code> function).</p>
+          <datalist id="ecSuggestions"></datalist>
+          <label class="sub" style="display:block;margin-top:6px;">Name</label>
+          <input id="ecName" type="text" list="ecSuggestions" placeholder="e.g. SAR dispatch" autocomplete="name" style="width:100%;padding:8px;margin-bottom:6px;border-radius:8px;border:1px solid #333;background:#0a0a0e;color:var(--body);font-size:0.75rem;">
+          <label class="sub" style="display:block;">Email</label>
+          <input id="ecEmail" type="email" placeholder="required for notify" autocomplete="email" style="width:100%;padding:8px;margin-bottom:6px;border-radius:8px;border:1px solid #333;background:#0a0a0e;color:var(--body);font-size:0.75rem;">
+          <label class="sub" style="display:block;">Phone <span class="sub">(optional)</span></label>
+          <input id="ecPhone" type="tel" placeholder="+1…" autocomplete="tel" style="width:100%;padding:8px;margin-bottom:6px;border-radius:8px;border:1px solid #333;background:#0a0a0e;color:var(--body);font-size:0.75rem;">
+          <label class="sub" style="display:block;">Relationship</label>
+          <input id="ecRelationship" type="text" placeholder="e.g. spouse, SAR" style="width:100%;padding:8px;margin-bottom:8px;border-radius:8px;border:1px solid #333;background:#0a0a0e;color:var(--body);font-size:0.75rem;">
+          <button type="button" class="tool-btn" id="ecAddBtn" style="width:100%;margin-bottom:10px">+ Add emergency contact</button>
+          <label class="sub" style="display:block;">📇 From saved (past trips)</label>
+          <select id="ecImportSelect" style="width:100%;padding:8px;margin-bottom:6px;border-radius:8px;border:1px solid #333;background:#0a0a0e;color:var(--body);font-size:0.75rem;">
+            <option value="">— Select a saved contact —</option>
+          </select>
+          <button type="button" class="tool-btn" id="ecImportBtn" style="width:100%;margin-bottom:8px">Add selected to this route</button>
+          <div class="sub" style="margin-bottom:4px;">On this route:</div>
+          <div id="ecRoutePills" class="ec-wrap"></div>
+        </details>
+        <div style="margin-top:12px;font-weight:700;color:var(--data);font-size:0.72rem;">Pins</div>
+        <div id="pinList"></div>
+        <div style="margin-top:10px;font-weight:700;color:var(--data);font-size:0.72rem;">Legs</div>
+        <div id="segmentList"></div>
+        <div id="navReadout" style="margin-top:12px;padding:10px;border-radius:10px;background:rgba(0,255,136,0.06);border:1px solid var(--glass-border);font-size:0.78rem;">
+          <strong class="data">Next:</strong> —<br><strong class="data">Finish:</strong> —
+        </div>
+      </div>
+      <span class="corner-mini tl"></span><span class="corner-mini br"></span>
+    </div>
+
+    <div class="elite-panel" id="panelVault" data-panel-id="vault" style="right:12px;top:480px;width:280px;z-index:806">
+      <header class="elite-head"><h2 class="htitle">Vault</h2><span class="sub">drag · dock · swipe →</span></header>
+      <div class="elite-body">
+        <input id="vaultInput" type="text" placeholder="Seal payload" style="width:100%;padding:10px;border-radius:8px;border:1px solid #333;background:#0a0a0e;color:var(--body);">
+        <button type="button" class="tool-btn" id="vaultSeal" style="margin-top:8px;width:100%">Seal</button>
+        <div id="vaultEcho" class="sub" style="margin-top:8px;word-break:break-all"></div>
+      </div>
+      <span class="corner-mini tl"></span><span class="corner-mini br"></span>
+    </div>
+
+    <div class="elite-panel" id="panelSos" data-panel-id="sos" style="right:12px;top:620px;width:min(320px,calc(100vw - 24px));z-index:807">
+      <header class="elite-head"><h2 class="htitle">SOS arm</h2><span class="sub">slide grip · 3s hold · release early resets</span></header>
+      <div class="elite-body">
+        <div class="sos-wrap">
+          <div class="sos-label">Slide grip right — hold motion — 3s minimum</div>
+          <div class="sos-rail" id="sosRail" role="slider" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="SOS sustained slide">
+            <div class="sos-fill" id="sosFill"></div>
+            <div class="sos-knob" id="sosKnob" tabindex="0"></div>
+          </div>
+          <p class="sos-hint">Progress fills while you slide; release early resets. Tap rail alone does not arm.</p>
+          <div class="sos-timebar" id="sosTimeBar"></div>
+          <p class="sos-status" id="sosStatus"></p>
+        </div>
+      </div>
+      <span class="corner-mini tl"></span><span class="corner-mini br"></span>
+    </div>
+
+    <div class="elite-panel" id="panelPreflight" data-panel-id="preflight" style="left:12px;bottom:16px;width:min(400px,calc(100vw - 24px));z-index:808">
+      <header class="elite-head"><h2 class="htitle">Preflight</h2><span class="sub">checklist · drag · dock · swipe →</span></header>
+      <div class="elite-body">
+        <ul class="pf-list" id="preflightList">
+          <li class="pf-row unk" id="pfToken" data-pf="token"><span class="pf-icon">○</span><span class="pf-text">Mapbox token active <span class="pf-hint">pk.… in field or localStorage</span></span></li>
+          <li class="pf-row unk" id="pfGps" data-pf="gps"><span class="pf-icon">○</span><span class="pf-text">GPS permission <span class="pf-hint">browser will prompt on first poll</span></span></li>
+          <li class="pf-row unk" id="pfStorage" data-pf="storage"><span class="pf-icon">○</span><span class="pf-text">LocalStorage available <span class="pf-hint">avoid private mode</span></span></li>
+          <li class="pf-row unk" id="pfTouch" data-pf="touch"><span class="pf-icon">○</span><span class="pf-text">Touch events <span class="pf-hint">mobile / hybrid</span></span></li>
+          <li class="pf-row unk" id="pfVibrate" data-pf="vibrate"><span class="pf-icon">○</span><span class="pf-text">Vibration API <span class="pf-hint">common on Android</span></span></li>
+          <li class="pf-row unk" id="pfSpeech" data-pf="speech"><span class="pf-icon">○</span><span class="pf-text">Web Speech (TTS) <span class="pf-hint">voice alerts when enabled</span></span></li>
+          <li class="pf-row unk" id="pfVoiceRec" data-pf="voicerec"><span class="pf-icon">○</span><span class="pf-text">Voice commands (recognition) <span class="pf-hint">Chrome / Edge; say HUD</span></span></li>
+          <li class="pf-row unk" id="pfOrient" data-pf="orient"><span class="pf-icon">○</span><span class="pf-text">Screen Orientation lock <span class="pf-hint">requires tap below</span></span></li>
+        </ul>
+        <button type="button" class="tool-btn" id="btnPreflightRefresh" style="margin-top:10px;width:100%">Re-check all</button>
+        <button type="button" class="tool-btn" id="btnLockLandscape" style="margin-top:8px;width:100%">📱 Lock landscape (fullscreen-style)</button>
+        <p class="sub" style="margin-top:8px;margin-bottom:0">Orientation lock must run during a user gesture; some browsers require fullscreen first.</p>
+      </div>
+      <span class="corner-mini tl"></span><span class="corner-mini br"></span>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast-host" role="status"></div>
+<button type="button" id="voiceIndicatorPill" class="voice-indicator-pill voice-pill-sleeping" aria-live="polite" title="Voice: tap to arm / disarm (same as VOICE in toolbar)">
+  <span class="voice-pill-spin" aria-hidden="true">⚡</span>
+  <span class="voice-pill-text">🎤 HUD (say to activate)</span>
+</button>
+<div id="sosOverlay" aria-hidden="true"></div>
+<div id="voiceFallbackBar" role="search">
+  <span class="data" style="font-size:0.7rem;white-space:nowrap">No speech recognition — type command:</span>
+  <input type="text" id="voiceTypeInput" placeholder="e.g. HUD status" autocomplete="off" enterkeyhint="send">
+  <button type="button" class="tool-btn" id="voiceTypeSend" style="min-height:40px">Send</button>
+  <button type="button" class="tool-btn" id="voiceFallbackClose" style="min-height:40px">Close</button>
+</div>
+
+<div class="modal-overlay" id="modalManual">
+  <div class="modal-box">
+    <h3 style="margin:0 0 12px;color:var(--data);font-size:0.9rem;">Manual location</h3>
+    <label class="sub">Latitude</label>
+    <input id="manualLat" type="number" step="any" style="width:100%;padding:10px;margin-bottom:8px;border-radius:8px;border:1px solid #333;background:#0a0a0e;color:var(--body);">
+    <label class="sub">Longitude</label>
+    <input id="manualLon" type="number" step="any" style="width:100%;padding:10px;margin-bottom:12px;border-radius:8px;border:1px solid #333;background:#0a0a0e;color:var(--body);">
+    <button type="button" class="tool-btn" id="manualApply" style="width:48%;margin-right:4%">Apply</button>
+    <button type="button" class="tool-btn" id="manualCancel" style="width:48%">Cancel</button>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modalSettings">
+  <div class="modal-box">
+    <h3 style="margin:0 0 12px;color:var(--data);">Settings</h3>
+    <label class="sub" style="display:flex;align-items:center;gap:10px;cursor:pointer;margin-bottom:12px;">
+      <input type="checkbox" id="snapToggle"> Snap panels to 20px grid
+    </label>
+    <label class="sub" style="display:flex;align-items:center;gap:10px;cursor:pointer;margin-bottom:12px;">
+      <input type="checkbox" id="voiceToggle" checked> Voice alerts (Speech Synthesis) when supported
+    </label>
+    <label class="sub" style="display:flex;align-items:center;gap:10px;cursor:pointer;margin-bottom:12px;">
+      <input type="checkbox" id="voiceTacticalToggle"> Voice tactical: headphones / visual only (no speaker TTS)
+    </label>
+    <label class="sub" style="display:flex;align-items:center;gap:10px;cursor:pointer;margin-bottom:12px;">
+      <input type="checkbox" id="confirmBeepToggle" checked> Confirmation &amp; voice UI beeps (Web Audio)
+    </label>
+    <label class="sub" style="display:block;margin-bottom:6px;">Voice feedback speed (TTS)</label>
+    <select id="voiceRateSelect" style="width:100%;padding:10px;margin-bottom:12px;border-radius:8px;border:1px solid #333;background:#0a0a0e;color:var(--body);font-size:0.8rem;">
+      <option value="0.85">Slower (0.85×)</option>
+      <option value="1" selected>Normal (1×)</option>
+      <option value="1.15">Faster (1.15×)</option>
+      <option value="1.35">Fast (1.35×)</option>
+    </select>
+    <label class="sub" style="display:flex;align-items:center;gap:10px;cursor:pointer;margin-bottom:12px;">
+      <input type="checkbox" id="noiseFilterToggle" checked> Ambient noise filter (drop low-confidence recognition when reported)
+    </label>
+    <p class="sub" style="margin:0 0 6px;font-weight:700;color:var(--data);">Deadman heartbeat (Supabase)</p>
+    <p class="sub" style="margin:0 0 8px;font-size:0.68rem;">Heartbeat uses <code style="font-size:0.65rem">apikey</code> + <code style="font-size:0.65rem">Authorization: Bearer</code> (session JWT when signed in, or anon key if you enable anon-only below — matches <code style="font-size:0.65rem">curl</code> smoke tests). Default path <code style="font-size:0.65rem">/functions/v1/rapid-endpoint</code>. Paste URL/key in Settings only — never commit keys.</p>
+    <label class="sub" style="display:flex;align-items:center;gap:10px;cursor:pointer;margin-bottom:12px;">
+      <input type="checkbox" id="deadmanAnonOnly"> Deadman: anon Bearer (no sign-in; for Edge functions that accept publishable key only — less secure)
+    </label>
+    <label class="sub" style="display:block;margin-bottom:4px;">Supabase project URL</label>
+    <input id="supabaseUrl" type="url" placeholder="https://your-project.supabase.co" autocomplete="off" style="width:100%;padding:10px;margin-bottom:8px;border-radius:8px;border:1px solid #333;background:#0a0a0e;color:var(--body);font-size:0.78rem;">
+    <label class="sub" style="display:block;margin-bottom:4px;">Supabase anon key</label>
+    <input id="supabaseAnon" type="password" placeholder="eyJ… or publishable key (anon only)" autocomplete="off" style="width:100%;padding:10px;margin-bottom:8px;border-radius:8px;border:1px solid #333;background:#0a0a0e;color:var(--body);font-size:0.78rem;">
+    <label class="sub" style="display:block;margin-bottom:4px;">Deadman function URL (optional)</label>
+    <input id="heartbeatFnUrl" type="url" placeholder="https://your-project.supabase.co/functions/v1/rapid-endpoint" autocomplete="off" style="width:100%;padding:10px;margin-bottom:8px;border-radius:8px;border:1px solid #333;background:#0a0a0e;color:var(--body);font-size:0.78rem;">
+    <label class="sub" style="display:block;margin-bottom:4px;">Emergency email notify URL (optional)</label>
+    <input id="emergencyNotifyUrl" type="url" placeholder="https://…/functions/v1/emergency-notify" autocomplete="off" style="width:100%;padding:10px;margin-bottom:8px;border-radius:8px;border:1px solid #333;background:#0a0a0e;color:var(--body);font-size:0.78rem;">
+    <p class="sub" style="margin:0 0 12px;font-size:0.7rem;">Account: use <strong>🔐 SIGN IN</strong> in the top toolbar (email, password; display name on sign-up). Session is stored by Supabase in this browser.</p>
+    <button type="button" class="tool-btn" id="btnTestVoice" style="width:100%;margin-bottom:12px">Test voice</button>
+    <p class="sub">Delete / Backspace: remove selected pin · Esc: clear pin selection · Long-press map: add pin · 🎙️ VOICE: arm mic, then say “HUD” + command (or use typed fallback when recognition is unavailable)</p>
+    <button type="button" class="tool-btn" id="settingsClose" style="margin-top:12px;width:100%">Close</button>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modalAuth" aria-hidden="true">
+  <div class="modal-box" style="max-width:420px">
+    <h3 style="margin:0 0 12px;color:var(--data);font-size:0.95rem;">🔐 Titanium — Account</h3>
+    <div id="authModalForms">
+      <div style="display:flex;gap:8px;margin-bottom:12px;border-bottom:1px solid var(--glass-border);padding-bottom:10px;">
+        <button type="button" class="tool-btn" id="authTabLogin" style="flex:1">Login</button>
+        <button type="button" class="tool-btn" id="authTabSignup" style="flex:1">Sign up</button>
+      </div>
+      <div id="authPanelLogin">
+        <label class="sub" style="display:block;margin-bottom:4px;">Email</label>
+        <input id="authLoginEmail" type="email" autocomplete="username" placeholder="you@example.com" style="width:100%;padding:10px;margin-bottom:8px;border-radius:8px;border:1px solid #333;background:#0a0a0e;color:var(--body);font-size:0.8rem;">
+        <label class="sub" style="display:block;margin-bottom:4px;">Password</label>
+        <input id="authLoginPassword" type="password" autocomplete="current-password" placeholder="Password" style="width:100%;padding:10px;margin-bottom:10px;border-radius:8px;border:1px solid #333;background:#0a0a0e;color:var(--body);font-size:0.8rem;">
+        <button type="button" class="tool-btn" id="authBtnLogin" style="width:100%">Sign in</button>
+      </div>
+      <div id="authPanelSignup" style="display:none;">
+        <label class="sub" style="display:block;margin-bottom:4px;">Display name</label>
+        <input id="authSignupName" type="text" autocomplete="nickname" placeholder="Call sign or name" style="width:100%;padding:10px;margin-bottom:8px;border-radius:8px;border:1px solid #333;background:#0a0a0e;color:var(--body);font-size:0.8rem;">
+        <label class="sub" style="display:block;margin-bottom:4px;">Email</label>
+        <input id="authSignupEmail" type="email" autocomplete="off" placeholder="you@example.com" style="width:100%;padding:10px;margin-bottom:8px;border-radius:8px;border:1px solid #333;background:#0a0a0e;color:var(--body);font-size:0.8rem;">
+        <label class="sub" style="display:block;margin-bottom:4px;">Password (min 6)</label>
+        <input id="authSignupPassword" type="password" autocomplete="new-password" placeholder="Password" style="width:100%;padding:10px;margin-bottom:10px;border-radius:8px;border:1px solid #333;background:#0a0a0e;color:var(--body);font-size:0.8rem;">
+        <button type="button" class="tool-btn" id="authBtnSignup" style="width:100%">Create account</button>
+      </div>
+    </div>
+    <div id="authModalLoggedIn" style="display:none;">
+      <p class="sub" id="authModalUserEmail" style="word-break:break-all;margin:0 0 8px;"></p>
+      <p class="data" id="authModalDisplayName" style="margin:0 0 10px;"></p>
+      <label class="sub" style="display:block;margin-bottom:4px;">Edit display name</label>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <input id="authEditNameInput" type="text" style="flex:1;padding:10px;border-radius:8px;border:1px solid #333;background:#0a0a0e;color:var(--body);font-size:0.8rem;">
+        <button type="button" class="tool-btn" id="authSaveNameBtn">Save</button>
+      </div>
+      <button type="button" class="tool-btn" id="authSignOutBtn" style="width:100%;margin-top:14px;border-color:var(--danger);color:var(--danger);">Sign out</button>
+    </div>
+    <p class="sub" id="authMessage" style="margin-top:14px;min-height:1.3em;text-align:center;font-size:0.75rem;"></p>
+    <button type="button" class="tool-btn" id="authModalClose" style="width:100%;margin-top:6px">Close</button>
+  </div>
+</div>
+
+<script>
+(function(){
+'use strict';
+
+var STORAGE_LAYOUT='titanium_elite_layout_v1';
+var STORAGE_ROUTE='titanium_elite_route_v1';
+var STORAGE_PREFS='titanium_elite_prefs_v1';
+var STORAGE_TOKEN='titanium_mapbox_pk';
+var STORAGE_MISSION='titanium_elite_mission_t0_v1';
+var STORAGE_DEVICE_ID='titanium_device_id';
+var STORAGE_PROFILE='titanium_profile';
+var HEARTBEAT_INTERVAL_MS=30000;
+var authCurrentUser=null;
+var authCurrentSession=null;
+var authUserProfile=null;
+var authListenerBound=false;
+var deadmanMissedCount=0;
+var deadmanRescueTriggered=false;
+var deadmanLastHeartbeatTime=null;
+var STORAGE_EMERGENCY='titanium_emergency_v1';
+var VOICE_LISTEN_MS=5000;
+var LONG_PRESS_MS=500;
+var MOVE_SLACK_PX=14;
+var ARRIVAL_FT=50;
+var HALF_CORRIDOR_FT=5280;
+var POLL_MS_NORM=120000;
+var POLL_MS_EDGE=30000;
+var EDGE_NEAR_FT=500;
+
+var PIN_TYPES={water:'💧',camp:'🏕️',rest:'🪑'};
+var pins=[];
+var arrived=[];
+var pinMarkers=[];
+var selectedPinIndex=-1;
+var pendingPinType='water';
+var map=null;
+var gpsMarker=null;
+var currentLayer='hybrid';
+var lastWeatherSummary='';
+var userLng=-105.7821,userLat=39.5501;
+var longPressTimer=null;
+var lpStart=null;
+var suppressMouseUntil=0;
+var currentPollMs=POLL_MS_NORM;
+var pollTimer=null;
+var dashAnimTimer=null;
+var lastSeverity=-1;
+var breachToastShown=false;
+var touchGesture=false;
+var mapStyleFallbackTried=false;
+var orientationLocked=false;
+
+var gpsAccuracyM=null;
+var missionStartMs=Date.now();
+var audioCtx=null;
+var voiceRecognition=null;
+var voiceSessionActive=false;
+var voiceContinuous=false;
+var voiceAwaitCommandUntil=0;
+var pendingClearRoute=false;
+var pendingClearUntil=0;
+var voicePillRevertTimer=null;
+
+/* === VOICE_COMMAND_SYSTEM ===
+   Wake: HUD (case insensitive). Matching is local only (phrase table + string rules). No cloud NLP. */
+var VOICE_COMMANDS_LIST=[
+  {category:'status',canon:'status',phrases:['status','show status','read status']},
+  {category:'status',canon:'time',phrases:['time','what time']},
+  {category:'status',canon:'weather',phrases:['weather']},
+  {category:'status',canon:'elevation',phrases:['elevation','altitude']},
+  {category:'status',canon:'corridor',phrases:['corridor','corridor status']},
+  {category:'navigation',canon:'distance to finish',phrases:['distance to finish','distance finish','miles to finish']},
+  {category:'navigation',canon:'next pin',phrases:['next pin','next waypoint','next']},
+  {category:'navigation',canon:'reroute',phrases:['reroute','reroute please','new route']},
+  {category:'navigation',canon:'center on me',phrases:['center on me','center','recenter','center map']},
+  {category:'navigation',canon:'zoom in',phrases:['zoom in','zoom closer']},
+  {category:'navigation',canon:'zoom out',phrases:['zoom out','zoom wider']},
+  {category:'route',canon:'add pin here',phrases:['add pin here','add pin','drop pin']},
+  {category:'route',canon:'delete last pin',phrases:['delete last pin','remove last pin']},
+  {category:'route',canon:'clear route',phrases:['clear route','clear all pins']},
+  {category:'route',canon:'save route',phrases:['save route','save gpx','export route']},
+  {category:'route',canon:'reverse route',phrases:['reverse route','flip route']},
+  {category:'display',canon:'night mode',phrases:['night mode','night ops']},
+  {category:'display',canon:'low light',phrases:['low light','dim']},
+  {category:'display',canon:'bright',phrases:['bright','brightness','full brightness']},
+  {category:'display',canon:'reset layout',phrases:['reset layout','reset panels']},
+  {category:'display',canon:'hide all',phrases:['hide all','collapse all']},
+  {category:'display',canon:'show all',phrases:['show all','expand all']},
+  {category:'safety',canon:'emergency',phrases:['emergency','sos']},
+  {category:'safety',canon:'where am i',phrases:['where am i','where am i located']},
+  {category:'safety',canon:'breadcrumb',phrases:['breadcrumb','drop breadcrumb']},
+  {category:'safety',canon:'help',phrases:['help','commands','what can you do']},
+  {category:'system',canon:'continuous',phrases:['continuous','continuous mode']},
+  {category:'system',canon:'sleep',phrases:['sleep','stop listening']}
+];
+
+function voiceNormalizePhrase(s){
+  return (s||'').toLowerCase().replace(/[.,!?]/g,'').replace(/\s+/g,' ').trim();
+}
+
+function buildVoiceCommandLookup(){
+  var lookup={};
+  VOICE_COMMANDS_LIST.forEach(function(entry){
+    entry.phrases.forEach(function(p){
+      lookup[voiceNormalizePhrase(p)]=entry.canon;
+    });
+  });
+  return lookup;
+}
+var VOICE_COMMAND_LOOKUP=buildVoiceCommandLookup();
+
+function resolveVoiceCommandCanon(raw){
+  var cmd=voiceNormalizePhrase(raw);
+  if(!cmd)return '';
+  if(VOICE_COMMAND_LOOKUP[cmd])return VOICE_COMMAND_LOOKUP[cmd];
+  if(cmd.indexOf('distance')===0&&cmd.indexOf('finish')>=0)return 'distance to finish';
+  return cmd;
+}
+
+function voiceCommandsHelpSpokenText(){
+  var out=[],seen={};
+  VOICE_COMMANDS_LIST.forEach(function(e){
+    if(seen[e.canon])return;
+    seen[e.canon]=1;
+    out.push(e.canon);
+  });
+  return 'All commands are processed locally with no cloud. You can say: '+out.join(', ')+'. Optional chaining: use the word then between commands. Clear route asks you to say CONFIRM to delete all pins. Ambient listening is off until you say HUD continuous; say HUD sleep to stop.';
+}
+
+var layerStyles={hybrid:'mapbox/satellite-v9',topo:'mapbox/outdoors-v12',outdoor:'mapbox/satellite-streets-v12',streets:'mapbox/streets-v12'};
+var osmFallbackStyle={
+  version:8,sources:{
+    osm:{type:'raster',tiles:['https://a.tile.openstreetmap.org/{z}/{x}/{y}.png'],tileSize:256,attribution:'© OSM'}
+  },
+  layers:[{id:'bg',type:'raster',source:'osm'}]
+};
+
+function safeStore(key,val){
+  try{
+    localStorage.setItem(key,val);
+    return true;
+  }catch(e){
+    if(confirm('Storage full or blocked. Clear elite saved data now?')){
+      try{
+        localStorage.removeItem(STORAGE_LAYOUT);
+        localStorage.removeItem(STORAGE_ROUTE);
+        localStorage.removeItem(STORAGE_PREFS);
+        localStorage.setItem(key,val);
+        return true;
+      }catch(e2){ alert('Still cannot save: '+e2.message); }
+    }
+    return false;
+  }
+}
+
+function formatTime12(d,withSeconds){
+  var h=d.getHours(),m=d.getMinutes(),s=d.getSeconds();
+  var ap=h>=12?'PM':'AM';
+  var h12=h%12;if(h12===0)h12=12;
+  function z(n){return n<10?'0'+n:''+n;}
+  if(withSeconds)return h12+':'+z(m)+':'+z(s)+' '+ap;
+  return h12+':'+z(m)+' '+ap;
+}
+
+function toast(msg){
+  var t=document.getElementById('toast');
+  t.textContent=msg;
+  t.classList.add('show');
+  clearTimeout(toast._h);
+  toast._h=setTimeout(function(){t.classList.remove('show');},3800);
+}
+
+function vibrateHaptic(ms){
+  try{
+    if(typeof navigator.vibrate!=='function')return;
+    navigator.vibrate(ms);
+  }catch(e){}
+}
+
+function fetchWttrWeather(lat,lng){
+  var q=encodeURIComponent(lat+','+lng);
+  return fetch('https://wttr.in/'+q+'?format=j1',{mode:'cors'})
+    .then(function(r){if(!r.ok)throw new Error('wttr');return r.json();})
+    .then(function(j){
+      var cc=(j.current_condition&&j.current_condition[0])||{};
+      var tF=cc.temp_F,tC=cc.temp_C;
+      var t=tF!=null&&tF!==''?tF:tC;
+      var unit=tF!=null&&tF!==''?'Fahrenheit':'Celsius';
+      var desc=(cc.weatherDesc&&cc.weatherDesc[0]&&cc.weatherDesc[0].value)||'conditions unknown';
+      var wmi=cc.windspeedMiles,wkm=cc.windspeedKmph;
+      var wind=wmi!=null&&wmi!==''?wmi+' miles per hour':(wkm!=null&&wkm!==''?wkm+' kilometers per hour':'unknown');
+      var prec=cc.precipMM!=null&&cc.precipMM!==''?cc.precipMM:'0';
+      lastWeatherSummary='Temperature '+t+' degrees '+unit+'. Wind '+wind+'. '+desc+'. Precipitation '+prec+' millimeters.';
+      return lastWeatherSummary;
+    });
+}
+
+function cmdWeatherAsync(done){
+  if(!Number.isFinite(userLat)||!Number.isFinite(userLng)){
+    speakVoice('Position unknown for weather');
+    voiceSuccess();
+    if(done)done();
+    return;
+  }
+  fetchWttrWeather(userLat,userLng).then(function(s){
+    speakVoice('HUD weather. '+s);
+    voiceSuccess();
+    if(done)done();
+  }).catch(function(){
+    var tail=lastWeatherSummary?lastWeatherSummary:'Network or CORS blocked wttr.in.';
+    speakVoice('HUD weather unavailable. '+tail);
+    voiceSuccess();
+    if(done)done();
+  });
+}
+
+function voiceAlertsOn(){
+  try{
+    var el=document.getElementById('voiceToggle');
+    return el ? el.checked : true;
+  }catch(e){return true;}
+}
+
+function voiceTacticalOn(){
+  try{
+    var el=document.getElementById('voiceTacticalToggle');
+    return !!(el&&el.checked);
+  }catch(e){return false;}
+}
+
+function speak(text){
+  if(!text||!voiceAlertsOn())return;
+  if(voiceTacticalOn())return;
+  if(!('speechSynthesis' in window))return;
+  try{
+    speechSynthesis.cancel();
+    var u=new SpeechSynthesisUtterance(text);
+    u.rate=voiceSpeakRate();
+    speechSynthesis.speak(u);
+  }catch(e){}
+}
+
+function speakVoice(text){
+  if(!text)return;
+  var short=text.length>220?text.slice(0,217)+'…':text;
+  toast(short);
+  if(voiceTacticalOn())return;
+  if(!voiceAlertsOn())return;
+  if(!('speechSynthesis' in window))return;
+  try{
+    speechSynthesis.cancel();
+    var u=new SpeechSynthesisUtterance(text);
+    u.rate=voiceSpeakRate();
+    speechSynthesis.speak(u);
+  }catch(e){}
+}
+
+var supabaseClient=null;
+var supabaseClientCacheKey='';
+
+function getHeartbeatConfig(){
+  try{
+    var p=JSON.parse(localStorage.getItem(STORAGE_PREFS)||'{}');
+    var urlIn=document.getElementById('supabaseUrl');
+    var anonIn=document.getElementById('supabaseAnon');
+    var fnIn=document.getElementById('heartbeatFnUrl');
+    var anonOnlyEl=document.getElementById('deadmanAnonOnly');
+    var url=(urlIn&&urlIn.value.trim()?urlIn.value.trim():String(p.supabaseUrl||'')).trim();
+    var anon=(anonIn&&anonIn.value.trim()?anonIn.value.trim():String(p.supabaseAnon||'')).trim();
+    var fn=(fnIn&&fnIn.value.trim()?fnIn.value.trim():String(p.heartbeatFnUrl||'')).trim();
+    if(!fn&&url)fn=url.replace(/\/$/,'')+'/functions/v1/rapid-endpoint';
+    var anonOnly=anonOnlyEl?!!anonOnlyEl.checked:!!p.deadmanAnonOnly;
+    return {fnUrl:fn,supabaseUrl:url,anon:anon,anonOnly:anonOnly};
+  }catch(e){return {fnUrl:'',supabaseUrl:'',anon:'',anonOnly:false};}
+}
+
+function getOrCreateDeviceId(){
+  try{
+    var id=localStorage.getItem(STORAGE_DEVICE_ID);
+    if(!id){
+      if(typeof crypto!=='undefined'&&crypto.randomUUID)id=crypto.randomUUID();
+      else id='dev_'+Date.now();
+      safeStore(STORAGE_DEVICE_ID,id);
+    }
+    return id;
+  }catch(e){return 'dev_'+Date.now();}
+}
+
+function ensureSupabaseClient(){
+  var cfg=getHeartbeatConfig();
+  var key=cfg.supabaseUrl+'|'+cfg.anon;
+  if(!cfg.supabaseUrl||!cfg.anon)return null;
+  if(typeof window.supabase==='undefined'||typeof window.supabase.createClient!=='function')return null;
+  if(supabaseClient&&supabaseClientCacheKey!==key){
+    try{if(supabaseClient.auth)supabaseClient.auth.stopAutoRefresh();}catch(e){}
+    supabaseClient=null;
+  }
+  supabaseClientCacheKey=key;
+  if(!supabaseClient)supabaseClient=window.supabase.createClient(cfg.supabaseUrl,cfg.anon,{auth:{persistSession:true,storage:localStorage,detectSessionInUrl:true}});
+  return supabaseClient;
+}
+
+function bindAuthStateListener(){
+  if(authListenerBound)return;
+  var client=ensureSupabaseClient();
+  if(!client||!client.auth)return;
+  authListenerBound=true;
+  client.auth.onAuthStateChange(function(_evt,session){
+    authCurrentSession=session||null;
+    authCurrentUser=session&&session.user?session.user:null;
+    if(authCurrentUser){
+      loadUserProfile().then(function(){updateAuthUI();}).catch(function(){updateAuthUI();});
+    }else{
+      authUserProfile=null;
+      updateAuthUI();
+    }
+  });
+}
+
+async function createUserProfile(userId,displayName,email){
+  try{
+    var o={
+      user_id:userId,
+      display_name:displayName||'Explorer',
+      email:email||'',
+      updated_at:new Date().toISOString()
+    };
+    localStorage.setItem(STORAGE_PROFILE,JSON.stringify(o));
+    authUserProfile=o;
+  }catch(e){}
+}
+
+async function loadUserProfile(){
+  if(!authCurrentUser)return null;
+  try{
+    var saved=localStorage.getItem(STORAGE_PROFILE);
+    if(saved){
+      var o=JSON.parse(saved);
+      if(o&&o.user_id===authCurrentUser.id){
+        authUserProfile=o;
+        return o;
+      }
+    }
+  }catch(e){}
+  var meta=authCurrentUser.user_metadata||{};
+  authUserProfile={
+    user_id:authCurrentUser.id,
+    display_name:meta.display_name||(authCurrentUser.email?authCurrentUser.email.split('@')[0]:'Explorer'),
+    email:authCurrentUser.email,
+    avatar:null,
+    preferences:{theme:'dark',alert_distance:250,haptic:true},
+    created_at:authCurrentUser.created_at,
+    updated_at:new Date().toISOString()
+  };
+  try{localStorage.setItem(STORAGE_PROFILE,JSON.stringify(authUserProfile));}catch(e){}
+  return authUserProfile;
+}
+
+function updateAuthUI(){
+  var btn=document.getElementById('btnAccount');
+  var lbl=btn?btn.querySelector('.lbl'):null;
+  if(authCurrentUser&&authUserProfile){
+    if(btn)btn.classList.add('accent');
+    if(lbl){
+      var nm=authUserProfile.display_name||'';
+      lbl.textContent=nm.length>12?nm.slice(0,11)+'…':(nm||'ACCOUNT');
+    }
+  }else{
+    if(btn)btn.classList.remove('accent');
+    if(lbl)lbl.textContent='SIGN IN';
+  }
+  var forms=document.getElementById('authModalForms');
+  var logged=document.getElementById('authModalLoggedIn');
+  var emailEl=document.getElementById('authModalUserEmail');
+  var nameShow=document.getElementById('authModalDisplayName');
+  var edit=document.getElementById('authEditNameInput');
+  if(authCurrentUser&&authUserProfile){
+    if(forms)forms.style.display='none';
+    if(logged)logged.style.display='block';
+    if(emailEl)emailEl.textContent=authCurrentUser.email||'';
+    if(nameShow)nameShow.textContent=authUserProfile.display_name||'';
+    if(edit)edit.value=authUserProfile.display_name||'';
+  }else{
+    if(logged)logged.style.display='none';
+    if(forms)forms.style.display='block';
+  }
+}
+
+function showAuthMessage(msg,type){
+  var el=document.getElementById('authMessage');
+  if(!el)return;
+  el.textContent=msg||'';
+  el.style.color=type==='error'?varDangerColor():type==='success'?'#00ff88':'#ffaa00';
+  clearTimeout(showAuthMessage._t);
+  if(msg)showAuthMessage._t=setTimeout(function(){el.textContent='';},4500);
+}
+function varDangerColor(){
+  try{return getComputedStyle(document.documentElement).getPropertyValue('--danger').trim()||'#ff4466';}catch(e){return '#ff4466';}
+}
+
+function openAuthModal(){
+  updateAuthUI();
+  var m=document.getElementById('modalAuth');
+  if(m){m.classList.add('show');m.setAttribute('aria-hidden','false');}
+  var am=document.getElementById('authMessage');
+  if(am)am.textContent='';
+}
+
+function closeAuthModal(){
+  var m=document.getElementById('modalAuth');
+  if(m){m.classList.remove('show');m.setAttribute('aria-hidden','true');}
+}
+
+async function loadAuthSession(){
+  savePrefs();
+  var client=ensureSupabaseClient();
+  if(!client){
+    authCurrentUser=null;
+    authCurrentSession=null;
+    updateAuthUI();
+    return;
+  }
+  bindAuthStateListener();
+  try{
+    var r=await client.auth.getSession();
+    var session=r&&r.data?r.data.session:null;
+    authCurrentSession=session;
+    authCurrentUser=session&&session.user?session.user:null;
+    if(authCurrentUser)await loadUserProfile();
+    else authUserProfile=null;
+  }catch(e){
+    authCurrentUser=null;
+    authCurrentSession=null;
+    authUserProfile=null;
+  }
+  updateAuthUI();
+}
+
+async function signInAuth(email,password){
+  savePrefs();
+  var client=ensureSupabaseClient();
+  if(!client){
+    showAuthMessage('Add Supabase URL and anon key in Settings first.','error');
+    return false;
+  }
+  try{
+    var r=await client.auth.signInWithPassword({email:email,password:password});
+    if(r.error)throw r.error;
+    authCurrentSession=r.data.session;
+    authCurrentUser=r.data.user;
+    await loadUserProfile();
+    updateAuthUI();
+    showAuthMessage('Signed in.','success');
+    sendHeartbeat();
+    closeAuthModal();
+    return true;
+  }catch(err){
+    showAuthMessage(err.message||'Sign in failed','error');
+    return false;
+  }
+}
+
+async function signUpAuth(email,password,displayName){
+  savePrefs();
+  var client=ensureSupabaseClient();
+  if(!client){
+    showAuthMessage('Configure Supabase in Settings first.','error');
+    return false;
+  }
+  if(!password||String(password).length<6){
+    showAuthMessage('Password must be at least 6 characters.','error');
+    return false;
+  }
+  try{
+    var r=await client.auth.signUp({
+      email:email,
+      password:password,
+      options:{data:{display_name:displayName||'',created_at:new Date().toISOString()}}
+    });
+    if(r.error)throw r.error;
+    if(r.data.user){
+      var dn=displayName||(r.data.user.user_metadata&&r.data.user.user_metadata.display_name)||'';
+      await createUserProfile(r.data.user.id,dn,email);
+      if(r.data.session){
+        authCurrentUser=r.data.user;
+        authCurrentSession=r.data.session;
+        await loadUserProfile();
+        updateAuthUI();
+        showAuthMessage('Account created. You are signed in.','success');
+        sendHeartbeat();
+        closeAuthModal();
+      }else{
+        authCurrentUser=null;
+        authCurrentSession=null;
+        authUserProfile=null;
+        updateAuthUI();
+        showAuthMessage('Check your email to confirm, then sign in.','success');
+      }
+      return true;
+    }
+  }catch(err){
+    showAuthMessage(err.message||'Sign up failed','error');
+    return false;
+  }
+  return false;
+}
+
+async function signOutAuth(){
+  var client=ensureSupabaseClient();
+  if(client)try{await client.auth.signOut();}catch(e){}
+  authCurrentUser=null;
+  authCurrentSession=null;
+  authUserProfile=null;
+  try{localStorage.removeItem(STORAGE_PROFILE);}catch(e){}
+  updateAuthUI();
+  showAuthMessage('Signed out.','success');
+  closeAuthModal();
+}
+
+async function updateAuthDisplayName(newName){
+  if(!authCurrentUser||!newName||!String(newName).trim())return false;
+  var n=String(newName).trim();
+  if(!authUserProfile)authUserProfile={user_id:authCurrentUser.id};
+  authUserProfile.display_name=n;
+  authUserProfile.user_id=authCurrentUser.id;
+  authUserProfile.updated_at=new Date().toISOString();
+  try{localStorage.setItem(STORAGE_PROFILE,JSON.stringify(authUserProfile));}catch(e){}
+  var client=ensureSupabaseClient();
+  if(client)try{await client.auth.updateUser({data:{display_name:n}});}catch(e){}
+  updateAuthUI();
+  showAuthMessage('Display name updated.','success');
+  return true;
+}
+
+function showRescueOverlay(opts){
+  opts=opts||{};
+  var ov=document.getElementById('sosOverlay');
+  if(ov){
+    ov.classList.add('show');
+    ov.setAttribute('aria-hidden','false');
+    setTimeout(function(){try{ov.classList.remove('show');ov.setAttribute('aria-hidden','true');}catch(err){}},2400);
+  }
+  try{
+    if(typeof navigator.vibrate==='function'){
+      var pat=opts.vibratePattern;
+      navigator.vibrate(pat&&pat.length?pat:[200,100,200]);
+    }
+  }catch(e){}
+  speakVoice(opts.speakMessage||'Rescue protocol activated. Confirm your position and contact your team.');
+}
+
+function showRescueAlert(){
+  console.log('🚨 DEADMAN: Rescue protocol triggered!');
+  if(document.getElementById('deadman-rescue-alert'))return;
+  var alertDiv=document.createElement('div');
+  alertDiv.id='deadman-rescue-alert';
+  alertDiv.setAttribute('role','alert');
+  alertDiv.innerHTML='<div style="position:fixed;top:80px;right:20px;background:#ff3355;color:#fff;padding:16px 24px;border-radius:12px;font-weight:700;z-index:1125;box-shadow:0 0 30px rgba(255,51,85,0.8);border-left:4px solid #fff;font-family:ui-monospace,monospace;max-width:min(92vw,360px);line-height:1.35;">🚨 RESCUE PROTOCOL ACTIVATED<br><span style="font-size:12px;font-weight:600;opacity:0.95">Position was sent with last heartbeat — confirm status and contact your team.</span></div>';
+  document.body.appendChild(alertDiv);
+  try{
+    if(typeof navigator.vibrate==='function')navigator.vibrate([200,100,200,100,500]);
+  }catch(e){}
+  speakVoice('Rescue protocol activated. Emergency services may have been notified.');
+  setTimeout(function(){try{alertDiv.remove();}catch(err){}},8000);
+  void notifyEmergencyContactsRescue('deadman');
+}
+
+function loadEmergencyStore(){
+  try{
+    var raw=localStorage.getItem(STORAGE_EMERGENCY);
+    if(!raw)return{v:1,saved_contacts:[],route_contact_ids:[],rescue_history:[]};
+    var o=JSON.parse(raw);
+    if(!o.saved_contacts)o.saved_contacts=[];
+    if(!o.route_contact_ids)o.route_contact_ids=[];
+    if(!o.rescue_history)o.rescue_history=[];
+    return o;
+  }catch(e){return{v:1,saved_contacts:[],route_contact_ids:[],rescue_history:[]};}
+}
+
+function saveEmergencyStore(o){
+  try{safeStore(STORAGE_EMERGENCY,JSON.stringify(o));}catch(e){}
+  void syncEmergencyContactsCloud(o);
+}
+
+function getCurrentRouteId(){
+  if(!pins.length)return 'r_empty';
+  return 'r_'+pins.map(function(p){return p.lat.toFixed(4)+','+p.lng.toFixed(4);}).join('|').replace(/[^a-zA-Z0-9_.-]/g,'_').slice(0,180);
+}
+
+function pushRescueHistory(entry){
+  var d=loadEmergencyStore();
+  d.rescue_history=d.rescue_history||[];
+  d.rescue_history.push(entry);
+  if(d.rescue_history.length>50)d.rescue_history=d.rescue_history.slice(-50);
+  saveEmergencyStore(d);
+}
+
+function clearRouteEmergencySelection(){
+  var d=loadEmergencyStore();
+  d.route_contact_ids=[];
+  saveEmergencyStore(d);
+  renderEmergencyContactsUI();
+}
+
+function refreshEcSuggestions(){
+  var dl=document.getElementById('ecSuggestions');
+  if(!dl)return;
+  var d=loadEmergencyStore();
+  dl.innerHTML='';
+  (d.saved_contacts||[]).forEach(function(c){
+    var o=document.createElement('option');
+    o.value=c.name||c.email||'';
+    dl.appendChild(o);
+  });
+}
+
+function populateEcImportSelect(){
+  var sel=document.getElementById('ecImportSelect');
+  if(!sel)return;
+  var d=loadEmergencyStore();
+  var cur=sel.value;
+  sel.innerHTML='<option value="">— Select a saved contact —</option>';
+  (d.saved_contacts||[]).slice().sort(function(a,b){return(b.used_count||0)-(a.used_count||0);}).forEach(function(c){
+    var o=document.createElement('option');
+    o.value=c.id;
+    o.textContent=(c.name||'Contact')+' · '+(c.email||'')+(c.used_count?' · used '+(c.used_count):'');
+    sel.appendChild(o);
+  });
+  if(cur)sel.value=cur;
+}
+
+function renderEmergencyContactsUI(){
+  refreshEcSuggestions();
+  populateEcImportSelect();
+  var host=document.getElementById('ecRoutePills');
+  if(!host)return;
+  host.innerHTML='';
+  var d=loadEmergencyStore();
+  var ids=d.route_contact_ids||[];
+  ids.forEach(function(id){
+    var c=(d.saved_contacts||[]).filter(function(x){return x.id===id;})[0];
+    if(!c)return;
+    var pill=document.createElement('span');
+    pill.className='ec-pill';
+    pill.innerHTML='<span>'+(c.name||c.email)+'</span><button type="button" data-ec-remove="'+id+'" aria-label="Remove">×</button>';
+    host.appendChild(pill);
+  });
+}
+
+function addEmergencyContactFromForm(){
+  var name=(document.getElementById('ecName')&&document.getElementById('ecName').value||'').trim();
+  var email=(document.getElementById('ecEmail')&&document.getElementById('ecEmail').value||'').trim();
+  var phone=(document.getElementById('ecPhone')&&document.getElementById('ecPhone').value||'').trim();
+  var rel=(document.getElementById('ecRelationship')&&document.getElementById('ecRelationship').value||'').trim();
+  if(!email||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){toast('Valid email required');return;}
+  if(!name)name=email.split('@')[0];
+  var d=loadEmergencyStore();
+  var existing=null;
+  (d.saved_contacts||[]).forEach(function(c){if((c.email||'').toLowerCase()===email.toLowerCase())existing=c;});
+  var id=existing?existing.id:('c_'+Date.now()+'_'+Math.random().toString(36).slice(2,7));
+  var rec={
+    id:id,name:name,email:email,phone:phone||undefined,relationship:rel||undefined,
+    used_count:existing?existing.used_count:0,last_used:existing?existing.last_used:undefined
+  };
+  if(existing){
+    rec.used_count=existing.used_count||0;
+    d.saved_contacts=d.saved_contacts.filter(function(c){return c.id!==existing.id;});
+  }
+  d.saved_contacts.push(rec);
+  if(d.route_contact_ids.indexOf(id)<0)d.route_contact_ids.push(id);
+  rec.used_count=(rec.used_count||0)+1;
+  rec.last_used=new Date().toISOString().slice(0,10);
+  saveEmergencyStore(d);
+  document.getElementById('ecName').value='';
+  document.getElementById('ecEmail').value='';
+  document.getElementById('ecPhone').value='';
+  document.getElementById('ecRelationship').value='';
+  renderEmergencyContactsUI();
+  toast('Contact added to route');
+}
+
+function importEmergencyFromSelect(){
+  var sel=document.getElementById('ecImportSelect');
+  if(!sel||!sel.value){toast('Pick a saved contact');return;}
+  var id=sel.value;
+  var d=loadEmergencyStore();
+  if(d.route_contact_ids.indexOf(id)<0)d.route_contact_ids.push(id);
+  var t=new Date().toISOString().slice(0,10);
+  (d.saved_contacts||[]).forEach(function(c){
+    if(c.id===id){
+      c.used_count=(c.used_count||0)+1;
+      c.last_used=t;
+    }
+  });
+  saveEmergencyStore(d);
+  renderEmergencyContactsUI();
+  toast('Contact added to route');
+}
+
+function removeRouteEmergencyContact(id){
+  var d=loadEmergencyStore();
+  d.route_contact_ids=(d.route_contact_ids||[]).filter(function(x){return x!==id;});
+  saveEmergencyStore(d);
+  renderEmergencyContactsUI();
+}
+
+function onSecondPinAdded(){
+  toast('🚨 EMERGENCY CONTACTS — Who should be notified if rescue triggers? (Route panel)');
+  var det=document.getElementById('emergencyContactsSection');
+  if(det)det.open=true;
+  try{
+    var p=document.getElementById('panelRoute');
+    if(p)p.scrollIntoView({behavior:'smooth',block:'nearest'});
+  }catch(e){}
+  renderEmergencyContactsUI();
+}
+
+function getEmergencyNotifyUrl(){
+  try{
+    var p=JSON.parse(localStorage.getItem(STORAGE_PREFS)||'{}');
+    var urlIn=document.getElementById('emergencyNotifyUrl');
+    var custom=(urlIn&&urlIn.value.trim()?urlIn.value.trim():String(p.emergencyNotifyUrl||'')).trim();
+    if(custom)return custom;
+    var cfg=getHeartbeatConfig();
+    if(cfg.supabaseUrl)return cfg.supabaseUrl.replace(/\/$/,'')+'/functions/v1/emergency-notify';
+  }catch(e){}
+  return '';
+}
+
+function buildEmergencyMailPayload(triggerSource){
+  var d=loadEmergencyStore();
+  var ids=d.route_contact_ids||[];
+  var contacts=ids.map(function(id){
+    return (d.saved_contacts||[]).filter(function(c){return c.id===id;})[0];
+  }).filter(Boolean);
+  var userName=(authUserProfile&&authUserProfile.display_name)||(authCurrentUser&&authCurrentUser.email)||'Operator';
+  var pinLines=pins.length?pins.map(function(p,i){
+    return (i+1)+'. '+(p.type||'pt')+' '+Number(p.lat).toFixed(5)+', '+Number(p.lng).toFixed(5);
+  }).join('\n'):'(no pins)';
+  var sev=pins.length>=2?corridorSeverity():0;
+  var zn=['Clear','Near route','1500 ft band','1000 ft band','500 ft band','250 ft band','BREACH'];
+  var corridorTxt=pins.length<2?'—':(zn[sev]+' (severity '+sev+')');
+  var hb=deadmanLastHeartbeatTime?deadmanLastHeartbeatTime.toISOString():'—';
+  var subject='TITANIUM HUD EMERGENCY - '+userName+' requires rescue';
+  var body='Location: '+userLat+', '+userLng+'\n\nRoute pins:\n'+pinLines+'\n\nLast heartbeat: '+hb+'\nAlert level / corridor: '+corridorTxt+'\nTrigger: '+(triggerSource||'unknown')+'\nRoute id: '+getCurrentRouteId();
+  return{
+    contacts:contacts,
+    subject:subject,
+    body:body,
+    lat:userLat,
+    lon:userLng,
+    route_id:getCurrentRouteId(),
+    trigger_source:triggerSource
+  };
+}
+
+async function notifyEmergencyContactsRescue(triggerSource){
+  var payload=buildEmergencyMailPayload(triggerSource);
+  if(!payload.contacts.length){
+    console.log('[EMERGENCY] No route contacts to notify');
+    return;
+  }
+  var url=getEmergencyNotifyUrl();
+  var entry={
+    route_id:payload.route_id,
+    triggered_at:new Date().toISOString(),
+    contacts_notified:payload.contacts.map(function(c){return c.id;}),
+    success:false,
+    trigger:triggerSource
+  };
+  if(!url){
+    console.log('[EMERGENCY] Notify URL not configured — draft payload logged');
+    console.log(JSON.stringify({subject:payload.subject,body:payload.body,contacts:payload.contacts.map(function(c){return {name:c.name,email:c.email};})}));
+    pushRescueHistory(entry);
+    return;
+  }
+  try{
+    var cfg=getHeartbeatConfig();
+    var headers={'Content-Type':'application/json'};
+    if(cfg.anon)headers['apikey']=cfg.anon;
+    var authBearer=null;
+    if(cfg.anonOnly)authBearer=cfg.anon;
+    else{
+      var client=ensureSupabaseClient();
+      if(client){
+        var sr=await client.auth.getSession();
+        var tok=sr&&sr.data&&sr.data.session?sr.data.session.access_token:null;
+        if(tok)authBearer=tok;
+      }
+    }
+    if(!authBearer)authBearer=cfg.anon||'';
+    headers['Authorization']='Bearer '+authBearer;
+    var res=await fetch(url,{method:'POST',headers:headers,body:JSON.stringify(payload)});
+    entry.success=!!res.ok;
+    pushRescueHistory(entry);
+    if(!res.ok)console.warn('[EMERGENCY] notify HTTP',res.status);
+  }catch(e){
+    console.error('[EMERGENCY] notify failed',e);
+    pushRescueHistory(entry);
+  }
+}
+
+async function syncEmergencyContactsCloud(store){
+  try{
+    if(!authCurrentUser)return;
+    var cfg=getHeartbeatConfig();
+    if(!cfg.supabaseUrl||!cfg.anon)return;
+    var url=cfg.supabaseUrl.replace(/\/$/,'')+'/functions/v1/sync-emergency-contacts';
+    var client=ensureSupabaseClient();
+    var tok=null;
+    if(client){
+      var r=await client.auth.getSession();
+      tok=r&&r.data&&r.data.session?r.data.session.access_token:null;
+    }
+    if(!tok)return;
+    await fetch(url,{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+tok,'apikey':cfg.anon},
+      body:JSON.stringify({user_id:authCurrentUser.id,saved_contacts:store.saved_contacts,route_contact_ids:store.route_contact_ids})
+    });
+  }catch(e){}
+}
+
+function getCurrentPositionForHeartbeat(){
+  return new Promise(function(resolve){
+    if(!navigator.geolocation){
+      resolve({lat:userLat,lon:userLng,accuracy:gpsAccuracyM,fallback:true});
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      function(pos){
+        resolve({
+          lat:pos.coords.latitude,
+          lon:pos.coords.longitude,
+          accuracy:typeof pos.coords.accuracy==='number'&&!Number.isNaN(pos.coords.accuracy)?pos.coords.accuracy:null
+        });
+      },
+      function(){
+        resolve({lat:userLat,lon:userLng,accuracy:gpsAccuracyM,fallback:true});
+      },
+      {enableHighAccuracy:true,timeout:12000,maximumAge:10000}
+    );
+  });
+}
+
+async function sendHeartbeat(){
+  var logEl=document.getElementById('deadmanLog');
+  var statusEl=document.getElementById('deadmanStatus');
+  function logDeadman(msg){if(logEl)logEl.textContent=msg;}
+  try{
+    var cfg=getHeartbeatConfig();
+    if(!cfg.supabaseUrl||!cfg.anon){
+      if(logEl)logEl.style.color='';
+      if(statusEl){statusEl.textContent='💀 Deadman: not configured';statusEl.style.color='';}
+      logDeadman('Deadman: configure Supabase URL + anon key in Settings');
+      return;
+    }
+    var accessToken=null;
+    if(!cfg.anonOnly){
+      var client=ensureSupabaseClient();
+      if(!client){
+        if(logEl)logEl.style.color='';
+        if(statusEl){statusEl.textContent='💀 Deadman: client error';statusEl.style.color='';}
+        logDeadman('Deadman: Supabase client failed to load');
+        return;
+      }
+      var sessionRes=await client.auth.getSession();
+      var session=sessionRes&&sessionRes.data?sessionRes.data.session:null;
+      if(!session||!session.access_token){
+        console.log('⚠️ Not logged in - heartbeat skipped');
+        if(logEl)logEl.style.color='';
+        if(statusEl){statusEl.textContent='💀 Deadman: sign in or enable anon-only';statusEl.style.color='';}
+        logDeadman('Deadman: sign in in Settings, or enable “anon Bearer”');
+        return;
+      }
+      accessToken=session.access_token;
+    }
+    if(logEl){
+      logDeadman('📡 Sending heartbeat...');
+      logEl.style.color='#00e5ff';
+    }
+    var loc=await getCurrentPositionForHeartbeat();
+    var lat=Number(loc.lat), lon=Number(loc.lon);
+    if(!Number.isFinite(lat))lat=Number(userLat);
+    if(!Number.isFinite(lon))lon=Number(userLng);
+    var accNum=loc.accuracy==null||loc.accuracy===''?NaN:Number(loc.accuracy);
+    var gpsAccuracy=Number.isFinite(accNum)?accNum:null;
+    var deviceId=String(getOrCreateDeviceId());
+    var authBearer=cfg.anonOnly?cfg.anon:accessToken;
+    var heartbeatUrl=cfg.fnUrl&&cfg.fnUrl.length?cfg.fnUrl:(cfg.supabaseUrl.replace(/\/$/,'')+'/functions/v1/rapid-endpoint');
+    var payload={
+      device_id:deviceId,
+      lat:lat,
+      lon:lon,
+      accuracy:gpsAccuracy,
+      timestamp:Date.now()
+    };
+    var res=await fetch(heartbeatUrl,{
+      method:'POST',
+      headers:{
+        'Content-Type':'application/json',
+        'Authorization':'Bearer '+authBearer,
+        'apikey':cfg.anon
+      },
+      body:JSON.stringify(payload)
+    });
+    var rawText=await res.text();
+    var data={};
+    try{data=rawText?JSON.parse(rawText):{};}catch(parseErr){data={};}
+    var okSuccess=res.ok&&(data.success===undefined||data.success===true);
+    if(!okSuccess){
+      var errMsg=(data&&data.error)?String(data.error):(!res.ok?('HTTP '+res.status):'Unknown response');
+      logDeadman('⚠️ '+errMsg+' — retry in 30s');
+      if(logEl)logEl.style.color='#ffaa00';
+      if(statusEl){statusEl.innerHTML='⚠️ Offline mode';statusEl.style.color='#ffaa00';}
+      return;
+    }
+    deadmanMissedCount=typeof data.missed_count==='number'?data.missed_count:(parseInt(data.missed_count,10)||0);
+    deadmanRescueTriggered=!!data.rescue_triggered;
+    deadmanLastHeartbeatTime=new Date();
+    if(deadmanRescueTriggered){
+      if(statusEl){
+        statusEl.innerHTML='🚨 RESCUE ACTIVE';
+        statusEl.style.color='#ff3355';
+      }
+      if(logEl){
+        logEl.style.color='#ff3355';
+        logDeadman('🚨 RESCUE ACTIVATED | Missed: '+deadmanMissedCount+' | '+deadmanLastHeartbeatTime.toLocaleTimeString());
+      }
+      showRescueAlert();
+      return;
+    }
+    if(statusEl){
+      statusEl.innerHTML='✓ Monitoring';
+      statusEl.style.color='#00ff88';
+    }
+    if(logEl)logEl.style.color='#00ff88';
+    logDeadman('✓ Heartbeat OK | Missed: '+deadmanMissedCount+' | '+deadmanLastHeartbeatTime.toLocaleTimeString());
+  }catch(e){
+    console.error('Heartbeat error:',e);
+    if(logEl){
+      logEl.textContent='⚠️ Offline — will retry in 30s';
+      logEl.style.color='#ffaa00';
+    }
+    if(statusEl){
+      statusEl.innerHTML='⚠️ Offline mode';
+      statusEl.style.color='#ffaa00';
+    }
+  }
+}
+
+function confirmationBeepsOn(){
+  try{
+    var el=document.getElementById('confirmBeepToggle');
+    if(!el)return true;
+    return !!el.checked;
+  }catch(e){return true;}
+}
+
+function voiceSpeakRate(){
+  try{
+    var el=document.getElementById('voiceRateSelect');
+    if(!el)return 1;
+    var v=parseFloat(el.value,10);
+    if(Number.isNaN(v))return 1;
+    return Math.min(2,Math.max(0.5,v));
+  }catch(e){return 1;}
+}
+
+function ambientNoiseFilterOn(){
+  try{
+    var el=document.getElementById('noiseFilterToggle');
+    if(!el)return true;
+    return !!el.checked;
+  }catch(e){return true;}
+}
+
+function setVoicePillState(state){
+  var el=document.getElementById('voiceIndicatorPill');
+  if(!el)return;
+  el.classList.remove('voice-pill-sleeping','voice-pill-waking','voice-pill-processing','voice-pill-success','voice-pill-failure');
+  el.classList.add('voice-pill-'+state);
+  var tx=el.querySelector('.voice-pill-text');
+  var labels={
+    sleeping:'🎤 HUD (say to activate)',
+    waking:'🎤 LISTENING… (cyan pulsing)',
+    processing:'🎤 PROCESSING',
+    success:'✅ ✓',
+    failure:'❌ Command not recognized'
+  };
+  if(tx)tx.textContent=labels[state]||labels.sleeping;
+}
+
+function syncVoicePillIdle(){
+  if(voicePillRevertTimer)return;
+  var s='sleeping';
+  if(voiceSessionActive||voiceContinuous||(voiceAwaitCommandUntil>Date.now()))s='waking';
+  setVoicePillState(s);
+}
+
+function scheduleVoicePillRevert(ms){
+  if(voicePillRevertTimer)clearTimeout(voicePillRevertTimer);
+  voicePillRevertTimer=setTimeout(function(){
+    voicePillRevertTimer=null;
+    syncVoicePillIdle();
+  },ms);
+}
+
+function ensureAudioCtx(){
+  if(audioCtx)return audioCtx;
+  try{
+    audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+  }catch(e){audioCtx=null;}
+  return audioCtx;
+}
+
+function playBeep(kind){
+  if(!confirmationBeepsOn())return;
+  try{
+    var ctx=ensureAudioCtx();
+    if(!ctx)return;
+    if(ctx.state==='suspended')ctx.resume();
+    var now=ctx.currentTime;
+    function tone(freq,t0,dur,gain){
+      var o=ctx.createOscillator(),g=ctx.createGain();
+      o.type='sine';o.frequency.value=freq;
+      g.gain.setValueAtTime(0,t0);
+      g.gain.linearRampToValueAtTime(gain,t0+0.01);
+      g.gain.exponentialRampToValueAtTime(0.001,t0+dur);
+      o.connect(g);g.connect(ctx.destination);
+      o.start(t0);o.stop(t0+dur+0.05);
+    }
+    if(kind==='wake'){
+      tone(880,now,0.09,0.09);tone(1320,now+0.1,0.1,0.07);
+    }else if(kind==='confirm'){
+      tone(1046,now,0.07,0.08);
+    }else if(kind==='fail'){
+      tone(220,now,0.12,0.1);tone(180,now+0.16,0.12,0.1);
+    }else if(kind==='sleep'){
+      tone(660,now,0.12,0.07);tone(330,now+0.2,0.28,0.05);
+    }else{
+      tone(523,now,0.06,0.06);
+    }
+  }catch(e){}
+}
+
+function pulsePanelsCyan(){
+  document.querySelectorAll('.elite-panel').forEach(function(p){
+    p.classList.add('voice-cyan-pulse');
+    setTimeout(function(){p.classList.remove('voice-cyan-pulse');},750);
+  });
+}
+
+function speechRecognitionAvailable(){
+  return !!(window.SpeechRecognition||window.webkitSpeechRecognition);
+}
+
+function ensureVoiceRecognition(){
+  if(voiceRecognition)return true;
+  var SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR)return false;
+  voiceRecognition=new SR();
+  voiceRecognition.lang='en-US';
+  voiceRecognition.continuous=false;
+  voiceRecognition.interimResults=false;
+  voiceRecognition.maxAlternatives=3;
+  voiceRecognition.onresult=function(e){
+    var res=e.results[0];
+    if(!res||!res.length)return;
+    var pick=res[0],pickC=typeof res[0].confidence==='number'?res[0].confidence:null;
+    for(var ri=1;ri<res.length;ri++){
+      var c=typeof res[ri].confidence==='number'?res[ri].confidence:null;
+      if(c!=null&&(pickC==null||c>pickC)){pickC=c;pick=res[ri];}
+    }
+    if(ambientNoiseFilterOn()&&pickC!==null&&pickC<0.35)return;
+    handleVoiceTranscript(pick.transcript);
+  };
+  voiceRecognition.onerror=function(ev){
+    if(ev.error==='no-speech'||ev.error==='aborted')return;
+    if(ev.error==='not-allowed')toast('Microphone denied — use typed commands bar');
+    else toast('Voice: '+ev.error);
+  };
+  voiceRecognition.onend=function(){
+    if(voiceSessionActive||voiceContinuous){
+      setTimeout(function(){
+        try{if(voiceRecognition)voiceRecognition.start();}catch(err){}
+      },80);
+    }
+  };
+  return true;
+}
+
+function updateVoiceBtn(){
+  var b=document.getElementById('btnVoice');
+  if(b)b.classList.toggle('voice-armed',!!(voiceSessionActive||voiceContinuous));
+}
+
+function startVoiceListening(){
+  if(!ensureVoiceRecognition()){
+    showVoiceFallback(true);
+    toast('Speech recognition unavailable — type commands below');
+    syncVoicePillIdle();
+    return;
+  }
+  voiceSessionActive=true;
+  updateVoiceBtn();
+  setVoicePillState('waking');
+  try{voiceRecognition.start();}catch(err){
+    setTimeout(function(){
+      try{if(voiceRecognition)voiceRecognition.start();}catch(e2){toast('Voice start failed');}
+    },200);
+  }
+}
+
+function stopVoiceListening(){
+  voiceSessionActive=false;
+  voiceContinuous=false;
+  voiceAwaitCommandUntil=0;
+  try{if(voiceRecognition)voiceRecognition.stop();}catch(e){}
+  updateVoiceBtn();
+  syncVoicePillIdle();
+}
+
+function showVoiceFallback(show){
+  var bar=document.getElementById('voiceFallbackBar');
+  if(bar)bar.classList.toggle('show',!!show);
+  var pill=document.getElementById('voiceIndicatorPill');
+  if(pill)pill.classList.toggle('voice-pill-above-fallback',!!show);
+}
+
+function onVoiceWake(){
+  pulsePanelsCyan();
+  playBeep('wake');
+  voiceAwaitCommandUntil=Date.now()+VOICE_LISTEN_MS;
+  toast('Listening for command… ('+VOICE_LISTEN_MS/1000+'s)');
+}
+
+function voiceSuccess(){
+  playBeep('confirm');
+  setVoicePillState('success');
+  scheduleVoicePillRevert(1000);
+}
+
+function voiceFailure(){
+  playBeep('fail');
+  setVoicePillState('failure');
+  speakVoice('Command not recognized, try HUD help');
+  scheduleVoicePillRevert(2000);
+}
+
+function doClearRoute(){
+  pins=[];arrived=[];selectedPinIndex=-1;
+  clearRouteEmergencySelection();
+  syncRouteGeo();rebuildMarkers();renderPinList();renderSegments();updateTotals();updateNav();saveRouteNow();
+  toast('Route cleared');
+}
+
+function deleteLastPinVoice(){
+  if(pins.length<=2){speakVoice('Need at least start and finish');return;}
+  pins.pop();arrived.pop();
+  selectedPinIndex=-1;
+  syncRouteGeo();rebuildMarkers();renderPinList();renderSegments();updateTotals();updateNav();saveRouteNow();
+  toast('Removed last pin');
+}
+
+function reverseRoutePins(){
+  if(pins.length<2){speakVoice('Need two or more pins to reverse');return false;}
+  pins.reverse();
+  arrived.reverse();
+  selectedPinIndex=-1;
+  syncRouteGeo();rebuildMarkers();renderPinList();renderSegments();updateTotals();updateNav();saveRouteNow();
+  return true;
+}
+
+function collapseAllPanels(){
+  document.querySelectorAll('.elite-panel').forEach(function(panel){
+    panel.classList.add('collapsed');
+    var dock=panel.querySelector('.panel-dock');
+    if(dock)syncPanelDockButton(panel,dock);
+  });
+  saveLayout();
+  if(map)try{map.resize();}catch(e){}
+}
+
+function expandAllPanels(){
+  document.querySelectorAll('.elite-panel').forEach(function(panel){
+    panel.classList.remove('collapsed');
+    var dock=panel.querySelector('.panel-dock');
+    if(dock)syncPanelDockButton(panel,dock);
+  });
+  saveLayout();
+  if(map)try{map.resize();}catch(e){}
+}
+
+function dropBreadcrumbPin(){
+  var pt={lng:userLng,lat:userLat,type:'rest',breadcrumb:true};
+  var beforePinCount=pins.length;
+  if(pins.length>=2){
+    pins.splice(pins.length-1,0,pt);
+    arrived.splice(arrived.length-1,0,false);
+  }else{
+    pins.push(pt);arrived.push(false);
+  }
+  if(beforePinCount===1)onSecondPinAdded();
+  syncRouteGeo();rebuildMarkers();renderPinList();renderSegments();updateTotals();updateNav();saveRouteNow();
+  toast('Breadcrumb dropped');
+  vibrateHaptic(50);
+}
+
+function triggerSOS(){
+  var ov=document.getElementById('sosOverlay');
+  if(ov){ov.classList.add('show');ov.setAttribute('aria-hidden','false');setTimeout(function(){ov.classList.remove('show');ov.setAttribute('aria-hidden','true');},1800);}
+  vibrateHaptic(200);
+  speakVoice('Emergency SOS sequence. Alert your team and confirm your position.');
+  toast('SOS triggered');
+  pulsePanelsCyan();
+  void notifyEmergencyContactsRescue('manual_sos');
+}
+
+function wireSOSRail(){
+  var rail=document.getElementById('sosRail');
+  var knob=document.getElementById('sosKnob');
+  var fill=document.getElementById('sosFill');
+  var timeBar=document.getElementById('sosTimeBar');
+  var sosStatus=document.getElementById('sosStatus');
+  if(!rail||!knob||!fill||!timeBar)return;
+  var SOS_MS_LOCAL=3000;
+  var dragging=false,railW=0,slideMs=0,lastPointerX=0,moveClock=0,knobFrac=0,armReady=false,dangerColor='';
+  function railMetrics(){
+    var r=rail.getBoundingClientRect();
+    railW=r.width-knob.offsetWidth-8;
+    return r.left;
+  }
+  function setKnobFrac(f){
+    f=Math.max(0,Math.min(1,f));
+    knobFrac=f;
+    knob.style.left=4+f*railW+'px';
+    fill.style.width=f*100+'%';
+    rail.setAttribute('aria-valuenow',String(Math.round(f*100)));
+  }
+  function resetSos(){
+    slideMs=0;
+    setKnobFrac(0);
+    var z=dangerColor||getComputedStyle(document.documentElement).getPropertyValue('--danger').trim()||'#ff4466';
+    timeBar.style.background='linear-gradient(90deg,'+z+' 0%,#222 0%)';
+    if(sosStatus)sosStatus.textContent='';
+    armReady=false;
+  }
+  function onPointerDown(e){
+    if(e.target!==knob)return;
+    e.preventDefault();
+    dragging=true;
+    slideMs=0;
+    lastPointerX=e.clientX;
+    moveClock=0;
+    armReady=false;
+    dangerColor=getComputedStyle(document.documentElement).getPropertyValue('--danger').trim();
+    try{knob.setPointerCapture(e.pointerId);}catch(err){}
+  }
+  function onPointerMove(e){
+    if(!dragging)return;
+    var dx=Math.abs(e.clientX-lastPointerX);
+    lastPointerX=e.clientX;
+    var now=performance.now();
+    if(dx>0.8){if(moveClock)slideMs+=Math.min(now-moveClock,35);moveClock=now;}
+    var origin=railMetrics();
+    var x=e.clientX-origin;
+    var frac=x/railW;
+    setKnobFrac(frac);
+    var pctTime=Math.min(100,slideMs/SOS_MS_LOCAL*100);
+    var z=dangerColor||getComputedStyle(document.documentElement).getPropertyValue('--danger').trim()||'#ff4466';
+    timeBar.style.background='linear-gradient(90deg,'+z+' 0%,#222 '+pctTime+'%)';
+    if(slideMs>=SOS_MS_LOCAL&&knobFrac>=0.94){
+      armReady=true;
+      if(sosStatus)sosStatus.textContent='SOS armed — release to send';
+    }
+  }
+  function onPointerUp(e){
+    if(!dragging)return;
+    dragging=false;
+    try{knob.releasePointerCapture(e.pointerId);}catch(err){}
+    moveClock=0;
+    if(!armReady)resetSos();
+    else{
+      triggerSOS();
+      resetSos();
+    }
+  }
+  knob.addEventListener('pointerdown',onPointerDown);
+  rail.addEventListener('pointermove',onPointerMove);
+  knob.addEventListener('pointermove',onPointerMove);
+  knob.addEventListener('pointerup',onPointerUp);
+  knob.addEventListener('pointercancel',onPointerUp);
+  rail.addEventListener('click',function(e){
+    if(e.target===rail&&sosStatus)sosStatus.textContent='Use the grip — tap on rail does not arm';
+  });
+}
+
+function mockLandmark(){
+  var la=Math.round(userLat*100)/100,lo=Math.round(userLng*100)/100;
+  return 'grid reference approximately latitude '+la+', longitude '+lo;
+}
+
+function cmdStatusAsync(done){
+  var parts=[];
+  parts.push('GPS latitude '+userLat.toFixed(5)+', longitude '+userLng.toFixed(5));
+  if(gpsAccuracyM!=null&&!Number.isNaN(gpsAccuracyM))parts.push('Accuracy about '+Math.round(gpsAccuracyM)+' meters');
+  function finishBat(){
+    if(pins.length>=1){
+      var finMi=haversineFt({lng:userLng,lat:userLat},pins[pins.length-1])/5280;
+      parts.push('Distance to finish about '+finMi.toFixed(2)+' miles');
+    }
+    var nextI=-1;
+    for(var i=0;i<pins.length;i++)if(!arrived[i]){nextI=i;break;}
+    if(nextI>=0){
+      var nm=nextI===0?'Start':(PIN_TYPES[pins[nextI].type]||'waypoint');
+      parts.push('Next target: '+nm);
+    }else if(pins.length)parts.push('All waypoints reached');
+    speakVoice(parts.join('. '));
+    voiceSuccess();
+    if(done)done();
+  }
+  if(navigator.getBattery){
+    navigator.getBattery().then(function(b){
+      parts.push('Battery about '+Math.round(b.level*100)+' percent');
+      finishBat();
+    }).catch(finishBat);
+  }else{
+    parts.push('Battery level unknown');
+    finishBat();
+  }
+}
+
+function cmdElevationAsync(done){
+  if(!map||typeof map.queryTerrainElevation!=='function'){
+    speakVoice('Elevation data unavailable');
+    voiceSuccess();
+    if(done)done();
+    return;
+  }
+  try{
+    var e0=map.queryTerrainElevation({lng:userLng,lat:userLat});
+    var e1=map.queryTerrainElevation({lng:userLng,lat:userLat+0.00025});
+    var ft0=e0!=null&&!Number.isNaN(e0)?Math.round(e0*3.28084):null;
+    var distM=haversineFt({lng:userLng,lat:userLat},{lng:userLng,lat:userLat+0.00025})/3.28084;
+    var grade=0;
+    if(e0!=null&&e1!=null&&distM>2)grade=(e1-e0)/distM*100;
+    speakVoice(ft0!=null?'Altitude about '+ft0+' feet. Grade about '+grade.toFixed(1)+' percent':'Altitude unavailable');
+  }catch(err){
+    speakVoice('Elevation query failed');
+  }
+  voiceSuccess();
+  if(done)done();
+}
+
+function cmdNextPinAsync(done){
+  if(!pins.length){speakVoice('No pins on route');voiceSuccess();if(done)done();return;}
+  var nextI=-1;
+  for(var i=0;i<pins.length;i++)if(!arrived[i]){nextI=i;break;}
+  if(nextI<0){speakVoice('No remaining pins');voiceSuccess();if(done)done();return;}
+  var nm=nextI===0?'Start':(PIN_TYPES[pins[nextI].type]||'Waypoint');
+  var distMi=haversineFt({lng:userLng,lat:userLat},pins[nextI])/5280;
+  var gain=nextI>0?segmentGainFt(pins[nextI-1],pins[nextI]):segmentGainFt({lng:userLng,lat:userLat},pins[0]);
+  speakVoice('Next: '+nm+'. Distance '+distMi.toFixed(2)+' miles. Climb about '+Math.round(gain)+' feet');
+  voiceSuccess();
+  if(done)done();
+}
+
+function runVoiceCommandChain(parts){
+  var i=0;
+  function step(){
+    if(i>=parts.length){syncVoicePillIdle();return;}
+    var p=parts[i++].trim();
+    if(!p){step();return;}
+    executeVoiceCommand(p,function(){setTimeout(step,650);});
+  }
+  step();
+}
+
+function executeVoiceCommand(raw,done){
+  var cmd=resolveVoiceCommandCanon(raw);
+  if(!cmd){if(done)done();return;}
+
+  function finishOk(){voiceSuccess();if(done)done();}
+  function finishFail(){voiceFailure();if(done)done();}
+
+  if(cmd==='continuous'){
+    voiceContinuous=true;
+    if(ensureVoiceRecognition()){
+      if(!voiceSessionActive){
+        voiceSessionActive=true;
+        updateVoiceBtn();
+        try{voiceRecognition.start();}catch(e){}
+      }
+    }else showVoiceFallback(true);
+    speakVoice('Continuous listening on. Say HUD sleep to stop.');
+    pulsePanelsCyan();
+    finishOk();
+    return;
+  }
+  if(cmd==='sleep'){
+    playBeep('sleep');
+    stopVoiceListening();
+    speakVoice('Voice session ended');
+    if(done)done();
+    return;
+  }
+
+  if(cmd==='status'){cmdStatusAsync(done);return;}
+  if(cmd==='time'){
+    var now=new Date();
+    var el=Date.now()-missionStartMs;
+    var hh=Math.floor(el/3600000),mm=Math.floor((el%3600000)/60000);
+    speakVoice('Local time '+formatTime12(now,true)+'. Mission elapsed '+hh+' hours, '+mm+' minutes.');
+    finishOk();return;
+  }
+  if(cmd==='weather'){cmdWeatherAsync(done);return;}
+  if(cmd==='elevation'){cmdElevationAsync(done);return;}
+  if(cmd==='corridor'){
+    var dFt=distPointToRouteFt({lng:userLng,lat:userLat});
+    var edge=Math.max(0,HALF_CORRIDOR_FT-dFt);
+    var sev=pins.length>=2?corridorSeverity():0;
+    var zn=['Clear','Near route','1500 feet band','1000 feet band','500 feet band','250 feet band','Corridor breach'];
+    speakVoice('About '+Math.round(edge)+' feet to corridor boundary. Zone '+zn[sev]+'.');
+    finishOk();return;
+  }
+  if(cmd==='distance to finish'){
+    if(!pins.length){speakVoice('No route');finishFail();return;}
+    var df=haversineFt({lng:userLng,lat:userLat},pins[pins.length-1])/5280;
+    speakVoice('Distance to finish about '+df.toFixed(2)+' miles');
+    finishOk();return;
+  }
+  if(cmd==='next pin'){cmdNextPinAsync(done);return;}
+  if(cmd==='reroute'){
+    speakVoice('Co-pilot suggests following your corridor toward the next waypoint. Avoid off-trail hazards when visibility drops.');
+    finishOk();return;
+  }
+  if(cmd==='center on me'){
+    if(map){
+      map.flyTo({center:[userLng,userLat],zoom:Math.max(map.getZoom(),14)});
+      speakVoice('Map centered on your position');
+      finishOk();
+    }else{speakVoice('Map not ready');finishFail();}
+    return;
+  }
+  if(cmd==='zoom in'){
+    if(map){map.zoomTo(map.getZoom()+1,{duration:350});speakVoice('Zoom in');finishOk();}
+    else{speakVoice('Map not ready');finishFail();}
+    return;
+  }
+  if(cmd==='zoom out'){
+    if(map){map.zoomTo(map.getZoom()-1,{duration:350});speakVoice('Zoom out');finishOk();}
+    else{speakVoice('Map not ready');finishFail();}
+    return;
+  }
+
+  if(cmd==='add pin here'){
+    addPin({lng:userLng,lat:userLat},pendingPinType);
+    speakVoice('Pin added at GPS location');
+    finishOk();return;
+  }
+  if(cmd==='delete last pin'){
+    deleteLastPinVoice();
+    speakVoice('Removed last waypoint');
+    finishOk();return;
+  }
+  if(cmd==='clear route'){
+    pendingClearRoute=true;
+    pendingClearUntil=Date.now()+15000;
+    speakVoice('Say CONFIRM to delete all pins.');
+    if(done)done();
+    syncVoicePillIdle();
+    return;
+  }
+  if(cmd==='confirm'&&pendingClearRoute&&Date.now()<pendingClearUntil){
+    doClearRoute();pendingClearRoute=false;speakVoice('Route cleared');finishOk();return;
+  }
+  if(cmd==='save route'){
+    if(pins.length<2){speakVoice('Need at least two pins to export');finishFail();return;}
+    exportGPX();
+    speakVoice('GPX save started');
+    finishOk();return;
+  }
+  if(cmd==='reverse route'){
+    if(reverseRoutePins()){speakVoice('Route reversed');finishOk();}
+    else syncVoicePillIdle();
+    return;
+  }
+
+  if(cmd==='night mode'){
+    document.documentElement.dataset.theme='red-night';
+    var bn=document.getElementById('btnNightOps');
+    if(bn)bn.classList.add('nightops-active');
+    speakVoice('Night mode active');
+    finishOk();return;
+  }
+  if(cmd==='low light'){
+    document.documentElement.dataset.brightness='low';
+    speakVoice('Low light');
+    finishOk();return;
+  }
+  if(cmd==='bright'){
+    document.documentElement.dataset.brightness='bright';
+    speakVoice('Full brightness');
+    finishOk();return;
+  }
+  if(cmd==='reset layout'){
+    if(confirm('Reset all panel positions?'))resetLayout();
+    else speakVoice('Reset cancelled');
+    syncVoicePillIdle();
+    if(done)done();
+    return;
+  }
+  if(cmd==='hide all'){collapseAllPanels();speakVoice('Panels collapsed');finishOk();return;}
+  if(cmd==='show all'){expandAllPanels();speakVoice('Panels expanded');finishOk();return;}
+
+  if(cmd==='emergency'){triggerSOS();finishOk();return;}
+  if(cmd==='where am i'){
+    speakVoice('Position '+userLat.toFixed(5)+', '+userLng.toFixed(5)+'. '+mockLandmark());
+    finishOk();return;
+  }
+  if(cmd==='breadcrumb'){dropBreadcrumbPin();speakVoice('Breadcrumb saved');finishOk();return;}
+  if(cmd==='help'){
+    speakVoice(voiceCommandsHelpSpokenText());
+    finishOk();return;
+  }
+
+  finishFail();
+}
+
+function handleVoiceTranscript(raw){
+  setVoicePillState('processing');
+  var t=(raw||'').trim();
+  if(!t){syncVoicePillIdle();return;}
+  var low=t.toLowerCase().replace(/[.,!?]/g,'').trim();
+
+  if(pendingClearRoute&&Date.now()<pendingClearUntil){
+    if(/\bconfirm\b/i.test(low)){
+      doClearRoute();pendingClearRoute=false;speakVoice('Route cleared');voiceSuccess();return;
+    }
+  }
+
+  if(voiceAwaitCommandUntil>Date.now()&&!low.startsWith('hud')){
+    if(/\bthen\b/.test(low))runVoiceCommandChain(low.split(/\s+then\s+/));
+    else executeVoiceCommand(low);
+    voiceAwaitCommandUntil=0;
+    return;
+  }
+
+  if(!low.startsWith('hud')){
+    syncVoicePillIdle();
+    return;
+  }
+
+  var rest=low.slice(3).trim();
+  if(!rest){
+    onVoiceWake();
+    setVoicePillState('waking');
+    return;
+  }
+
+  if(/\bthen\b/.test(rest)){
+    var segs=rest.split(/\s+then\s+/).map(function(s){return s.trim();}).filter(Boolean);
+    runVoiceCommandChain(segs);
+    return;
+  }
+
+  executeVoiceCommand(rest);
+}
+
+function loadMissionClock(){
+  try{
+    var v=localStorage.getItem(STORAGE_MISSION);
+    if(v){
+      var n=parseInt(v,10);
+      if(!Number.isNaN(n))missionStartMs=n;
+    }else{
+      safeStore(STORAGE_MISSION,String(missionStartMs));
+    }
+  }catch(e){}
+}
+
+function testLocalStorage(){
+  try{
+    var k='__elite_ls_probe__';
+    localStorage.setItem(k,'1');
+    localStorage.removeItem(k);
+    return true;
+  }catch(e){return false;}
+}
+
+function setPfRow(rowId,state){
+  var row=document.getElementById(rowId);
+  if(!row)return;
+  row.classList.remove('ok','bad','unk');
+  row.classList.add(state==='ok'?'ok':state==='bad'?'bad':'unk');
+  var icon=row.querySelector('.pf-icon');
+  if(icon)icon.textContent=state==='ok'?'✓':state==='bad'?'✗':'○';
+}
+
+function refreshPreflight(){
+  var tok=(document.getElementById('mapboxToken')&&document.getElementById('mapboxToken').value.trim())||'';
+  try{if(!tok)tok=localStorage.getItem(STORAGE_TOKEN)||'';}catch(e){}
+  setPfRow('pfToken',/^pk\./.test(tok)?'ok':'bad');
+  setPfRow('pfStorage',testLocalStorage()?'ok':'bad');
+  var touchDevice=('ontouchstart' in window)||(navigator.maxTouchPoints>0);
+  setPfRow('pfTouch',touchDevice?'ok':'unk');
+  setPfRow('pfVibrate',typeof navigator.vibrate==='function'?'ok':'unk');
+  setPfRow('pfSpeech',('speechSynthesis' in window)?'ok':'bad');
+  setPfRow('pfVoiceRec',speechRecognitionAvailable()?'ok':'bad');
+  if(screen.orientation&&typeof screen.orientation.lock==='function'){
+    setPfRow('pfOrient',orientationLocked?'ok':'unk');
+  }else setPfRow('pfOrient','bad');
+
+  if(!navigator.geolocation){
+    setPfRow('pfGps','bad');
+  }else if(navigator.permissions&&navigator.permissions.query){
+    navigator.permissions.query({name:'geolocation'}).then(function(r){
+      setPfRow('pfGps',r.state==='granted'?'ok':(r.state==='denied'?'bad':'unk'));
+      try{
+        r.onchange=function(){refreshPreflight();};
+      }catch(e){}
+    }).catch(function(){
+      setPfRow('pfGps','unk');
+    });
+  }else setPfRow('pfGps','unk');
+}
+
+function ripple(btn){
+  btn.classList.remove('ripple');
+  void btn.offsetWidth;
+  btn.classList.add('ripple');
+  setTimeout(function(){btn.classList.remove('ripple');},420);
+}
+
+function haversineFt(p,q){
+  var R=20902231;
+  var dLat=(q.lat-p.lat)*Math.PI/180;
+  var dLon=(q.lng-p.lng)*Math.PI/180;
+  var la=p.lat*Math.PI/180,lb=q.lat*Math.PI/180;
+  var h=Math.sin(dLat/2)*Math.sin(dLat/2)+Math.cos(la)*Math.cos(lb)*Math.sin(dLon/2)*Math.sin(dLon/2);
+  return 2*R*Math.asin(Math.min(1,Math.sqrt(Math.max(0,h))));
+}
+
+function projectXY(lat,lng,lat0){
+  var mPerDegLat=111320;
+  var mPerDegLng=111320*Math.cos(lat0*Math.PI/180);
+  return {x:(lng)*mPerDegLng,y:(lat)*mPerDegLat};
+}
+
+function distPointSegmentFt(p,a,b){
+  var lat0=(a.lat+b.lat+p.lat)/3;
+  var P=projectXY(p.lat,p.lng,lat0),A=projectXY(a.lat,a.lng,lat0),B=projectXY(b.lat,b.lng,lat0);
+  var abx=B.x-A.x,aby=B.y-A.y;
+  var apx=P.x-A.x,apy=P.y-A.y;
+  var t=Math.max(0,Math.min(1,(apx*abx+apy*aby)/Math.max(1e-9,(abx*abx+aby*aby)));
+  var px=A.x+abx*t,py=A.y+aby*t;
+  var dx=P.x-px,dy=P.y-py;
+  return Math.sqrt(dx*dx+dy*dy)*3.28084;
+}
+
+function distPointToRouteFt(pt){
+  if(pins.length<2)return 0;
+  var minD=1e18;
+  for(var i=0;i<pins.length-1;i++){
+    var d=distPointSegmentFt(pt,pins[i],pins[i+1]);
+    if(d<minD)minD=d;
+  }
+  return minD;
+}
+
+function segmentGainFt(c1,c2){
+  if(!map||typeof map.queryTerrainElevation!=='function')return 0;
+  var steps=5,prev=null,gain=0;
+  for(var i=0;i<=steps;i++){
+    var t=i/steps;
+    var lng=c1.lng+(c2.lng-c1.lng)*t;
+    var lat=c1.lat+(c2.lat-c1.lat)*t;
+    var e=null;
+    try{e=map.queryTerrainElevation({lng:lng,lat:lat});}catch(e){}
+    if(e!=null&&!Number.isNaN(e)){
+      if(prev!=null&&e>prev)gain+=(e-prev);
+      prev=e;
+    }
+  }
+  return gain*3.28084;
+}
+
+function buildCoords(){return pins.map(function(p){return [p.lng,p.lat];});}
+
+function syncRouteGeo(){
+  if(!map||!map.isStyleLoaded())return;
+  var coords=buildCoords();
+  var lineGeo={type:'Feature',properties:{},geometry:{type:'LineString',coordinates:coords.length>=2?coords:[]}};
+  var lab={type:'FeatureCollection',features:[]};
+  if(coords.length>=2){
+    for(var s=0;s<pins.length-1;s++){
+      var a=pins[s],b=pins[s+1];
+      var mi=haversineFt({lng:a.lng,lat:a.lat},{lng:b.lng,lat:b.lat})/5280;
+      var gf=segmentGainFt(a,b);
+      lab.features.push({
+        type:'Feature',
+        properties:{label:mi.toFixed(1)+' mi | +'+Math.round(gf)+' ft'},
+        geometry:{type:'Point',coordinates:[(a.lng+b.lng)/2,(a.lat+b.lat)/2]}
+      });
+    }
+  }
+  try{
+    map.getSource('route-line').setData(lineGeo);
+    map.getSource('seg-labels').setData(lab);
+  }catch(e){}
+}
+
+function makePinEl(pin,i){
+  var el=document.createElement('div');
+  el.style.width='38px';el.style.height='38px';el.style.borderRadius='50%';
+  el.style.display='flex';el.style.alignItems='center';el.style.justifyContent='center';
+  el.style.border='2px solid rgba(255,255,255,0.35)';
+  el.style.boxShadow='0 2px 10px rgba(0,0,0,0.5)';
+  el.style.cursor='pointer';
+  el.style.transform='translateZ(0)';
+  if(i===0){
+    el.style.background='linear-gradient(145deg,#00ff88,#009955)';
+    el.innerHTML='<span style="font-size:16px">🚩</span>';
+  }else if(i===pins.length-1&&pins.length>1){
+    el.style.background='#cc2233';
+    el.innerHTML='<span style="display:block;width:20px;height:20px;border-radius:4px;background:repeating-conic-gradient(#222 0% 25%,#fff 0% 50%) 50%/8px 8px"></span>';
+  }else{
+    el.style.background='rgba(15,22,28,0.95)';
+    if(pin.breadcrumb){
+      el.innerHTML='<span style="font-size:18px;line-height:1">◇</span>';
+      el.title='Breadcrumb';
+    }else el.textContent=PIN_TYPES[pin.type]||'📍';
+  }
+  if(arrived[i])el.style.opacity='0.42';
+  if(selectedPinIndex===i)el.style.boxShadow='0 0 0 3px #00ff88';
+  return el;
+}
+
+function rebuildMarkers(){
+  pinMarkers.forEach(function(m){try{m.remove();}catch(e){}});
+  pinMarkers=[];
+  if(!map)return;
+  pins.forEach(function(pin,i){
+    var el=makePinEl(pin,i);
+    var mk=new mapboxgl.Marker({element:el,draggable:isMiddle(i)})
+      .setLngLat([pin.lng,pin.lat])
+      .addTo(map);
+    if(isMiddle(i))el.style.cursor='grab';
+    mk.on('dragend',function(){
+      var ll=mk.getLngLat();
+      pin.lng=ll.lng;pin.lat=ll.lat;
+      syncRouteGeo();saveRouteNow();
+    });
+    el.addEventListener('click',function(e){
+      e.stopPropagation();
+      selectedPinIndex=i;
+      syncRouteGeo();renderPinList();
+    });
+    pinMarkers.push(mk);
+  });
+}
+
+function isMiddle(i){
+  return pins.length>2&&i>0&&i<pins.length-1;
+}
+
+function renderPinList(){
+  var h=document.getElementById('pinList');
+  if(!h)return;
+  h.innerHTML='';
+  pins.forEach(function(p,i){
+    var row=document.createElement('div');
+    row.className='pin-list-row'+(selectedPinIndex===i?' selected':'')+(arrived[i]?' arrived':'');
+    row.innerHTML='<span>'+(i===0?'START':(i===pins.length-1&&pins.length>1)?'FIN':(PIN_TYPES[p.type]||'?'))+'</span><span style="flex:1">'+
+      p.lat.toFixed(4)+','+p.lng.toFixed(4)+'</span>';
+    row.onclick=function(){selectedPinIndex=i;renderPinList();rebuildMarkers();};
+    h.appendChild(row);
+  });
+}
+
+function renderSegments(){
+  var h=document.getElementById('segmentList');
+  if(!h)return;
+  h.innerHTML='';
+  for(var s=0;s<pins.length-1;s++){
+    var a=pins[s],b=pins[s+1];
+    var mi=haversineFt({lng:a.lng,lat:a.lat},{lng:b.lng,lat:b.lat})/5280;
+    var gf=segmentGainFt(a,b);
+    var d=document.createElement('div');
+    d.className='segment-line';
+    d.textContent='Leg '+(s+1)+': '+mi.toFixed(1)+' mi | +'+Math.round(gf)+' ft';
+    h.appendChild(d);
+  }
+}
+
+function updateTotals(){
+  var b=document.getElementById('totalsBody');
+  if(!b)return;
+  if(pins.length<2){b.textContent='Add at least two pins.';return;}
+  var tMi=0,tG=0;
+  for(var s=0;s<pins.length-1;s++){
+    var a=pins[s],b2=pins[s+1];
+    tMi+=haversineFt({lng:a.lng,lat:a.lat},{lng:b2.lng,lat:b2.lat})/5280;
+    tG+=segmentGainFt(a,b2);
+  }
+  b.innerHTML='Distance: '+tMi.toFixed(2)+' mi<br>Elev gain (est): +'+Math.round(tG)+' ft<br>Segments: '+(pins.length-1);
+}
+
+function updateNav(){
+  var el=document.getElementById('navReadout');
+  if(!el)return;
+  if(!pins.length){el.innerHTML='<strong class="data">Next:</strong> —<br><strong class="data">Finish:</strong> —';return;}
+  var u={lng:userLng,lat:userLat};
+  var nextI=-1;
+  for(var i=0;i<pins.length;i++)if(!arrived[i]){nextI=i;break;}
+  var nextTxt='—',finTxt='—';
+  if(nextI>=0){
+    var dn=haversineFt(u,pins[nextI])/5280;
+    nextTxt=dn.toFixed(2)+' mi ('+Math.round(dn*5280)+' ft)';
+  }
+  if(pins.length){
+    var df=haversineFt(u,pins[pins.length-1])/5280;
+    finTxt=df.toFixed(2)+' mi ('+Math.round(df*5280)+' ft)';
+  }
+  el.innerHTML='<strong class="data">Next:</strong> '+nextTxt+'<br><strong class="data">Finish:</strong> '+finTxt;
+}
+
+function checkArrival(){
+  var u={lng:userLng,lat:userLat};
+  for(var i=0;i<pins.length;i++){
+    if(haversineFt(u,pins[i])<=ARRIVAL_FT)arrived[i]=true;
+  }
+}
+
+function corridorSeverity(){
+  if(pins.length<2)return 0;
+  var dFt=distPointToRouteFt({lng:userLng,lat:userLat});
+  if(dFt>HALF_CORRIDOR_FT)return 6;
+  var edge=HALF_CORRIDOR_FT-dFt;
+  if(edge<=250)return 5;
+  if(edge<=500)return 4;
+  if(edge<=1000)return 3;
+  if(edge<=1500)return 2;
+  return dFt<=EDGE_NEAR_FT?1:0;
+}
+
+function updateAlertsUI(){
+  var dFt=distPointToRouteFt({lng:userLng,lat:userLat});
+  var sev=pins.length>=2?corridorSeverity():0;
+  var z=document.getElementById('alertZone');
+  var dr=document.getElementById('distToRoute');
+  if(dr)dr.textContent='Dist to path center: '+Math.round(dFt)+' ft';
+  var names=['Clear','Near route (≤500 ft · fast poll)','1500 ft to boundary','1000 ft to boundary','500 ft to boundary','250 ft to boundary','BREACH'];
+  if(z)z.textContent='Zone: '+(pins.length<2?'—':names[sev]);
+  var ban=document.getElementById('routeBanner');
+  if(ban)ban.classList.toggle('show',sev===6);
+  if(sev===6){
+    if(!breachToastShown){
+      toast('Corridor breach — '+Math.round(dFt)+' ft from route');
+      speak('Corridor breach. You have left the safe corridor.');
+      breachToastShown=true;
+    }
+  }else breachToastShown=false;
+  if(sev>lastSeverity&&sev>=1)vibrateHaptic(100);
+  lastSeverity=sev;
+}
+
+function addPin(lngLat,type){
+  var beforePinCount=pins.length;
+  pins.push({lng:lngLat.lng,lat:lngLat.lat,type:type||pendingPinType});
+  arrived.push(false);
+  if(beforePinCount===1)onSecondPinAdded();
+  syncRouteGeo();rebuildMarkers();renderPinList();renderSegments();updateTotals();updateNav();saveRouteNow();
+  var last=pinMarkers[pinMarkers.length-1];
+  if(last){
+    var el=last.getElement();
+    el.classList.add('pin-bounce');
+    setTimeout(function(){try{el.classList.remove('pin-bounce');}catch(e){}},600);
+  }
+  vibrateHaptic(50);
+}
+
+function deleteSelected(){
+  if(selectedPinIndex<0||pins.length<=2){toast('Select a middle pin or need 2+ pins');return;}
+  if(selectedPinIndex===0||selectedPinIndex===pins.length-1){toast('Cannot delete START/FINISH');return;}
+  pins.splice(selectedPinIndex,1);
+  arrived.splice(selectedPinIndex,1);
+  selectedPinIndex=-1;
+  syncRouteGeo();rebuildMarkers();renderPinList();renderSegments();updateTotals();updateNav();saveRouteNow();
+}
+
+function saveRouteNow(){
+  try{
+    safeStore(STORAGE_ROUTE,JSON.stringify({pins:pins,arrived:arrived,v:1}));
+  }catch(e){}
+}
+
+function loadRoute(){
+  try{
+    var r=localStorage.getItem(STORAGE_ROUTE);
+    if(!r)return;
+    var o=JSON.parse(r);
+    if(o.pins){pins=o.pins;arrived=o.arrived||pins.map(function(){return false;});}
+  }catch(e){}
+}
+
+function exportGPX(){
+  if(pins.length<2){toast('Need at least 2 pins');return;}
+  var wpts=pins.map(function(p,i){
+    var name=i===0?'START':(i===pins.length-1?'FINISH':'WAYPOINT');
+    return '<wpt lat="'+p.lat+'" lon="'+p.lng+'"><name>'+name+'</name><type>'+(p.type||'')+'</type></wpt>';
+  }).join('');
+  var trkseg=pins.map(function(p){return '<trkpt lat="'+p.lat+'" lon="'+p.lng+'"></trkpt>';}).join('');
+  var xml='<?xml version="1.0" encoding="UTF-8"?><gpx version="1.1" creator="Titanium HUD Elite v2" xmlns="http://www.topografix.com/GPX/1/1"><trk><name>Titanium Route</name><trkseg>'+trkseg+'</trkseg></trk>'+wpts+'</gpx>';
+  var blob=new Blob([xml],{type:'application/gpx+xml'});
+  var a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download='titanium-route.gpx';
+  a.click();
+  setTimeout(function(){URL.revokeObjectURL(a.href);},2000);
+  toast('GPX exported');
+}
+
+function importGPXFile(file){
+  var reader=new FileReader();
+  reader.onload=function(){
+    try{
+      var txt=reader.result;
+      var doc=new DOMParser().parseFromString(txt,'text/xml');
+      var pts=doc.querySelectorAll('trkpt, wpt');
+      pins=[];arrived=[];
+      pts.forEach(function(n){
+        var lat=parseFloat(n.getAttribute('lat')||n.getAttribute('latitude'));
+        var lon=parseFloat(n.getAttribute('lon')||n.getAttribute('longitude'));
+        if(!Number.isNaN(lat)&&!Number.isNaN(lon))
+          pins.push({lng:lon,lat:lat,type:'water'});
+      });
+      arrived=pins.map(function(){return false;});
+      if(pins.length<2){
+        toast('GPX: need 2+ points');
+        clearRouteEmergencySelection();
+        return;
+      }
+      clearRouteEmergencySelection();
+      syncRouteGeo();rebuildMarkers();renderPinList();renderSegments();updateTotals();updateNav();saveRouteNow();
+      if(map&&pins.length){
+        var b=new mapboxgl.LngLatBounds();
+        pins.forEach(function(p){b.extend([p.lng,p.lat]);});
+        map.fitBounds(b,{padding:48,maxZoom:14});
+      }
+      toast('Imported '+pins.length+' points');
+    }catch(e){toast('GPX import failed');}
+  };
+  reader.readAsText(file);
+}
+
+function applyManual(){
+  var la=parseFloat(document.getElementById('manualLat').value);
+  var lo=parseFloat(document.getElementById('manualLon').value);
+  if(Number.isNaN(la)||Number.isNaN(lo)){toast('Invalid coordinates');return;}
+  userLat=la;userLng=lo;
+  if(gpsMarker)gpsMarker.setLngLat([userLng,userLat]);
+  if(map)map.flyTo({center:[userLng,userLat],zoom:13});
+  document.getElementById('modalManual').classList.remove('show');
+  onUserMoved();
+}
+
+function onUserMoved(){
+  checkArrival();
+  var arrBefore=arrived.slice();
+  updateNav();
+  updateAlertsUI();
+  var changed=arrBefore.some(function(v,i){return v!==arrived[i];});
+  if(changed){rebuildMarkers();renderPinList();}
+  updatePollMs();
+}
+
+function distToRouteMi(){return distPointToRouteFt({lng:userLng,lat:userLat})/5280;}
+
+function schedulePoll(){
+  clearInterval(pollTimer);
+  pollTimer=setInterval(fetchGPS,currentPollMs);
+}
+
+function updatePollMs(){
+  var ms=POLL_MS_NORM;
+  if(pins.length>=2){
+    var dFt=distPointToRouteFt({lng:userLng,lat:userLat});
+    if(dFt<=HALF_CORRIDOR_FT){
+      var edge=HALF_CORRIDOR_FT-dFt;
+      if(edge<=EDGE_NEAR_FT&&edge>=0)ms=POLL_MS_EDGE;
+    }
+  }
+  if(ms!==currentPollMs){currentPollMs=ms;schedulePoll();}
+  var pc=document.getElementById('pollCadence');
+  if(pc)pc.textContent='Poll: '+currentPollMs/1000+' s';
+}
+
+function fetchGPS(){
+  if(!navigator.geolocation){
+    document.getElementById('lastPollDisplay').textContent='No GPS — use manual';
+    document.getElementById('modalManual').classList.add('show');
+    return;
+  }
+  navigator.geolocation.getCurrentPosition(
+    function(pos){
+      userLat=pos.coords.latitude;userLng=pos.coords.longitude;
+      gpsAccuracyM=typeof pos.coords.accuracy==='number'&&!Number.isNaN(pos.coords.accuracy)?pos.coords.accuracy:null;
+      document.getElementById('lastPollDisplay').textContent='Last poll: '+formatTime12(new Date(),false);
+      document.getElementById('coordStatus').textContent=userLat.toFixed(5)+' · '+userLng.toFixed(5);
+      if(map&&gpsMarker){gpsMarker.setLngLat([userLng,userLat]);}
+      setPfRow('pfGps','ok');
+      onUserMoved();
+    },
+    function(){
+      document.getElementById('lastPollDisplay').textContent='GPS error — manual fallback';
+      setPfRow('pfGps','bad');
+      document.getElementById('modalManual').classList.add('show');
+    },
+    {enableHighAccuracy:true,timeout:20000,maximumAge:0}
+  );
+}
+
+function addMapLayers(){
+  if(map.getSource('route-line'))return;
+  map.addSource('route-line',{type:'geojson',lineMetrics:true,data:{type:'Feature',geometry:{type:'LineString',coordinates:[]}}});
+  map.addLayer({
+    id:'route-line-layer',type:'line',source:'route-line',
+    layout:{'line-join':'round','line-cap':'round'},
+    paint:{
+      'line-width':5,
+      'line-opacity':0.95,
+      'line-gradient':['interpolate',['linear'],['line-progress'],0,'#66ffff',1,'#0088aa'],
+      'line-dasharray',[0.8,1.6]
+    }
+  });
+  map.addSource('seg-labels',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
+  map.addLayer({
+    id:'seg-sym',type:'symbol',source:'seg-labels',
+    layout:{'text-field':['get','label'],'text-size':12,'text-offset':[0,1.35]},
+    paint:{'text-color':'#a8ffe0','text-halo-color':'#000','text-halo-width':2.2}
+  });
+  var off=0;
+  if(dashAnimTimer)clearInterval(dashAnimTimer);
+  dashAnimTimer=setInterval(function(){
+    if(!map||!map.getLayer('route-line-layer'))return;
+    off=(off+0.15)%8;
+    try{map.setPaintProperty('route-line-layer','line-dasharray',[0.8+off*0.05,1.6]);}catch(e){}
+  },120);
+}
+
+function addTerrain(){
+  try{
+    if(map.getSource('mapbox-dem')){
+      map.setTerrain({source:'mapbox-dem',exaggeration:1});
+      return;
+    }
+    map.addSource('mapbox-dem',{type:'raster-dem',url:'mapbox://mapbox.mapbox-terrain-dem-v1',tileSize:512,maxzoom:14});
+    map.setTerrain({source:'mapbox-dem',exaggeration:1});
+  }catch(e){}
+}
+
+function initMap(useFallback){
+  if(!useFallback)mapStyleFallbackTried=false;
+  var tok=document.getElementById('mapboxToken').value.trim()||localStorage.getItem(STORAGE_TOKEN)||'';
+  if(!useFallback&&(!tok||tok.indexOf('pk.')!==0)){
+    document.getElementById('map').innerHTML='<div style="display:flex;height:400px;align-items:center;justify-content:center;background:#111;color:#e0e0e0;">Enter Mapbox pk token</div>';
+    return;
+  }
+  if(map){try{map.remove();}catch(e){}map=null;gpsMarker=null;}
+  document.getElementById('map').innerHTML='';
+  if(useFallback){
+    map=new mapboxgl.Map({container:'map',style:osmFallbackStyle,center:[userLng,userLat],zoom:12});
+    map.isOSM=true;
+    toast('Using OpenStreetMap raster fallback');
+  }else{
+    mapboxgl.accessToken=tok;
+    map=new mapboxgl.Map({container:'map',style:'mapbox://styles/'+layerStyles[currentLayer],center:[userLng,userLat],zoom:12});
+    map.isOSM=false;
+  }
+  map.addControl(new mapboxgl.NavigationControl(),'top-right');
+  map.on('error',function(e){
+    console.warn(e);
+    if(!useFallback&&!mapStyleFallbackTried){
+      mapStyleFallbackTried=true;
+      initMap(true);
+    }
+  });
+  map.on('load',function(){
+    addTerrain();
+    addMapLayers();
+    syncRouteGeo();
+    rebuildMarkers();
+    if(!gpsMarker){
+      gpsMarker=new mapboxgl.Marker({color:'#ff4466'}).setLngLat([userLng,userLat]).addTo(map);
+    }
+    wireMap();
+    setTimeout(function(){try{map.resize();addTerrain();syncRouteGeo();}catch(e){}},400);
+  });
+}
+
+function wireMap(){
+  if(!map)return;
+  function clearLP(){if(longPressTimer){clearTimeout(longPressTimer);longPressTimer=null;}lpStart=null;}
+  map.on('click',function(e){
+    if(Date.now()<suppressMouseUntil)return;
+    addPin(e.lngLat,pendingPinType);
+    toast('Pin added');
+  });
+  map.on('contextmenu',function(e){e.preventDefault();addPin(e.lngLat,pendingPinType);toast('Pin added');});
+  function beginLP(e){
+    if(e.originalEvent&&e.originalEvent.button!=null&&e.originalEvent.button!==0)return;
+    clearLP();
+    lpStart={lngLat:e.lngLat,pt:e.point};
+    longPressTimer=setTimeout(function(){
+      longPressTimer=null;
+      if(lpStart)addPin(lpStart.lngLat,pendingPinType);
+      toast('Pin added (hold)');
+    },LONG_PRESS_MS);
+  }
+  map.on('touchstart',function(e){suppressMouseUntil=Date.now()+700;touchGesture=true;beginLP(e);});
+  map.on('mousedown',function(e){if(Date.now()<suppressMouseUntil)return;beginLP(e);});
+  map.on('mousemove touchmove',function(e){
+    if(!lpStart||!longPressTimer)return;
+    var dx=e.point.x-lpStart.pt.x,dy=e.point.y-lpStart.pt.y;
+    if(Math.hypot(dx,dy)>MOVE_SLACK_PX)clearLP();
+  });
+  map.on('mouseup touchend touchcancel mouseout',clearLP);
+}
+
+function snapVal(n,g){return Math.round(n/g)*g;}
+var SNAP=20;
+
+function loadLayout(){
+  try{
+    var raw=localStorage.getItem(STORAGE_LAYOUT);
+    if(!raw)return;
+    var o=JSON.parse(raw);
+    if(!o.panels)return;
+    Object.keys(o.panels).forEach(function(id){
+      var el=document.querySelector('[data-panel-id="'+id+'"]');
+      if(!el||!o.panels[id])return;
+      var p=o.panels[id];
+      if(typeof p.left==='number')el.style.left=p.left+'px';
+      if(typeof p.top==='number')el.style.top=p.top+'px';
+      if(typeof p.width==='number')el.style.width=p.width+'px';
+      if(p.collapsed)el.classList.add('collapsed');
+      if(typeof p.z==='number')el.style.zIndex=p.z;
+    });
+  }catch(e){}
+}
+
+function saveLayout(){
+  var panels={};
+  document.querySelectorAll('.elite-panel[data-panel-id]').forEach(function(el){
+    var id=el.dataset.panelId;
+    panels[id]={
+      left:parseFloat(el.style.left)||el.offsetLeft,
+      top:parseFloat(el.style.top)||el.offsetTop,
+      width:el.offsetWidth,
+      collapsed:el.classList.contains('collapsed'),
+      z:parseInt(el.style.zIndex,10)||800
+    };
+  });
+  safeStore(STORAGE_LAYOUT,JSON.stringify({v:1,panels:panels}));
+}
+
+function resetLayout(){
+  localStorage.removeItem(STORAGE_LAYOUT);
+  location.reload();
+}
+
+function syncPanelDockButton(panel,dock){
+  if(!dock)return;
+  var c=panel.classList.contains('collapsed');
+  dock.setAttribute('aria-expanded',c?'false':'true');
+  dock.setAttribute('aria-label',c?'Expand panel':'Collapse panel to sidebar');
+  dock.title=c?'Expand panel':'Collapse panel to sidebar';
+  dock.textContent=c?'+':'−';
+}
+
+function setupPanels(){
+  var zTop=0;
+  var dragPanel=null;
+  var dragOff={dx:0,dy:0};
+  document.querySelectorAll('.elite-panel').forEach(function(panel){
+    var head=panel.querySelector('.elite-head');
+    if(!head)return;
+    var dock=head.querySelector('.panel-dock');
+    if(!dock){
+      dock=document.createElement('button');
+      dock.type='button';
+      dock.className='panel-dock';
+      dock.setAttribute('data-no-drag','true');
+      head.insertBefore(dock,head.firstChild);
+      dock.addEventListener('click',function(e){
+        e.stopPropagation();
+        e.preventDefault();
+        panel.classList.toggle('collapsed');
+        syncPanelDockButton(panel,dock);
+        saveLayout();
+        if(map)try{map.resize();}catch(err){}
+      });
+      syncPanelDockButton(panel,dock);
+    }
+    head.addEventListener('dblclick',function(e){
+      if(e.target.closest('button'))return;
+      panel.classList.toggle('collapsed');
+      syncPanelDockButton(panel,dock);
+      saveLayout();
+      if(map)try{map.resize();}catch(err){}
+    });
+    head.addEventListener('pointerdown',function(e){
+      if(e.button!==0)return;
+      if(e.target.closest('button'))return;
+      dragPanel=panel;
+      dragPanel.classList.add('dragging');
+      dragPanel.style.zIndex=String(1000+(++zTop));
+      dragOff.dx=e.clientX-panel.offsetLeft;
+      dragOff.dy=e.clientY-panel.offsetTop;
+      e.preventDefault();
+    });
+    var swipeTrack=null;
+    head.addEventListener('touchstart',function(e){
+      if(e.target.closest('button'))return;
+      swipeTrack={x:e.touches[0].clientX,y:e.touches[0].clientY};
+    },{passive:true});
+    head.addEventListener('touchend',function(e){
+      if(!swipeTrack||panel.classList.contains('collapsed')){swipeTrack=null;return;}
+      var t=e.changedTouches[0];
+      var dx=t.clientX-swipeTrack.x,dy=t.clientY-swipeTrack.y;
+      swipeTrack=null;
+      if(dx>70&&Math.abs(dy)<75&&t.clientX>window.innerWidth*0.4){
+        panel.classList.add('collapsed');
+        syncPanelDockButton(panel,dock);
+        saveLayout();
+        if(map&&panel.dataset.panelId==='map')try{map.resize();}catch(err){}
+        toast('Panel docked — swipe header right or tap −');
+      }
+    },{passive:true});
+  });
+  window.addEventListener('pointermove',function(e){
+    if(!dragPanel)return;
+    var nx=e.clientX-dragOff.dx,ny=e.clientY-dragOff.dy;
+    nx=Math.max(8,Math.min(nx,window.innerWidth-dragPanel.offsetWidth-8));
+    ny=Math.max(72,Math.min(ny,window.innerHeight-48));
+    try{
+      var prefs=JSON.parse(localStorage.getItem(STORAGE_PREFS)||'{}');
+      if(prefs.snap){nx=snapVal(nx,SNAP);ny=snapVal(ny,SNAP);}
+    }catch(err){}
+    dragPanel.style.left=nx+'px';
+    dragPanel.style.top=ny+'px';
+    dragPanel.style.right='auto';
+  });
+  window.addEventListener('pointerup',function(){
+    if(!dragPanel)return;
+    var pid=dragPanel.dataset.panelId;
+    dragPanel.classList.remove('dragging');
+    dragPanel=null;
+    saveLayout();
+    if(pid==='map'&&map)try{map.resize();}catch(err){}
+  });
+}
+
+function loadPrefs(){
+  try{
+    var p=JSON.parse(localStorage.getItem(STORAGE_PREFS)||'{}');
+    document.getElementById('snapToggle').checked=!!p.snap;
+    if(document.getElementById('voiceToggle'))
+      document.getElementById('voiceToggle').checked=p.voice!==false;
+    if(document.getElementById('voiceTacticalToggle'))
+      document.getElementById('voiceTacticalToggle').checked=!!p.voiceTactical;
+    if(document.getElementById('confirmBeepToggle'))
+      document.getElementById('confirmBeepToggle').checked=p.confirmBeep!==false;
+    if(document.getElementById('noiseFilterToggle'))
+      document.getElementById('noiseFilterToggle').checked=p.noiseFilter!==false;
+    if(document.getElementById('voiceRateSelect')){
+      var r=String(p.voiceRate!=null?p.voiceRate:'1');
+      if(document.getElementById('voiceRateSelect').querySelector('option[value="'+r+'"]'))
+        document.getElementById('voiceRateSelect').value=r;
+    }
+    if(document.getElementById('supabaseUrl'))
+      document.getElementById('supabaseUrl').value=p.supabaseUrl||'';
+    if(document.getElementById('supabaseAnon'))
+      document.getElementById('supabaseAnon').value=p.supabaseAnon||'';
+    if(document.getElementById('heartbeatFnUrl'))
+      document.getElementById('heartbeatFnUrl').value=p.heartbeatFnUrl||'';
+    if(document.getElementById('emergencyNotifyUrl'))
+      document.getElementById('emergencyNotifyUrl').value=p.emergencyNotifyUrl||'';
+    if(document.getElementById('deadmanAnonOnly'))
+      document.getElementById('deadmanAnonOnly').checked=!!p.deadmanAnonOnly;
+  }catch(e){}
+}
+
+function savePrefs(){
+  var p={};
+  try{p=JSON.parse(localStorage.getItem(STORAGE_PREFS)||'{}');}catch(e){}
+  p.snap=document.getElementById('snapToggle').checked;
+  p.voice=document.getElementById('voiceToggle').checked;
+  p.voiceTactical=!!(document.getElementById('voiceTacticalToggle')&&document.getElementById('voiceTacticalToggle').checked);
+  p.confirmBeep=!document.getElementById('confirmBeepToggle')||document.getElementById('confirmBeepToggle').checked;
+  p.noiseFilter=!document.getElementById('noiseFilterToggle')||document.getElementById('noiseFilterToggle').checked;
+  p.voiceRate=document.getElementById('voiceRateSelect')?document.getElementById('voiceRateSelect').value:'1';
+  p.supabaseUrl=document.getElementById('supabaseUrl')?document.getElementById('supabaseUrl').value.trim():'';
+  p.supabaseAnon=document.getElementById('supabaseAnon')?document.getElementById('supabaseAnon').value.trim():'';
+  p.heartbeatFnUrl=document.getElementById('heartbeatFnUrl')?document.getElementById('heartbeatFnUrl').value.trim():'';
+  p.emergencyNotifyUrl=document.getElementById('emergencyNotifyUrl')?document.getElementById('emergencyNotifyUrl').value.trim():'';
+  p.deadmanAnonOnly=!!(document.getElementById('deadmanAnonOnly')&&document.getElementById('deadmanAnonOnly').checked);
+  safeStore(STORAGE_PREFS,JSON.stringify(p));
+}
+
+document.getElementById('btnLowLight').onclick=function(){
+  ripple(this);
+  document.documentElement.dataset.brightness='low';
+};
+document.getElementById('btnBright').onclick=function(){
+  ripple(this);
+  document.documentElement.dataset.brightness='bright';
+};
+document.getElementById('btnNightOps').onclick=function(){
+  ripple(this);
+  var on=document.documentElement.dataset.theme==='red-night';
+  document.documentElement.dataset.theme=on?'default':'red-night';
+  this.classList.toggle('nightops-active',!on);
+};
+
+['btnWater','btnCamp','btnRest'].forEach(function(id){
+  document.getElementById(id).onclick=function(){
+    ripple(this);
+    pendingPinType=this.getAttribute('data-ptype');
+    document.querySelectorAll('[data-ptype]').forEach(function(b){b.classList.remove('pending-type');});
+    this.classList.add('pending-type');
+    var label=pendingPinType==='rest'?'rest stop':pendingPinType;
+    toast('Next pin: '+label);
+  };
+});
+document.getElementById('btnWater').classList.add('pending-type');
+
+document.getElementById('btnDelPin').onclick=function(){ripple(this);deleteSelected();};
+document.getElementById('btnRecenter').onclick=function(){
+  ripple(this);
+  if(map)map.flyTo({center:[userLng,userLat],zoom:14});
+};
+document.getElementById('btnSaveGpx').onclick=function(){ripple(this);exportGPX();};
+document.getElementById('btnImportGpx').onclick=function(){ripple(this);document.getElementById('gpxFile').click();};
+document.getElementById('gpxFile').onchange=function(){
+  var f=this.files&&this.files[0];
+  if(f)importGPXFile(f);
+  this.value='';
+};
+document.getElementById('btnClearRoute').onclick=function(){ripple(this);doClearRoute();};
+document.getElementById('btnResetLayout').onclick=function(){ripple(this);if(confirm('Reset all panel positions?'))resetLayout();};
+document.getElementById('btnSettings').onclick=function(){ripple(this);document.getElementById('modalSettings').classList.add('show');};
+document.getElementById('settingsClose').onclick=function(){
+  savePrefs();
+  supabaseClient=null;
+  supabaseClientCacheKey='';
+  authListenerBound=false;
+  document.getElementById('modalSettings').classList.remove('show');
+};
+document.getElementById('btnAccount').onclick=function(){
+  ripple(this);
+  openAuthModal();
+};
+document.getElementById('authModalClose').onclick=function(){closeAuthModal();};
+document.getElementById('modalAuth').addEventListener('click',function(e){
+  if(e.target===document.getElementById('modalAuth'))closeAuthModal();
+});
+document.getElementById('authTabLogin').onclick=function(){
+  ripple(this);
+  document.getElementById('authPanelLogin').style.display='block';
+  document.getElementById('authPanelSignup').style.display='none';
+};
+document.getElementById('authTabSignup').onclick=function(){
+  ripple(this);
+  document.getElementById('authPanelLogin').style.display='none';
+  document.getElementById('authPanelSignup').style.display='block';
+};
+document.getElementById('authBtnLogin').onclick=async function(){
+  ripple(this);
+  var em=document.getElementById('authLoginEmail').value.trim();
+  var pw=document.getElementById('authLoginPassword').value;
+  if(!em||!pw){showAuthMessage('Enter email and password.','error');return;}
+  supabaseClient=null;
+  supabaseClientCacheKey='';
+  await signInAuth(em,pw);
+};
+document.getElementById('authBtnSignup').onclick=async function(){
+  ripple(this);
+  var name=document.getElementById('authSignupName').value.trim();
+  var em=document.getElementById('authSignupEmail').value.trim();
+  var pw=document.getElementById('authSignupPassword').value;
+  if(!em||!pw){showAuthMessage('Enter email and password.','error');return;}
+  supabaseClient=null;
+  supabaseClientCacheKey='';
+  await signUpAuth(em,pw,name);
+};
+document.getElementById('authSaveNameBtn').onclick=function(){
+  ripple(this);
+  var v=document.getElementById('authEditNameInput').value;
+  void updateAuthDisplayName(v);
+};
+document.getElementById('authSignOutBtn').onclick=function(){
+  ripple(this);
+  void signOutAuth();
+};
+document.getElementById('snapToggle').onchange=savePrefs;
+document.getElementById('voiceToggle').onchange=savePrefs;
+if(document.getElementById('voiceTacticalToggle'))document.getElementById('voiceTacticalToggle').onchange=savePrefs;
+if(document.getElementById('confirmBeepToggle'))document.getElementById('confirmBeepToggle').onchange=savePrefs;
+if(document.getElementById('noiseFilterToggle'))document.getElementById('noiseFilterToggle').onchange=savePrefs;
+if(document.getElementById('voiceRateSelect'))document.getElementById('voiceRateSelect').onchange=savePrefs;
+if(document.getElementById('deadmanAnonOnly'))document.getElementById('deadmanAnonOnly').onchange=savePrefs;
+if(document.getElementById('ecAddBtn'))document.getElementById('ecAddBtn').onclick=function(){ripple(this);addEmergencyContactFromForm();};
+if(document.getElementById('ecImportBtn'))document.getElementById('ecImportBtn').onclick=function(){ripple(this);importEmergencyFromSelect();};
+var ecPillsHost=document.getElementById('ecRoutePills');
+if(ecPillsHost)ecPillsHost.addEventListener('click',function(e){
+  var t=e.target.closest('[data-ec-remove]');
+  if(!t)return;
+  removeRouteEmergencyContact(t.getAttribute('data-ec-remove'));
+});
+document.getElementById('btnTestVoice').onclick=function(){
+  ripple(this);
+  speakVoice('Titanium HUD voice check. Speech synthesis is working.');
+  toast('Voice test queued');
+};
+
+document.getElementById('btnPreflightPanel').onclick=function(){
+  ripple(this);
+  var p=document.getElementById('panelPreflight');
+  if(p)p.scrollIntoView({behavior:'smooth',block:'nearest'});
+};
+document.getElementById('btnVoice').onclick=function(){
+  ripple(this);
+  ensureAudioCtx();
+  if(voiceSessionActive||voiceContinuous){
+    playBeep('sleep');
+    stopVoiceListening();
+    speakVoice('Voice off');
+    showVoiceFallback(false);
+    return;
+  }
+  if(!ensureVoiceRecognition()){
+    showVoiceFallback(true);
+    toast('Type commands: HUD …');
+    syncVoicePillIdle();
+    return;
+  }
+  startVoiceListening();
+  toast('Voice armed — say HUD, then a command');
+};
+document.getElementById('voiceIndicatorPill').onclick=function(){
+  document.getElementById('btnVoice').click();
+};
+document.getElementById('voiceTypeSend').onclick=function(){
+  var inp=document.getElementById('voiceTypeInput');
+  if(inp&&inp.value)handleVoiceTranscript(inp.value);
+  if(inp)inp.value='';
+};
+document.getElementById('voiceTypeInput').onkeydown=function(e){
+  if(e.key==='Enter')document.getElementById('voiceTypeSend').click();
+};
+document.getElementById('voiceFallbackClose').onclick=function(){
+  showVoiceFallback(false);
+};
+document.getElementById('btnPreflightRefresh').onclick=function(){
+  ripple(this);
+  refreshPreflight();
+};
+document.getElementById('btnLockLandscape').onclick=function(){
+  ripple(this);
+  var el=document.documentElement;
+  var req=el.requestFullscreen||el.webkitRequestFullscreen||el.msRequestFullscreen;
+  var p=req?Promise.resolve(req.call(el)).catch(function(){return Promise.resolve();}):Promise.resolve();
+  p.then(function(){
+    if(screen.orientation&&typeof screen.orientation.lock==='function')
+      return screen.orientation.lock('landscape-primary');
+  }).then(function(){
+    orientationLocked=true;
+    toast('Landscape lock active');
+    refreshPreflight();
+  }).catch(function(err){
+    toast('Orientation: '+(err&&err.message?err.message:'not supported or denied'));
+  });
+};
+
+document.getElementById('applyToken').onclick=function(){
+  var t=document.getElementById('mapboxToken').value.trim();
+  if(t)safeStore(STORAGE_TOKEN,t);
+  initMap(false);
+  refreshPreflight();
+};
+document.getElementById('pollNow').onclick=fetchGPS;
+document.getElementById('btnManualLoc').onclick=function(){document.getElementById('modalManual').classList.add('show');};
+document.getElementById('manualApply').onclick=applyManual;
+document.getElementById('manualCancel').onclick=function(){document.getElementById('modalManual').classList.remove('show');};
+
+document.querySelectorAll('.layer-controls .map-layer-btn').forEach(function(btn){
+  btn.addEventListener('click',function(){
+    document.querySelectorAll('.layer-controls .map-layer-btn').forEach(function(b){b.classList.remove('active');});
+    btn.classList.add('active');
+    currentLayer=btn.dataset.layer||'hybrid';
+    if(map&&!map.isOSM){
+      try{map.setStyle('mapbox://styles/'+layerStyles[currentLayer]);}catch(e){toast('Layer switch failed');}
+      map.once('load',function(){
+        addTerrain();addMapLayers();syncRouteGeo();rebuildMarkers();
+        try{
+          if(!gpsMarker)gpsMarker=new mapboxgl.Marker({color:'#ff4466'}).setLngLat([userLng,userLat]).addTo(map);
+          else gpsMarker.setLngLat([userLng,userLat]).addTo(map);
+        }catch(err){}
+      });
+    }else toast('Basemap presets require Mapbox style (not OSM fallback)');
+  });
+});
+
+window.addEventListener('keydown',function(e){
+  if(e.key==='Escape'){
+    if(document.getElementById('modalAuth')&&document.getElementById('modalAuth').classList.contains('show'))closeAuthModal();
+    else{selectedPinIndex=-1;renderPinList();rebuildMarkers();}
+  }
+  if(e.key==='Delete'||e.key==='Backspace'){if(document.activeElement.tagName!=='INPUT')deleteSelected();}
+});
+
+loadMissionClock();
+loadPrefs();
+void loadAuthSession();
+loadRoute();
+renderEmergencyContactsUI();
+loadLayout();
+syncVoicePillIdle();
+setupPanels();
+try{if(localStorage.getItem(STORAGE_TOKEN))document.getElementById('mapboxToken').value=localStorage.getItem(STORAGE_TOKEN);}catch(e){}
+if(document.getElementById('mapboxToken').value.trim().indexOf('pk.')===0)initMap(false);
+
+refreshPreflight();
+window.addEventListener('orientationchange',function(){refreshPreflight();});
+
+schedulePoll();
+fetchGPS();
+setInterval(saveRouteNow,30000);
+setInterval(function(){sendHeartbeat();},HEARTBEAT_INTERVAL_MS);
+sendHeartbeat();
+window.addEventListener('online',function(){
+  setTimeout(function(){sendHeartbeat();},1000);
+});
+
+function utf8EncVault(s){return new TextEncoder().encode(s||'');}
+async function encryptVaultPayload(buf){
+  var keyRaw=utf8EncVault('forensic-vault-mock-key-v1');
+  var key=await crypto.subtle.importKey('raw',await crypto.subtle.digest('SHA-256',keyRaw),{name:'AES-GCM'},false,['encrypt']);
+  var iv=crypto.getRandomValues(new Uint8Array(12));
+  var ct=await crypto.subtle.encrypt({name:'AES-GCM',iv:iv},key,buf);
+  var out=new Uint8Array(iv.byteLength+ct.byteLength);
+  out.set(iv,0);
+  out.set(new Uint8Array(ct),iv.byteLength);
+  return out.buffer;
+}
+async function payloadHashVault(buf){
+  var h=await crypto.subtle.digest('SHA-256',buf);
+  return Array.from(new Uint8Array(h)).map(function(b){return b.toString(16).padStart(2,'0')}).join('');
+}
+document.getElementById('vaultSeal').onclick=async function(){
+  try{
+    var raw=utf8EncVault(document.getElementById('vaultInput').value||'');
+    var enc=await encryptVaultPayload(raw);
+    var hex=await payloadHashVault(raw);
+    console.log('[FORENSIC] Encrypted before write: '+hex);
+    var binStr=Array.from(new Uint8Array(enc)).map(function(b){return String.fromCharCode(b);}).join('');
+    safeStore('forensic_mock_'+Date.now(),binStr);
+    document.getElementById('vaultEcho').textContent='Sealed. Digest logged to console.';
+  }catch(e){toast('Vault error');}
+};
+
+wireSOSRail();
+
+})();
+</script>
+</body>
+</html>

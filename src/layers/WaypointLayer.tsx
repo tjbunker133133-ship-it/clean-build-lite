@@ -1,54 +1,151 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import * as maplibregl from 'maplibre-gl'
 import { useMapContext } from '../context/MapContext'
 import { useAppContext } from '../context/AppContext'
+import type { WaypointType } from '../types'
+import { haversineDistance, formatDistance } from '../lib/haversine'
+
+function markerVisual(type: WaypointType): { color: string; symbol: string } {
+  if (type === 'water') return { color: '#38bdf8', symbol: '💧' }
+  if (type === 'camp') return { color: '#34d399', symbol: '⛺' }
+  if (type === 'rest') return { color: '#fbbf24', symbol: '☕' }
+  if (type === 'finish') return { color: '#f472b6', symbol: '🏁' }
+  return { color: '#f87171', symbol: '•' }
+}
 
 export default function WaypointLayer() {
-  const { mapRef } = useMapContext()
-  const { waypoints } = useAppContext()
+  const { map } = useMapContext()
+  const { state } = useAppContext()
+  const { waypoints, showMapLabels, showMapDistances } = state
 
   const markersRef = useRef<Record<string, maplibregl.Marker>>({})
+  const segmentMarkersRef = useRef<maplibregl.Marker[]>([])
+  const rebuildRafRef = useRef<number | null>(null)
+  const [overlaysReady, setOverlaysReady] = useState(false)
 
   useEffect(() => {
-    const map = mapRef.current
-    if (!map || !waypoints) return
+    if (!map) return
+    setOverlaysReady(false)
+    let timeoutId: number | null = null
+    const markReady = () => setOverlaysReady(true)
 
-    // clear old markers safely
-    Object.values(markersRef.current).forEach(m => m.remove())
-    markersRef.current = {}
+    // Defer non-essential overlays (labels/distance pills) until map settles.
+    map.once('idle', markReady)
+    timeoutId = window.setTimeout(markReady, 900)
 
-    // rebuild markers
-    waypoints.forEach(wp => {
-      if (!wp) return
+    return () => {
+      if (timeoutId) window.clearTimeout(timeoutId)
+      map.off('idle', markReady)
+    }
+  }, [map])
 
-      const el = document.createElement('div')
+  useEffect(() => {
+    if (!map) return
+    if (rebuildRafRef.current != null) {
+      window.cancelAnimationFrame(rebuildRafRef.current)
+      rebuildRafRef.current = null
+    }
 
-      el.style.width = '14px'
-      el.style.height = '14px'
-      el.style.borderRadius = '50%'
-      el.style.background = '#ff3b3b'
-      el.style.cursor = 'pointer'
+    rebuildRafRef.current = window.requestAnimationFrame(() => {
+      rebuildRafRef.current = null
+      // clear old markers safely
+      Object.values(markersRef.current).forEach((m) => m.remove())
+      markersRef.current = {}
+      segmentMarkersRef.current.forEach((m) => m.remove())
+      segmentMarkersRef.current = []
 
-      const label = document.createElement('div')
-      label.style.position = 'absolute'
-      label.style.top = '16px'
-      label.style.left = '0'
-      label.style.fontSize = '12px'
-      label.style.color = '#fff'
-      label.style.background = 'rgba(0,0,0,0.6)'
-      label.style.padding = '2px 6px'
-      label.style.borderRadius = '4px'
-      label.innerText = wp.label ?? ''
+      // rebuild markers
+      waypoints.forEach((wp) => {
+        if (!wp) return
 
-      el.appendChild(label)
+        const el = document.createElement('div')
+        const v = markerVisual(wp.type)
+        el.style.width = '26px'
+        el.style.height = '26px'
+        el.style.borderRadius = '999px'
+        el.style.background = `radial-gradient(circle at 30% 25%, #ffffff, ${v.color})`
+        el.style.border = '2px solid rgba(255,255,255,0.9)'
+        el.style.boxShadow = `0 0 16px ${v.color}66, 0 2px 8px rgba(0,0,0,0.45)`
+        el.style.cursor = 'pointer'
+        el.style.display = 'flex'
+        el.style.alignItems = 'center'
+        el.style.justifyContent = 'center'
+        el.style.fontSize = '13px'
+        el.style.userSelect = 'none'
+        el.textContent = v.symbol
 
-      const marker = new maplibregl.Marker({ element: el })
-        .setLngLat([wp.lng, wp.lat])
-        .addTo(map)
+        if (overlaysReady && showMapLabels) {
+          const label = document.createElement('div')
+          label.style.position = 'absolute'
+          label.style.top = '30px'
+          label.style.left = '50%'
+          label.style.transform = 'translateX(-50%)'
+          label.style.fontSize = '11px'
+          label.style.letterSpacing = '0.02em'
+          label.style.color = '#ecf4ff'
+          label.style.background = 'linear-gradient(180deg, rgba(6,10,16,0.86), rgba(8,12,20,0.68))'
+          label.style.padding = '3px 8px'
+          label.style.borderRadius = '999px'
+          label.style.border = '1px solid #3a4250'
+          label.style.boxShadow = '0 1px 4px rgba(0,0,0,0.45)'
+          label.style.whiteSpace = 'nowrap'
+          label.innerText = wp.label ?? ''
+          el.appendChild(label)
+        }
 
-      markersRef.current[wp.id] = marker
+        const marker = new maplibregl.Marker({ element: el }).setLngLat([wp.lng, wp.lat]).addTo(map)
+        markersRef.current[wp.id] = marker
+      })
+
+      if (overlaysReady && showMapDistances && waypoints.length >= 2) {
+        for (let i = 1; i < waypoints.length; i++) {
+          const a = waypoints[i - 1]
+          const b = waypoints[i]
+          const midLng = (a.lng + b.lng) / 2
+          const midLat = (a.lat + b.lat) / 2
+          const seg = haversineDistance(a.lat, a.lng, b.lat, b.lng)
+          const text = formatDistance(seg.miles)
+
+          const segEl = document.createElement('div')
+          segEl.style.padding = '2px 7px'
+          segEl.style.borderRadius = '999px'
+          segEl.style.border = '1px solid #1f8f76'
+          segEl.style.background = 'linear-gradient(180deg, rgba(4,30,26,0.88), rgba(5,20,18,0.72))'
+          segEl.style.color = '#81f7dd'
+          segEl.style.fontSize = '10px'
+          segEl.style.fontWeight = '700'
+          segEl.style.letterSpacing = '0.03em'
+          segEl.style.boxShadow = '0 0 8px rgba(0,255,180,0.3)'
+          segEl.style.whiteSpace = 'nowrap'
+          segEl.textContent = text
+
+          const segMarker = new maplibregl.Marker({ element: segEl, anchor: 'center' })
+            .setLngLat([midLng, midLat])
+            .addTo(map)
+          segmentMarkersRef.current.push(segMarker)
+        }
+      }
     })
-  }, [waypoints, mapRef])
+    return () => {
+      if (rebuildRafRef.current != null) {
+        window.cancelAnimationFrame(rebuildRafRef.current)
+        rebuildRafRef.current = null
+      }
+    }
+  }, [waypoints, map, showMapLabels, showMapDistances, overlaysReady])
+
+  useEffect(() => {
+    return () => {
+      if (rebuildRafRef.current != null) {
+        window.cancelAnimationFrame(rebuildRafRef.current)
+        rebuildRafRef.current = null
+      }
+      Object.values(markersRef.current).forEach((m) => m.remove())
+      segmentMarkersRef.current.forEach((m) => m.remove())
+      markersRef.current = {}
+      segmentMarkersRef.current = []
+    }
+  }, [])
 
   return null
 }

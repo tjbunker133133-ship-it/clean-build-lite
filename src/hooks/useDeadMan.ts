@@ -1,9 +1,9 @@
 /**
  * useDeadMan.ts
  * Full deadman switch:
- *   - 4-hour default countdown
- *   - reset()  → restart from full 4 hours
- *   - extend() → +1 hour (once per reset cycle)
+ *   - 2-hour default countdown
+ *   - reset()  → restart from configured duration
+ *   - extend() → +1 hour (repeatable)
  *   - isCritical → true when ≤ 15 minutes remaining
  *   - isWarning  → true when ≤ 30 minutes remaining (matches original isWarning field)
  *   - isExpired  → true when hits 0
@@ -13,13 +13,19 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 
-const STORAGE_KEY    = 'trailmap_deadman_v1'
-const FULL_MS        = 4 * 60 * 60 * 1000   // 4 hours
+const STORAGE_KEY = 'trailmap_deadman_v1'
+const FULL_MS        = 2 * 60 * 60 * 1000   // 2 hours default
 const EXTEND_MS      = 60 * 60 * 1000        // +1 hour
 const CRITICAL_MS    = 15 * 60 * 1000        // 15 min  → amber pulse
 const WARNING_MS     = 30 * 60 * 1000        // 30 min  → warning state
+const MIN_DURATION_MIN = 15
+const MAX_DURATION_MIN = 48 * 60
 
-interface Stored { expiresAt: number; extended: boolean }
+interface Stored {
+  expiresAt: number
+  extended: boolean
+  durationMs?: number
+}
 
 function load(): Stored | null {
   try {
@@ -45,12 +51,15 @@ export interface UseDeadManReturn {
   isExpired:    boolean
   hasExtended:  boolean
   isActive:     boolean
+  expiresAt:    number
+  durationMs:   number
   /** HH:MM:SS string */
   formattedTime: string
   reset:    () => void
   extend:   () => void
   activate: () => void
   deactivate: () => void
+  setDurationMinutes: (minutes: number) => void
 }
 
 export function useDeadMan(onExpire?: () => void): UseDeadManReturn {
@@ -60,16 +69,21 @@ export function useDeadMan(onExpire?: () => void): UseDeadManReturn {
   // ── Bootstrap from storage ───────────────────────────────────────────────
   const boot = () => {
     const stored = load()
+    const safeDuration =
+      typeof stored?.durationMs === 'number'
+        ? Math.max(MIN_DURATION_MIN * 60_000, Math.min(MAX_DURATION_MIN * 60_000, stored.durationMs))
+        : FULL_MS
     if (stored && stored.expiresAt > Date.now()) {
-      return { expiresAt: stored.expiresAt, extended: stored.extended, active: true }
+      return { expiresAt: stored.expiresAt, extended: stored.extended, active: true, durationMs: safeDuration }
     }
-    return { expiresAt: Date.now() + FULL_MS, extended: false, active: false }
+    return { expiresAt: Date.now() + FULL_MS, extended: false, active: false, durationMs: safeDuration }
   }
 
   const b = boot()
   const [expiresAt, setExpiresAt] = useState(b.expiresAt)
   const [extended,  setExtended]  = useState(b.extended)
   const [isActive,  setIsActive]  = useState(b.active)
+  const [durationMs, setDurationMs] = useState(b.durationMs)
   const [remainingMs, setRemainingMs] = useState(
     Math.max(0, b.expiresAt - Date.now())
   )
@@ -94,43 +108,70 @@ export function useDeadMan(onExpire?: () => void): UseDeadManReturn {
 
   // ── Persist ──────────────────────────────────────────────────────────────
   useEffect(() => {
-    if (isActive) save({ expiresAt, extended })
-  }, [expiresAt, extended, isActive])
+    if (isActive) save({ expiresAt, extended, durationMs })
+    else save({ expiresAt, extended, durationMs })
+  }, [expiresAt, extended, isActive, durationMs])
 
   // ── Actions ──────────────────────────────────────────────────────────────
   const reset = useCallback(() => {
-    const newExpiry = Date.now() + FULL_MS
+    const newExpiry = Date.now() + durationMs
     firedRef.current = false
     setExpiresAt(newExpiry)
     setExtended(false)
     setIsActive(true)
-    setRemainingMs(FULL_MS)
-    save({ expiresAt: newExpiry, extended: false })
-  }, [])
+    setRemainingMs(durationMs)
+    save({ expiresAt: newExpiry, extended: false, durationMs })
+  }, [durationMs])
 
   const extend = useCallback(() => {
-    if (extended) return
-    setExpiresAt(prev => {
-      const n = prev + EXTEND_MS
-      save({ expiresAt: n, extended: true })
-      return n
-    })
-    setExtended(true)
-    setRemainingMs(prev => prev + EXTEND_MS)
-  }, [extended])
+    if (isActive) {
+      setExpiresAt((prev) => {
+        const n = prev + EXTEND_MS
+        save({ expiresAt: n, extended: false, durationMs })
+        return n
+      })
+      setRemainingMs((prev) => prev + EXTEND_MS)
+      return
+    }
+    const nextDurationMs = Math.min(durationMs + EXTEND_MS, MAX_DURATION_MIN * 60_000)
+    setDurationMs(nextDurationMs)
+    setRemainingMs(nextDurationMs)
+    const previewExpiry = Date.now() + nextDurationMs
+    setExpiresAt(previewExpiry)
+    save({ expiresAt: previewExpiry, extended: false, durationMs: nextDurationMs })
+  }, [durationMs, isActive])
 
   const activate = useCallback(() => {
-    const newExpiry = Date.now() + FULL_MS
+    const newExpiry = Date.now() + durationMs
     setExpiresAt(newExpiry)
-    setRemainingMs(FULL_MS)
+    setRemainingMs(durationMs)
     setIsActive(true)
-    save({ expiresAt: newExpiry, extended: false })
-  }, [])
+    setExtended(false)
+    firedRef.current = false
+    save({ expiresAt: newExpiry, extended: false, durationMs })
+  }, [durationMs])
 
   const deactivate = useCallback(() => {
     setIsActive(false)
     clear()
   }, [])
+
+  const setDurationMinutes = useCallback(
+    (minutes: number) => {
+      const clamped = Math.max(MIN_DURATION_MIN, Math.min(MAX_DURATION_MIN, Math.round(minutes)))
+      const nextDurationMs = clamped * 60_000
+      setDurationMs(nextDurationMs)
+      if (!isActive) {
+        const previewExpiry = Date.now() + nextDurationMs
+        setExpiresAt(previewExpiry)
+        setRemainingMs(nextDurationMs)
+        save({ expiresAt: previewExpiry, extended, durationMs: nextDurationMs })
+      } else {
+        save({ expiresAt, extended, durationMs: nextDurationMs })
+      }
+    },
+    [expiresAt, extended, isActive],
+  )
 
   // ── Derived ──────────────────────────────────────────────────────────────
   const isCritical = isActive && remainingMs > 0 && remainingMs <= CRITICAL_MS
@@ -145,7 +186,7 @@ export function useDeadMan(onExpire?: () => void): UseDeadManReturn {
 
   return {
     remainingMs, timeLeft, isCritical, isWarning, isExpired,
-    hasExtended: extended, isActive, formattedTime,
-    reset, extend, activate, deactivate,
+    hasExtended: false, isActive, expiresAt, durationMs, formattedTime,
+    reset, extend, activate, deactivate, setDurationMinutes,
   }
 }

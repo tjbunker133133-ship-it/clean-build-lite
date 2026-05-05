@@ -2,11 +2,10 @@ import { useMapContext } from '../context/MapContext'
 import { useGPS } from '../hooks/useGPS'
 
 export default function TrackingControl() {
-  const { mapRef } = useMapContext()
+  const { map } = useMapContext()
   const gps = useGPS()
 
   const handleRecenter = () => {
-    const map = mapRef.current
     if (!map) return
     if (gps.lat === null || gps.lng === null) return
 

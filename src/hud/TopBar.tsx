@@ -1,20 +1,12 @@
-import React, { useEffect, useState } from 'react'
-
-function Clock() {
-  const [time, setTime] = useState(new Date())
-  useEffect(() => {
-    const t = setInterval(() => setTime(new Date()), 1000)
-    return () => clearInterval(t)
-  }, [])
-
-  return (
-    <span>
-      {time.toUTCString().replace('GMT', 'Z').split(' ').slice(4).join(' ')}
-    </span>
-  )
-}
+import React from 'react'
+import { useCockpit } from '../context/CockpitContext'
 
 export default function TopBar() {
+  const { prefs } = useCockpit()
+  const isCompact =
+    typeof window !== 'undefined' &&
+    (window.matchMedia('(max-width: 720px)').matches || window.matchMedia('(pointer: coarse)').matches)
+
   return (
     <div
       style={{
@@ -22,28 +14,30 @@ export default function TopBar() {
         top: 0,
         left: 0,
         right: 0,
-        height: 36,
+        height: isCompact ? 52 : 48,
         zIndex: 200,
-        pointerEvents: 'none',
+        pointerEvents: 'auto',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        padding: '0 16px',
-        background: 'linear-gradient(180deg, rgba(8,14,20,0.95) 0%, transparent 100%)',
-        borderBottom: '1px solid rgba(0,255,180,0.1)',
+        padding: `calc(env(safe-area-inset-top, 0px) + 2px) ${isCompact ? 12 : 16}px 0 ${isCompact ? 12 : 16}px`,
+        background: 'rgba(10, 12, 13, 0.9)',
+        borderBottom: '1px solid rgba(199, 206, 198, 0.22)',
+        backdropFilter: 'blur(12px)',
+        boxShadow: '0 4px 30px rgba(0, 0, 0, 0.35)',
       }}
     >
-      {/* Left: System label */}
       <div
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: 8,
+          gap: 10,
           fontFamily: 'var(--font-ui)',
           fontWeight: 700,
-          fontSize: 13,
-          letterSpacing: '0.2em',
-          color: 'rgba(0,255,180,0.8)',
+          fontSize: isCompact ? 11 : 12,
+          letterSpacing: '0.18em',
+          color: '#c7cec6',
+          textShadow: '0 0 10px rgba(199,206,198,0.25)',
         }}
       >
         <div
@@ -51,56 +45,39 @@ export default function TopBar() {
             width: 8,
             height: 8,
             borderRadius: '50%',
-            background: '#00ffb4',
-            boxShadow: '0 0 10px #00ffb4',
-            animation: 'pulse 2s infinite',
+            background: '#c7cec6',
+            boxShadow: '0 0 8px rgba(199,206,198,0.65)',
           }}
         />
-        TACTICAL HUD
-        <span
-          style={{
-            fontSize: 9,
-            color: 'rgba(0,255,180,0.4)',
-            letterSpacing: '0.15em',
-            fontWeight: 400,
-          }}
-        >
-          TIER-1
-        </span>
+        NIGHTFORCE
+        {!isCompact && (
+          <span
+            style={{
+              fontSize: 9,
+              color: '#9ea7a0',
+              letterSpacing: '0.12em',
+              fontWeight: 400,
+              opacity: 0.9,
+            }}
+          >
+            Ctrl+E export · ⇧Ctrl+E import
+          </span>
+        )}
       </div>
 
-      {/* Center: decorative brackets */}
+      <div />
+
       <div
         style={{
-          fontFamily: 'var(--font-mono)',
-          fontSize: 10,
-          color: 'rgba(0,255,180,0.25)',
-          letterSpacing: '0.4em',
-          display: 'flex',
-          gap: 4,
+          fontFamily: 'var(--font-ui, system-ui)',
+          fontSize: isCompact ? 9 : 10,
+          color: '#9ea7a0',
+          letterSpacing: '0.12em',
+          textTransform: 'uppercase',
         }}
       >
-        {'[ ◈ ◈ ◈ ]'}
+        {prefs.screen_hue.replace('_', ' ')}
       </div>
-
-      {/* Right: clock */}
-      <div
-        style={{
-          fontFamily: 'var(--font-mono)',
-          fontSize: 10,
-          color: 'rgba(0,255,180,0.5)',
-          letterSpacing: '0.06em',
-        }}
-      >
-        <Clock />
-      </div>
-
-      <style>{`
-        @keyframes pulse {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.4; }
-        }
-      `}</style>
     </div>
   )
 }

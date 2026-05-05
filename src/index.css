@@ -7,15 +7,121 @@ html, body, #root {
   overflow: hidden;
 }
 
+html, body {
+  overscroll-behavior: none;
+  -webkit-text-size-adjust: 100%;
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/*
+ * REGRESSION: Never use width/height !important on .maplibregl-map or .maplibregl-canvas.
+ * MapLibre sets canvas backing-store size; overriding it causes a blank/green WebGL view.
+ */
 .maplibregl-map {
-  width: 100% !important;
-  height: 100% !important;
-  position: absolute !important;
-  inset: 0 !important;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
 }
 
 .maplibregl-canvas {
-  width: 100% !important;
-  height: 100% !important;
-  display: block !important;
+  display: block;
+}
+
+:root {
+  /* Nightforce v2 defaults — aligned with CockpitProvider PREFS_DEFAULT */
+  --cockpit-glass-intensity: 0.4;
+  --cockpit-panel-opacity: 0.45;
+  --cockpit-accent: #c7cec6;
+  --cockpit-ease: cubic-bezier(0.25, 0.1, 0.25, 1);
+  --cockpit-duration: 200ms;
+  --cockpit-blur-max: 16px;
+}
+
+html.cockpit-high-contrast .maplibregl-map {
+  filter: contrast(1.15) brightness(1.05);
+}
+
+html.platform-ios .cockpit-panel {
+  backdrop-filter: blur(10px) saturate(1.06);
+  -webkit-backdrop-filter: blur(10px) saturate(1.06);
+  box-shadow: 0 6px 20px rgba(0,0,0,0.46), 0 0 0 1px rgba(199,206,198,0.26) !important;
+}
+
+html.platform-ios .cockpit-panel [role="banner"] {
+  letter-spacing: 0.14em !important;
+}
+
+html.platform-android .cockpit-panel {
+  box-shadow: 0 8px 28px rgba(0,0,0,0.58), 0 0 0 1px rgba(125,255,138,0.28) !important;
+}
+
+html.platform-android .cockpit-panel [role="banner"] {
+  text-shadow: 0 0 8px rgba(125,255,138,0.34) !important;
+}
+
+html.platform-mobile .cockpit-panel {
+  border-radius: 10px !important;
+}
+
+html.platform-mobile .cockpit-panel button,
+html.platform-mobile .cockpit-panel input,
+html.platform-mobile .cockpit-panel select {
+  min-height: 42px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --cockpit-duration: 0ms;
+  }
+}
+
+html.cockpit-reduced-transparency [style*="backdrop-filter"] {
+  backdrop-filter: none !important;
+}
+
+@keyframes voice-wake-pulse {
+  0% { box-shadow: 0 0 0 rgba(0, 229, 255, 0); }
+  50% { box-shadow: 0 0 0 2px rgba(0, 229, 255, 0.65), 0 0 18px rgba(0, 229, 255, 0.45); }
+  100% { box-shadow: 0 0 0 rgba(0, 229, 255, 0); }
+}
+
+html.voice-wake-pulse .cockpit-panel {
+  animation: voice-wake-pulse 0.5s ease;
+}
+
+.cockpit-panel button,
+.cockpit-panel input[type="range"] {
+  transition: transform 140ms ease, box-shadow 180ms ease, border-color 180ms ease, background 180ms ease;
+  touch-action: manipulation;
+}
+
+.cockpit-panel button:hover {
+  transform: translateY(-1px);
+}
+
+.cockpit-panel button:active {
+  transform: translateY(0);
+}
+
+.cockpit-panel input,
+.cockpit-panel select,
+.cockpit-panel textarea,
+.cockpit-panel button {
+  min-height: 40px;
+}
+
+@media (pointer: coarse) {
+  .cockpit-panel input,
+  .cockpit-panel select,
+  .cockpit-panel textarea {
+    font-size: 16px;
+  }
+
+  .cockpit-panel {
+    max-width: min(96vw, 440px);
+  }
 }

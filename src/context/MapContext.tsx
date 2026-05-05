@@ -1,23 +1,24 @@
 import React, {
   createContext,
   useContext,
-  useRef,
+  useState,
   type ReactNode,
-  type MutableRefObject
 } from 'react'
-import type maplibregl from 'maplibre-gl'
+import type { Map } from 'maplibre-gl'
 
 interface MapContextValue {
-  mapRef: MutableRefObject<maplibregl.Map | null>
+  /** Live MapLibre instance once tiles/style are ready — triggers re-renders when set */
+  map: Map | null
+  setMap: (map: Map | null) => void
 }
 
 const MapContext = createContext<MapContextValue | null>(null)
 
 export function MapProvider({ children }: { children: ReactNode }) {
-  const mapRef = useRef<maplibregl.Map | null>(null)
+  const [map, setMap] = useState<Map | null>(null)
 
   return (
-    <MapContext.Provider value={{ mapRef }}>
+    <MapContext.Provider value={{ map, setMap }}>
       {children}
     </MapContext.Provider>
   )

@@ -1,0 +1,1338 @@
+<!DOCTYPE html>
+
+<html lang="en">
+
+<head>
+
+<meta charset="utf-8">
+
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<title>Titanium HUD — Tier 1+2+3</title>
+
+<style>
+
+:root{--bg:#0a0a0a;--fg:#f5f5f5;--accent:#00e5ff;--muted:#888;--danger:#ff3355;--tile:#141414;--border:#333}
+
+*{box-sizing:border-box}
+
+html,body{margin:0;min-height:100%;background:var(--bg);color:var(--fg);font-family:system-ui,sans-serif;line-height:1.45;-webkit-font-smoothing:antialiased}
+
+.bento-root{display:grid;grid-template-columns:repeat(12,1fr);gap:12px;padding:16px;max-width:1200px;margin:0 auto}
+
+.bento-tile{background:var(--tile);border:1px solid var(--border);border-radius:12px;padding:16px;grid-column:span 12}
+
+@media(min-width:720px){
+
+.bento-tile.span-6{grid-column:span 6}
+
+.bento-tile.span-4{grid-column:span 4}
+
+.bento-tile.span-8{grid-column:span 8}
+
+}
+
+h1{font-size:1.25rem;font-weight:700;margin:0 0 8px;letter-spacing:.02em}
+
+.meta{font-size:.75rem;color:var(--muted)}
+
+.timestamp{font-variant-numeric:tabular-nums;font-size:1.1rem;color:var(--accent);margin-top:8px}
+
+button.btn-secondary{background:transparent;border:1px solid var(--border);color:var(--fg);padding:8px 14px;border-radius:8px;cursor:pointer;font:inherit}
+
+button.btn-secondary:hover{border-color:var(--accent);color:var(--accent)}
+
+.sos-wrap{margin-top:12px}
+
+.sos-label{font-size:.85rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:8px}
+
+.sos-rail{position:relative;height:52px;background:#1a1a1a;border:2px solid var(--border);border-radius:26px;overflow:hidden;touch-action:none}
+
+.sos-fill{position:absolute;left:0;top:0;bottom:0;width:0%;background:linear-gradient(90deg,#331018,var(--danger));pointer-events:none;transition:width .05s linear}
+
+.sos-knob{position:absolute;left:4px;top:50%;transform:translateY(-50%);width:44px;height:44px;border-radius:50%;background:var(--fg);cursor:grab;filter:drop-shadow(0 2px 12px rgba(0,0,0,.5));touch-action:none}
+
+.sos-knob:active{cursor:grabbing}
+
+.sos-hint{font-size:.75rem;color:var(--muted);margin-top:8px}
+
+.field-details summary{cursor:pointer;font-weight:600;padding:8px 0;list-style:none}
+
+.field-details summary::-webkit-details-marker{display:none}
+
+.field-details[open] summary{margin-bottom:8px}
+
+.law-block{border-left:3px solid var(--accent);padding-left:12px;margin-bottom:14px}
+
+.law-cite{font-size:.8rem;color:var(--accent);margin-bottom:4px;font-weight:600}
+
+.law-body{font-size:.85rem;color:#ddd;white-space:pre-wrap}
+
+.status-line{font-size:.8rem;margin-top:8px;min-height:1.2em;color:var(--danger)}
+
+.vault-log{font-size:.7rem;color:#555;font-family:ui-monospace,monospace;margin-top:8px;word-break:break-all}
+
+.conn-bar{display:flex;align-items:center;flex-wrap:wrap;gap:10px 16px;padding:10px 16px;background:#111;border-bottom:1px solid var(--border);font-size:.8rem;max-width:1200px;margin:0 auto}
+
+.conn-label{font-weight:700;letter-spacing:.06em;color:var(--muted)}
+
+.conn-dot{width:10px;height:10px;border-radius:50%;display:inline-block}
+
+.conn-dot-online{background:#3ecf8e;box-shadow:0 0 8px #3ecf8e}
+
+.conn-dot-offline{background:#666}
+
+.conn-sep{color:var(--border)}
+
+.badge-offline{display:inline-block;padding:2px 8px;border-radius:6px;font-size:.65rem;font-weight:700;background:#331818;color:#faa;margin-left:8px;vertical-align:middle}
+
+.tier2-stat{font-variant-numeric:tabular-nums;font-size:1rem;margin-top:6px}
+
+.tier2-grid{display:grid;gap:8px;margin-top:10px;font-size:.85rem}
+
+.compass-wrap{display:flex;align-items:center;gap:16px;margin-top:12px}
+
+.compass-rosette{position:relative;width:120px;height:120px;border-radius:50%;border:2px solid var(--border);background:radial-gradient(circle at center,#1a1a1a 0%,#0d0d0d 100%)}
+
+.compass-rosette span{position:absolute;font-size:.65rem;color:var(--muted);font-weight:600}
+
+.compass-n{top:4px;left:50%;transform:translateX(-50%)}
+
+.compass-e{right:6px;top:50%;transform:translateY(-50%)}
+
+.compass-s{bottom:4px;left:50%;transform:translateX(-50%)}
+
+.compass-w{left:6px;top:50%;transform:translateY(-50%)}
+
+.compass-needle{position:absolute;left:50%;top:50%;width:4px;height:48px;margin-left:-2px;margin-top:-48px;background:linear-gradient(180deg,var(--danger),transparent);transform-origin:50% 100%;border-radius:2px}
+
+.hybrid-pill{display:inline-block;padding:4px 10px;border-radius:999px;font-size:.65rem;font-weight:700;background:#2a2010;color:#fc6;border:1px solid #653}
+
+.safety-safe{color:#3ecf8e;font-weight:600}
+
+.safety-caution{color:#ffb020;font-weight:600}
+
+.safety-danger{color:var(--danger);font-weight:600}
+
+.safety-unknown{color:var(--muted);font-weight:600}
+
+input.tier2-input{width:100%;margin-top:6px;padding:8px;border-radius:8px;border:1px solid var(--border);background:#0e0e0e;color:var(--fg);font:inherit;font-size:.85rem}
+
+.tier3-copilot-card{border:1px solid var(--border);border-radius:10px;padding:12px;margin-top:10px;background:#0e0e0e;color:var(--accent);font-size:.9rem;line-height:1.4}
+
+.lidar-canvas{width:100%;max-width:360px;height:auto;display:block;border:1px solid var(--border);border-radius:8px;margin-top:8px;background:#050505}
+
+.forage-display{margin-top:10px;padding:10px;border-radius:8px;border:1px dashed var(--border);min-height:4rem}
+
+.ar-hud-frame{border:2px dashed var(--accent);border-radius:12px;padding:16px;text-align:center;margin-top:8px;opacity:.88}
+
+.bio-slider{width:100%;margin-top:8px;accent-color:var(--accent)}
+
+</style>
+
+</head>
+
+<body>
+
+<div class="conn-bar" role="status" aria-live="polite">
+
+<span class="conn-label">CONNECTION STATUS</span>
+
+<span id="connDot" class="conn-dot conn-dot-offline" aria-hidden="true"></span>
+
+<span id="connText">offline</span>
+
+<span class="conn-sep">|</span>
+
+<span>Last sync: <span id="connLastSync">—</span></span>
+
+</div>
+
+<div class="bento-root">
+
+<div class="bento-tile span-8">
+
+<h1>GPS pulse</h1>
+
+<p class="meta">Browser geolocation only. Poll cadence fixed.</p>
+
+<p class="timestamp" id="lastPollDisplay">Last poll: —</p>
+
+<button type="button" class="btn-secondary" id="pollNow">Poll position now</button>
+
+</div>
+
+<div class="bento-tile span-4">
+
+<h1>Vault note</h1>
+
+<p class="meta">Mock chain: encrypt then persist (local).</p>
+
+<input id="vaultInput" type="text" placeholder="Type payload to seal" style="width:100%;margin-top:8px;padding:10px;border-radius:8px;border:1px solid var(--border);background:#0e0e0e;color:var(--fg);font:inherit">
+
+<button type="button" class="btn-secondary" id="vaultSeal" style="margin-top:8px">Seal record</button>
+
+<p class="vault-log" id="vaultEcho"></p>
+
+</div>
+
+<div class="bento-tile span-6">
+
+<h1>SOS arm</h1>
+
+<p class="meta">Sustained slide only. Tap alone does nothing.</p>
+
+<div class="sos-wrap">
+
+<div class="sos-label">Slide grip right · hold motion · 3s minimum</div>
+
+<div class="sos-rail" id="sosRail" role="slider" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="SOS sustained slide">
+
+<div class="sos-fill" id="sosFill"></div>
+
+<div class="sos-knob" id="sosKnob" tabindex="0"></div>
+
+</div>
+
+<p class="sos-hint">Progress fills while you slide the grip; release early resets.</p>
+
+<div class="sos-fill" id="sosTimeBar" style="position:relative;height:6px;border-radius:3px;margin-top:10px;background:#222"></div>
+
+<p class="status-line" id="sosStatus"></p>
+
+</div>
+
+</div>
+
+<div class="bento-tile span-6">
+
+<h1>Field card</h1>
+
+<p class="meta">Five citations · collapsible panels · verbatim excerpts</p>
+
+<details class="field-details">
+
+<summary>16-3-311 — Colorado criminal trespass</summary>
+
+<div class="law-block">
+
+<div class="law-cite">16-3-311 C.R.S.</div>
+
+<div class="law-body">A person commits the crime of criminal trespass if they unlawfully enter or remain on premises without consent or after consent was withdrawn, under circumstances defined by this article.</div>
+
+</div>
+
+</details>
+
+<details class="field-details">
+
+<summary>13-21-131 — Civil liability limits</summary>
+
+<div class="law-block">
+
+<div class="law-cite">13-21-131 C.R.S.</div>
+
+<div class="law-body">Statutory provisions governing civil actions and limitations applicable to particular causes of action as enacted and amended in Colorado law.</div>
+
+</div>
+
+</details>
+
+<details class="field-details">
+
+<summary>18 U.S.C. 242 — Deprivation of rights under color of law</summary>
+
+<div class="law-block">
+
+<div class="law-cite">18 U.S.C. 242</div>
+
+<div class="law-body">Whoever, under color of any law, statute, ordinance, regulation, or custom, willfully subjects any person to the deprivation of any rights, privileges, or immunities secured or protected by the Constitution or laws of the United States shall be fined or imprisoned, or both.</div>
+
+</div>
+
+</details>
+
+<details class="field-details">
+
+<summary>42 U.S.C. 2000aa — Privacy protection</summary>
+
+<div class="law-block">
+
+<div class="law-cite">42 U.S.C. 2000aa</div>
+
+<div class="law-body">Work product materials possessed by a person in connection with a purpose to disseminate to the public shall not be subject to search or seizure except under circumstances narrowly prescribed by statute.</div>
+
+</div>
+
+</details>
+
+<details class="field-details">
+
+<summary>16-3-103 — Use of physical force in defense</summary>
+
+<div class="law-block">
+
+<div class="law-cite">16-3-103 C.R.S.</div>
+
+<div class="law-body">Statutory framework describing when a person may use physical force in defense of self, others, or premises under Colorado law, including definitions of reasonable belief and proportional response.</div>
+
+</div>
+
+</details>
+
+</div>
+
+<div class="bento-tile span-6">
+
+<h1>Deadman switch</h1>
+
+<p class="meta">Server heartbeat mock · Tier 1 stays usable if this fails.</p>
+
+<p class="tier2-stat" id="deadmanDisplay">Heartbeat: idle</p>
+
+<p class="vault-log" id="deadmanLog"></p>
+
+</div>
+
+<div class="bento-tile span-6">
+
+<h1>Hydrological telemetry</h1>
+
+<p class="meta">USGS NWIS · ref point 39.5501°N, 105.7821°W · site ID below</p>
+
+<label class="meta" for="usgsSite">USGS site ID</label>
+
+<input class="tier2-input" id="usgsSite" type="text" value="06714000" inputmode="numeric" autocomplete="off">
+
+<button type="button" class="btn-secondary" id="hydroRefresh" style="margin-top:8px">Refresh now</button>
+
+<p class="tier2-stat" id="hydroFlow">Streamflow: — cfs</p>
+
+<p class="tier2-stat" id="hydroDepth">Gage height: — ft</p>
+
+<p class="tier2-stat" id="hydroCross">Crossing: —</p>
+
+<p class="meta" id="hydroStamp">Updated: —</p>
+
+<span id="hydroOfflineBadge" class="badge-offline" hidden>OFFLINE MODE</span>
+
+</div>
+
+<div class="bento-tile span-12">
+
+<h1>Environmental intel</h1>
+
+<p class="meta">MODIS/VIIRS-style thermal proxy · mock when remote unavailable</p>
+
+<span class="hybrid-pill" id="envHybrid">HYBRID PHOTO · satellite overlay idle</span>
+
+<div class="compass-wrap">
+
+<div class="compass-rosette" aria-hidden="true">
+
+<span class="compass-n">N</span><span class="compass-e">E</span><span class="compass-s">S</span><span class="compass-w">W</span>
+
+<div class="compass-needle" id="envNeedle"></div>
+
+</div>
+
+<div>
+
+<p class="tier2-stat" id="envDist">Nearest plume distance: — mi</p>
+
+<p class="tier2-stat" id="envDir">Bearing to anomaly: —° (clockwise from N)</p>
+
+<p class="meta" id="envStamp">Updated: —</p>
+
+</div>
+
+</div>
+
+<button type="button" class="btn-secondary" id="envRefresh">Refresh intel</button>
+
+</div>
+
+<div class="bento-tile span-6">
+
+<h1>AI Co-Pilot</h1>
+
+<p class="meta">Hazard reroute simulation · mock-first</p>
+
+<div id="copilotCard" class="tier3-copilot-card">Awaiting scan…</div>
+
+<button type="button" class="btn-secondary" id="copilotSim">Simulate hazard &amp; reroute</button>
+
+<p class="vault-log" id="copilotLog"></p>
+
+</div>
+
+<div class="bento-tile span-6">
+
+<h1>LiDAR ghost trails</h1>
+
+<p class="meta">Canvas path mock · breadcrumb trail</p>
+
+<canvas id="lidarCanvas" width="360" height="220" class="lidar-canvas"></canvas>
+
+<button type="button" class="btn-secondary" id="lidarRedraw">Redraw trail</button>
+
+</div>
+
+<div class="bento-tile span-6">
+
+<h1>Biometric coaching</h1>
+
+<p class="meta">Wearable bridge mock · HR zones</p>
+
+<p class="tier2-stat" id="bioHrDisplay">HR: — bpm · zone —</p>
+
+<p class="tier2-stat" id="bioAlert">Alert: —</p>
+
+<label class="meta" for="bioHrSlider">Simulated HR</label>
+
+<input type="range" id="bioHrSlider" class="bio-slider" min="50" max="190" value="88">
+
+<button type="button" class="btn-secondary" id="bioPulse">Pulse mock telemetry</button>
+
+</div>
+
+<div class="bento-tile span-6">
+
+<h1>Foraging AI</h1>
+
+<p class="meta">Colorado fungi · seasonal guidance mock</p>
+
+<div id="forageDisplay" class="forage-display"></div>
+
+<button type="button" class="btn-secondary" id="forageRefresh">Refresh seasonal hint</button>
+
+</div>
+
+<div class="bento-tile span-6">
+
+<h1>AR HUD</h1>
+
+<p class="meta">Smart glasses bridge placeholder</p>
+
+<div class="ar-hud-frame">
+
+<p class="tier2-stat">Viture / XREAL · channel idle</p>
+
+<p class="meta">Pair eyewear to mirror HUD tiles (not connected).</p>
+
+</div>
+
+</div>
+
+<div class="bento-tile span-6">
+
+<h1>Voice commands</h1>
+
+<p class="meta">Web Speech API · offline phrase fallback</p>
+
+<p class="tier2-stat" id="voiceStatus">Engine: —</p>
+
+<button type="button" class="btn-secondary" id="voiceListen">Listen once</button>
+
+<input id="voiceFallback" class="tier2-input" placeholder="Offline: type command (status, reroute, help)">
+
+<button type="button" class="btn-secondary" id="voiceSendFallback">Run typed command</button>
+
+<p class="vault-log" id="voiceLog"></p>
+
+</div>
+
+</div>
+
+<script>
+
+(function(){
+
+// GPS: 120000ms per .cursorrules
+
+var POLL_MS=120000;
+
+// SOS: 3000ms sustained slide per .cursorrules
+
+var SOS_MS=3000;
+
+var lastPollEl=document.getElementById('lastPollDisplay');
+
+var pollBtn=document.getElementById('pollNow');
+
+function formatTs(d){return d.toISOString().replace('T',' ').slice(0,19)+' Z'}
+
+function pulseGPS(){
+
+if(!navigator.geolocation){lastPollEl.textContent='Last poll: unavailable';return}
+
+navigator.geolocation.getCurrentPosition(
+
+function(){lastPollEl.textContent='Last poll: '+formatTs(new Date())},
+
+function(){lastPollEl.textContent='Last poll: denied or error — '+formatTs(new Date())},
+
+{enableHighAccuracy:true,timeout:15000,maximumAge:0}
+
+);
+
+}
+
+pollBtn.addEventListener('click',function(e){e.preventDefault();pulseGPS()});
+
+pollBtn.addEventListener('keydown',function(e){if(e.key==='Enter'||e.key===' '){e.preventDefault();pulseGPS()}});
+
+setInterval(pulseGPS,POLL_MS);
+
+pulseGPS();
+
+var rail=document.getElementById('sosRail');
+
+var knob=document.getElementById('sosKnob');
+
+var fill=document.getElementById('sosFill');
+
+var timeBar=document.getElementById('sosTimeBar');
+
+var sosStatus=document.getElementById('sosStatus');
+
+var dragging=false;var railW=0;var slideMs=0;var lastPointerX=0;var moveClock=0;var knobFrac=0;var armReady=false;var dangerColor='';
+
+function railMetrics(){var r=rail.getBoundingClientRect();railW=r.width-knob.offsetWidth-8;return r.left}
+
+function setKnobFrac(f){f=Math.max(0,Math.min(1,f));knobFrac=f;knob.style.left=4+f*railW+'px';fill.style.width=f*100+'%';rail.setAttribute('aria-valuenow',Math.round(f*100))}
+
+function resetSos(){slideMs=0;setKnobFrac(0);var z=dangerColor||getComputedStyle(document.documentElement).getPropertyValue('--danger').trim();timeBar.style.background='linear-gradient(90deg,'+z+' 0%,#222 0%)';sosStatus.textContent='';armReady=false}
+
+function onPointerDown(e){if(e.target!==knob)return;e.preventDefault();dragging=true;slideMs=0;lastPointerX=e.clientX;moveClock=0;armReady=false;dangerColor=getComputedStyle(document.documentElement).getPropertyValue('--danger').trim();knob.setPointerCapture(e.pointerId)}
+
+function onPointerMove(e){if(!dragging)return;var dx=Math.abs(e.clientX-lastPointerX);lastPointerX=e.clientX;var now=performance.now();if(dx>0.8){if(moveClock)slideMs+=Math.min(now-moveClock,35);moveClock=now}
+
+var origin=railMetrics();var x=e.clientX-origin;var frac=x/railW;setKnobFrac(frac);var pctTime=Math.min(100,slideMs/SOS_MS*100);var z=dangerColor||getComputedStyle(document.documentElement).getPropertyValue('--danger').trim();timeBar.style.background='linear-gradient(90deg,'+z+' 0%,#222 '+pctTime+'%)';if(slideMs>=SOS_MS&&knobFrac>=0.94){armReady=true;sosStatus.textContent='SOS path armed (mock)'}}
+
+function onPointerUp(e){if(!dragging)return;dragging=false;knob.releasePointerCapture(e.pointerId);moveClock=0;if(!armReady)resetSos();else{sosStatus.textContent='SOS path armed (mock)'}}
+
+knob.addEventListener('pointerdown',onPointerDown);
+
+rail.addEventListener('pointermove',onPointerMove);
+
+knob.addEventListener('pointermove',onPointerMove);
+
+knob.addEventListener('pointerup',onPointerUp);
+
+knob.addEventListener('pointercancel',onPointerUp);
+
+rail.addEventListener('click',function(e){if(e.target===rail)sosStatus.textContent='Use the grip — tap on rail does not arm'});
+
+var vaultIn=document.getElementById('vaultInput');
+
+var vaultBtn=document.getElementById('vaultSeal');
+
+var vaultEcho=document.getElementById('vaultEcho');
+
+function utf8Enc(s){return new TextEncoder().encode(s)}
+
+// Forensic: encrypt before write per .cursorrules
+
+async function encryptPayload(buf){
+
+var keyRaw=utf8Enc('forensic-vault-mock-key-v1');
+
+var key=await crypto.subtle.importKey('raw',await crypto.subtle.digest('SHA-256',keyRaw),{name:'AES-GCM'},false,['encrypt']);
+
+var iv=crypto.getRandomValues(new Uint8Array(12));
+
+var ct=await crypto.subtle.encrypt({name:'AES-GCM',iv:iv},key,buf);
+
+var out=new Uint8Array(iv.byteLength+ct.byteLength);
+
+out.set(iv,0);out.set(new Uint8Array(ct),iv.byteLength);
+
+return out.buffer
+
+}
+
+async function payloadHash(buf){
+
+var h=await crypto.subtle.digest('SHA-256',buf);
+
+return Array.from(new Uint8Array(h)).map(function(b){return b.toString(16).padStart(2,'0')}).join('')
+
+}
+
+vaultBtn.addEventListener('click',async function(){
+
+var raw=utf8Enc(vaultIn.value||'');
+
+var enc=await encryptPayload(raw);
+
+var hex=await payloadHash(raw);
+
+console.log('[FORENSIC] Encrypted before write: '+hex);
+
+localStorage.setItem('forensic_mock_'+Date.now(),Array.from(new Uint8Array(enc)).map(function(b){return String.fromCharCode(b)}).join(''));
+
+vaultEcho.textContent='Sealed. Digest logged to console.'
+
+});
+
+})();
+
+</script>
+
+<script>
+
+(function(){
+
+'use strict';
+
+var HEARTBEAT_MS=30000;
+
+var HYDRO_MS=300000;
+
+var ENV_MS=600000;
+
+var LS_HYDRO='tier2_hydro_cache_v1';
+
+var LS_ENV='tier2_env_cache_v1';
+
+var MISSED_CAP=2;
+
+var connDot=document.getElementById('connDot');
+
+var connText=document.getElementById('connText');
+
+var connLastSync=document.getElementById('connLastSync');
+
+var deadmanDisplay=document.getElementById('deadmanDisplay');
+
+var deadmanLog=document.getElementById('deadmanLog');
+
+var hydroFlow=document.getElementById('hydroFlow');
+
+var hydroDepth=document.getElementById('hydroDepth');
+
+var hydroCross=document.getElementById('hydroCross');
+
+var hydroStamp=document.getElementById('hydroStamp');
+
+var hydroOfflineBadge=document.getElementById('hydroOfflineBadge');
+
+var usgsSite=document.getElementById('usgsSite');
+
+var envDist=document.getElementById('envDist');
+
+var envDir=document.getElementById('envDir');
+
+var envStamp=document.getElementById('envStamp');
+
+var envNeedle=document.getElementById('envNeedle');
+
+var envHybrid=document.getElementById('envHybrid');
+
+var lastSyncTs=0;
+
+var missedHeartbeats=0;
+
+var deadmanTriggered=false;
+
+function fmtIso(d){try{return d.toISOString().replace('T',' ').slice(0,19)+' Z'}catch(_){return '—'}}
+
+function setLastSync(t){lastSyncTs=t;connLastSync.textContent=t?fmtIso(new Date(t)): '—'}
+
+function paintConn(){
+
+var on=typeof navigator!=='undefined'&&navigator.onLine;
+
+connText.textContent=on?'online':'offline';
+
+connDot.className='conn-dot '+(on?'conn-dot-online':'conn-dot-offline');
+
+}
+
+window.addEventListener('online',function(){try{paintConn()}catch(_){}});
+
+window.addEventListener('offline',function(){try{paintConn()}catch(_){}});
+
+paintConn();
+
+function deadmanPing(){
+
+return Promise.resolve().then(function(){
+
+return fetch('/api/heartbeat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ts:Date.now(),client:'tier2-mock'})})
+
+}).then(function(res){
+
+if(res&&res.ok){missedHeartbeats=0;deadmanTriggered=false;deadmanDisplay.textContent='Heartbeat: acknowledged';console.log('[DEADMAN] heartbeat ack',res.status);return true}
+
+missedHeartbeats++;console.log('[DEADMAN] heartbeat miss ('+missedHeartbeats+')');return false
+
+}).catch(function(err){
+
+missedHeartbeats++;console.log('[DEADMAN] heartbeat fetch failed ('+missedHeartbeats+')',err&&err.message?err.message:'');return false
+
+}).then(function(){
+
+if(missedHeartbeats>=MISSED_CAP&&!deadmanTriggered){
+
+deadmanTriggered=true;
+
+console.log('[DEADMAN] Autonomous Rescue Protocol triggered - server-side simulation');
+
+deadmanDisplay.textContent='Heartbeat: missed ×'+missedHeartbeats;
+
+deadmanLog.textContent='Server-side simulation only — Tier 1 unaffected.'
+
+}
+
+})
+
+}
+
+function scheduleDeadman(){
+
+try{
+
+deadmanPing();
+
+setInterval(function(){try{deadmanPing()}catch(_){}},HEARTBEAT_MS)
+
+}catch(_){}
+
+}
+
+scheduleDeadman();
+
+function crossingLabel(cfs){
+
+var n=parseFloat(cfs);
+
+if(isNaN(n))return 'unknown';
+
+if(n<40)return 'safe';
+
+if(n<180)return 'caution';
+
+return 'danger'
+
+}
+
+function applyHydroCache(o,isOffline){
+
+var cfs=o&&o.cfs!=null?o.cfs:'—';
+
+var ft=o&&o.ft!=null?o.ft:'—';
+
+var st=o&&o.stamp?o.stamp:null;
+
+hydroFlow.textContent='Streamflow: '+cfs+' cfs';
+
+hydroDepth.textContent='Gage height: '+ft+' ft';
+
+var lab=crossingLabel(cfs);
+
+hydroCross.textContent='Crossing: '+lab;
+
+hydroCross.className='tier2-stat safety-'+(lab==='unknown'?'unknown':lab);
+
+hydroStamp.textContent='Updated: '+(st?fmtIso(new Date(st)):'—')+(isOffline?' (cached)':'');
+
+hydroOfflineBadge.hidden=!isOffline
+
+}
+
+function parseUsgsIv(json){
+
+var cfs=null;var ft=null;
+
+try{
+
+var t=json&&json.value&&json.value.timeSeries;
+
+if(!t||!t.length)return null;
+
+for(var i=0;i<t.length;i++){
+
+var v=t[i];
+
+var codes=v.variable&&v.variable.variableCode;
+
+var pid=codes&&codes[0]&&(codes[0].value||codes[0]);
+
+if(typeof pid!=='string')pid=pid&&pid.value?pid.value:null;
+
+var pts=v.values&&v.values[0]&&v.values[0].value;
+
+var last=pts&&pts.length?pts[pts.length-1]:null;
+
+var val=last&&last.value!==undefined&&last.value!==''?parseFloat(last.value):NaN;
+
+if(pid==='00060'&&!isNaN(val))cfs=val;
+
+if(pid==='00065'&&!isNaN(val))ft=val
+
+}
+
+}catch(_){return null}
+
+if(cfs===null&&ft===null)return null;
+
+return{cfs:cfs!==null?cfs:'—',ft:ft!==null?ft:'—',stamp:Date.now()}
+
+}
+
+function fetchHydro(){
+
+var site=(usgsSite&&usgsSite.value||'06714000').replace(/\s/g,'');
+
+var url='https://waterservices.usgs.gov/nwis/iv/?sites='+encodeURIComponent(site)+'&parameterCd=00060,00065&period=P1D&format=json';
+
+return fetch(url,{method:'GET',cache:'no-store'}).then(function(res){
+
+if(!res.ok)throw new Error('usgs http '+res.status);
+
+return res.json()
+
+}).then(function(j){
+
+var p=parseUsgsIv(j);
+
+if(!p)throw new Error('parse');
+
+try{localStorage.setItem(LS_HYDRO,JSON.stringify(p))}catch(_){}
+
+applyHydroCache(p,false);
+
+setLastSync(Date.now());
+
+paintConn();
+
+return p
+
+}).catch(function(){
+
+var raw=null;
+
+try{raw=localStorage.getItem(LS_HYDRO)}catch(_){}
+
+if(raw){
+
+try{
+
+var o=JSON.parse(raw);
+
+applyHydroCache(o,true);
+
+return o
+
+}catch(_){}
+
+}
+
+hydroFlow.textContent='Streamflow: — cfs';
+
+hydroDepth.textContent='Gage height: — ft';
+
+hydroCross.textContent='Crossing: unknown';
+
+hydroCross.className='tier2-stat safety-unknown';
+
+hydroStamp.textContent='Updated: — (no cache)';
+
+hydroOfflineBadge.hidden=false;
+
+return null
+
+})
+
+}
+
+function scheduleHydro(){
+
+try{
+
+fetchHydro();
+
+setInterval(function(){try{fetchHydro()}catch(_){}},HYDRO_MS)
+
+}catch(_){}
+
+}
+
+scheduleHydro();
+
+var hydroRefresh=document.getElementById('hydroRefresh');
+
+if(hydroRefresh)hydroRefresh.addEventListener('click',function(){try{fetchHydro()}catch(_){}});
+
+function mockEnv(){
+
+var dist=12.4+Math.random()*6;var bear=Math.floor(Math.random()*360);
+
+return{dist:dist.toFixed(1),bearing:bear,hybrid:true,stamp:Date.now(),mock:true}
+
+}
+
+function applyEnv(o,isOffline){
+
+envDist.textContent='Nearest plume distance: '+o.dist+' mi';
+
+envDir.textContent='Bearing to anomaly: '+o.bearing+'° (clockwise from N)';
+
+envStamp.textContent='Updated: '+fmtIso(new Date(o.stamp))+(o.mock?' · mock':'')+(isOffline?' · cached':'');
+
+envNeedle.style.transform='rotate('+o.bearing+'deg)';
+
+envHybrid.textContent=o.hybrid?'HYBRID PHOTO · overlay active':'HYBRID PHOTO · idle'
+
+}
+
+function fetchEnv(){
+
+return Promise.resolve().then(function(){
+
+var m=mockEnv();
+
+try{localStorage.setItem(LS_ENV,JSON.stringify(m))}catch(_){}
+
+applyEnv(m,false);
+
+setLastSync(Date.now());
+
+paintConn();
+
+return m
+
+}).catch(function(){
+
+var raw=null;
+
+try{raw=localStorage.getItem(LS_ENV)}catch(_){}
+
+if(raw){
+
+try{applyEnv(JSON.parse(raw),true);return}catch(_){}
+
+}
+
+var m=mockEnv();
+
+applyEnv(m,false);
+
+return m
+
+})
+
+}
+
+function scheduleEnv(){
+
+try{
+
+fetchEnv();
+
+setInterval(function(){try{fetchEnv()}catch(_){}},ENV_MS)
+
+}catch(_){}
+
+}
+
+scheduleEnv();
+
+var envRefresh=document.getElementById('envRefresh');
+
+if(envRefresh)envRefresh.addEventListener('click',function(){try{fetchEnv()}catch(_){}});
+
+try{
+
+var h0=localStorage.getItem(LS_HYDRO);
+
+if(h0){applyHydroCache(JSON.parse(h0),!navigator.onLine)}
+
+}catch(_){}
+
+try{
+
+var e0=localStorage.getItem(LS_ENV);
+
+if(e0){applyEnv(JSON.parse(e0),!navigator.onLine)}
+
+}catch(_){}
+
+})();
+
+</script>
+
+<script>
+
+(function(){
+
+'use strict';
+
+function runCopilotSim(){
+
+try{
+
+var hazards=['mudslide corridor','ice bridge','rockfall'];
+
+var h=hazards[Math.floor(Math.random()*hazards.length)];
+
+var suggestion='Reroute west +120 m · avoid northern exposure';
+
+console.log('[COPILOT] hazard='+h+' suggestion='+suggestion);
+
+var card=document.getElementById('copilotCard');
+
+var log=document.getElementById('copilotLog');
+
+if(card)card.textContent='Detected: '+h+' · '+suggestion;
+
+if(log)log.textContent='Suggestion posted · console detail';
+
+}catch(e){console.log('[COPILOT] mock safe',e&&e.message?e.message:e)}
+
+}
+
+var copilotSim=document.getElementById('copilotSim');
+
+if(copilotSim)copilotSim.addEventListener('click',function(){try{runCopilotSim()}catch(_){}});
+
+function drawLidar(){
+
+try{
+
+var c=document.getElementById('lidarCanvas');
+
+if(!c||!c.getContext)return;
+
+var ctx=c.getContext('2d');
+
+var w=c.width,h=c.height;
+
+ctx.fillStyle='#080808';
+
+ctx.fillRect(0,0,w,h);
+
+ctx.strokeStyle='#00e5ff';
+
+ctx.lineWidth=2;
+
+ctx.beginPath();
+
+var pts=[];
+
+for(var i=0;i<14;i++){
+
+var t=i/13;
+
+var x=24+t*(w-48);
+
+var z=t*90;
+
+var y=h-36-Math.sin(t*Math.PI)*50-z*0.32;
+
+pts.push({x:x,y:y});
+
+}
+
+ctx.moveTo(pts[0].x,pts[0].y);
+
+for(var j=1;j<pts.length;j++)ctx.lineTo(pts[j].x,pts[j].y);
+
+ctx.stroke();
+
+ctx.fillStyle='rgba(0,229,255,0.35)';
+
+for(var k=0;k<pts.length;k++){
+
+ctx.beginPath();
+
+ctx.arc(pts[k].x,pts[k].y,3.5,0,Math.PI*2);
+
+ctx.fill();
+
+}
+
+ctx.fillStyle='#666';
+
+ctx.font='11px system-ui';
+
+ctx.fillText('Ghost trail · mock LiDAR path',10,16);
+
+}catch(e){console.log('[LIDAR] mock safe',e&&e.message?e.message:e)}
+
+}
+
+var lidarRedraw=document.getElementById('lidarRedraw');
+
+if(lidarRedraw)lidarRedraw.addEventListener('click',function(){try{drawLidar()}catch(_){}});
+
+try{drawLidar()}catch(_){}
+
+function zoneForHr(hr){
+
+if(hr<100)return 'Z1';
+
+if(hr<120)return 'Z2';
+
+if(hr<140)return 'Z3';
+
+if(hr<165)return 'Z4';
+
+return 'Z5';
+
+}
+
+function updateBio(){
+
+try{
+
+var s=document.getElementById('bioHrSlider');
+
+var hr=s?parseInt(s.value,10):88;
+
+var z=zoneForHr(hr);
+
+var d=document.getElementById('bioHrDisplay');
+
+var a=document.getElementById('bioAlert');
+
+if(d)d.textContent='HR: '+hr+' bpm · zone '+z;
+
+if(a){
+
+var msg='steady';
+
+if(z==='Z4'||z==='Z5')msg='predictive: reduce pace · hydration cue';
+
+a.textContent='Alert: '+msg;
+
+}
+
+}catch(e){console.log('[BIO] mock safe',e&&e.message?e.message:e)}
+
+}
+
+var bioSlider=document.getElementById('bioHrSlider');
+
+if(bioSlider)bioSlider.addEventListener('input',function(){try{updateBio()}catch(_){}});
+
+var bioPulse=document.getElementById('bioPulse');
+
+if(bioPulse)bioPulse.addEventListener('click',function(){
+
+try{
+
+var s=document.getElementById('bioHrSlider');
+
+if(s)s.value=String(100+Math.floor(Math.random()*60));
+
+updateBio();
+
+console.log('[BIO] wearable bridge mock pulse');
+
+}catch(e){console.log('[BIO] pulse caught',e)}
+
+});
+
+try{updateBio()}catch(_){}
+
+function refreshForage(){
+
+try{
+
+var month=new Date().getMonth()+1;
+
+var el=document.getElementById('forageDisplay');
+
+if(!el)return;
+
+var html='';
+
+if(month>=4&&month<=6){
+
+html='<p class="tier2-stat">Morel · likely window (mock)</p><p class="meta">Riparian cottonwoods, burn scars · ID with an expert · not foraging advice.</p>';
+
+}else if(month>=7&&month<=9){
+
+html='<p class="tier2-stat">Chanterelle · late summer hint (mock)</p><p class="meta">Conifer duff, recent rain · mock advisory only.</p>';
+
+}else{
+
+html='<p class="tier2-stat">Off-peak · planning mode (mock)</p><p class="meta">Use field guides; many species are toxic lookalikes.</p>';
+
+}
+
+el.innerHTML=html;
+
+}catch(e){console.log('[FORAGE] mock safe',e&&e.message?e.message:e)}
+
+}
+
+var forageRefresh=document.getElementById('forageRefresh');
+
+if(forageRefresh)forageRefresh.addEventListener('click',function(){try{refreshForage()}catch(_){}});
+
+try{refreshForage()}catch(_){}
+
+var recog=null;
+
+var voiceStatusEl=document.getElementById('voiceStatus');
+
+var SR=typeof window!=='undefined'&&(window.SpeechRecognition||window.webkitSpeechRecognition);
+
+if(SR&&voiceStatusEl){
+
+try{
+
+recog=new SR();
+
+recog.lang='en-US';
+
+recog.interimResults=false;
+
+recog.maxAlternatives=1;
+
+voiceStatusEl.textContent='Engine: Web Speech (cloud may be required)';
+
+}catch(e){recog=null;
+
+if(voiceStatusEl)voiceStatusEl.textContent='Engine: offline parser only';
+
+}
+
+}else if(voiceStatusEl){voiceStatusEl.textContent='Engine: offline phrase parser (no Speech API)';
+
+}
+
+function runVoiceCmd(cmd){
+
+try{
+
+var c=String(cmd||'').toLowerCase().trim();
+
+var logEl=document.getElementById('voiceLog');
+
+if(/reroute|hazard/.test(c)){
+
+runCopilotSim();
+
+if(logEl)logEl.textContent='Command: hazard / reroute → Co-Pilot';
+
+}else if(/status|state|help/.test(c)){
+
+if(logEl)logEl.textContent='Command: status · Tier 1–3 mock surfaces nominal';
+
+console.log('[VOICE] status query (mock)');
+
+}else{
+
+if(logEl)logEl.textContent='Command: '+cmd+' (no mapping · mock)';
+
+}
+
+console.log('[VOICE] phrase:',cmd);
+
+}catch(e){console.log('[VOICE] cmd caught',e)}
+
+}
+
+var voiceListen=document.getElementById('voiceListen');
+
+if(voiceListen)voiceListen.addEventListener('click',function(){
+
+try{
+
+if(!recog){
+
+if(voiceStatusEl)voiceStatusEl.textContent='Engine: use typed commands (offline)';
+
+var logEl=document.getElementById('voiceLog');
+
+if(logEl)logEl.textContent='No SpeechRecognition · type a command.';
+
+return;
+
+}
+
+recog.onresult=function(ev){
+
+try{
+
+var t=ev.results[0][0].transcript.trim();
+
+console.log('[VOICE] heard:',t);
+
+runVoiceCmd(t);
+
+}catch(e){var logEl=document.getElementById('voiceLog');
+
+if(logEl)logEl.textContent='Result parse error (handled)';
+
+}
+
+};
+
+recog.onerror=function(ev){
+
+try{
+
+console.log('[VOICE] error (fallback ok):',ev&&ev.error?ev.error:'');
+
+var logEl=document.getElementById('voiceLog');
+
+if(logEl)logEl.textContent='Speech error: '+(ev&&ev.error?ev.error:'?')+' · use typed line';
+
+}catch(e2){console.log('[VOICE] onerror handler caught',e2)}
+
+};
+
+try{recog.abort()}catch(_){}
+
+try{recog.start()}catch(eStart){
+
+console.log('[VOICE] start caught',eStart);
+
+var logEl=document.getElementById('voiceLog');
+
+if(logEl)logEl.textContent='Could not start mic · typed fallback';
+
+return;
+
+}
+
+}catch(e){
+
+console.log('[VOICE] listen caught',e);
+
+var logEl=document.getElementById('voiceLog');
+
+if(logEl)logEl.textContent='Listen blocked · typed fallback';
+
+}
+
+});
+
+var voiceSend=document.getElementById('voiceSendFallback');
+
+if(voiceSend)voiceSend.addEventListener('click',function(){
+
+try{
+
+var inp=document.getElementById('voiceFallback');
+
+runVoiceCmd(inp?inp.value:'');
+
+}catch(_){}
+
+});
+
+})();
+
+</script>
+
+</body>
+
+</html>
+

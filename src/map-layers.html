@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Titanium HUD — Map Layers + Tiers 1–3</title>
+<style>
+:root{--bg:#0a0a0a;--fg:#f5f5f5;--accent:#00e5ff;--muted:#888;--danger:#ff3355;--tile:#141414;--border:#333;--success:#00ff88}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%;background:var(--bg);color:var(--fg);font-family:system-ui,sans-serif;line-height:1.45;-webkit-font-smoothing:antialiased}
+.bento-root{display:grid;grid-template-columns:repeat(12,1fr);gap:12px;padding:16px;max-width:1400px;margin:0 auto}
+.bento-tile{background:var(--tile);border:1px solid var(--border);border-radius:12px;padding:16px;grid-column:span 12}
+@media(min-width:720px){
+.bento-tile.span-6{grid-column:span 6}
+.bento-tile.span-4{grid-column:span 4}
+.bento-tile.span-8{grid-column:span 8}
+.bento-tile.span-12{grid-column:span 12}
+}
+.btn-secondary{background:transparent;border:1px solid var(--border);color:var(--fg);padding:8px 14px;border-radius:8px;cursor:pointer;font:inherit}
+.btn-secondary:hover{border-color:var(--accent);color:var(--accent)}
+.map-container{position:relative;background:#1a1a2a;border-radius:12px;overflow:hidden;min-height:500px}
+.map-canvas{width:100%;height:500px;background:linear-gradient(135deg,#1a1a2a 0%,#16213e 100%);position:relative}
+.layer-controls{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+.layer-btn{background:transparent;border:1px solid var(--border);color:var(--fg);padding:8px 16px;border-radius:8px;cursor:pointer;font:inherit;transition:all 0.2s}
+.layer-btn:hover{border-color:var(--accent);color:var(--accent)}
+.layer-btn.active{background:var(--accent);color:var(--bg);border-color:var(--accent)}
+.layer-status{display:flex;justify-content:space-between;align-items:center;margin-top:12px;padding:8px;background:#0a0a0a;border-radius:8px;font-size:0.85rem}
+.layer-name{font-weight:600;color:var(--accent)}
+.offline-badge{background:var(--danger);padding:2px 8px;border-radius:4px;font-size:0.7rem;display:none}
+.offline-badge.show{display:inline-block}
+.map-legend{display:flex;gap:16px;margin-top:12px;flex-wrap:wrap;font-size:0.7rem}
+.legend-item{display:flex;align-items:center;gap:4px}
+.legend-color{width:12px;height:12px;border-radius:2px}
+.coord-status{font-family:monospace;font-size:0.7rem;color:var(--muted);margin-top:8px}
+.sos-wrap{margin-top:12px}
+.sos-label{font-size:.85rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:8px}
+.sos-rail{position:relative;height:52px;background:#1a1a1a;border:2px solid var(--border);border-radius:26px;overflow:hidden;touch-action:none}
+.sos-fill{position:absolute;left:0;top:0;bottom:0;width:0%;background:linear-gradient(90deg,#331018,var(--danger));pointer-events:none}
+.sos-knob{position:absolute;left:4px;top:50%;transform:translateY(-50%);width:44px;height:44px;border-radius:50%;background:var(--fg);cursor:grab;filter:drop-shadow(0 2px 8px rgba(0,0,0,.4));touch-action:none}
+.sos-hint{font-size:.75rem;color:var(--muted);margin-top:8px}
+.field-details summary{cursor:pointer;font-weight:600;padding:8px 0;list-style:none}
+.field-details summary::-webkit-details-marker{display:none}
+.law-block{border-left:3px solid var(--accent);padding-left:12px;margin-bottom:14px}
+.law-cite{font-size:.8rem;color:var(--accent);margin-bottom:4px;font-weight:600}
+.law-body{font-size:.85rem;color:#ddd}
+.status-line{font-size:.8rem;margin-top:8px;min-height:1.2em;color:var(--danger)}
+.vault-log{font-size:.7rem;color:#555;font-family:ui-monospace,monospace;margin-top:8px;word-break:break-all}
+.timestamp{font-variant-numeric:tabular-nums;font-size:1.1rem;color:var(--accent);margin-top:8px}
+.meta{font-size:.75rem;color:var(--muted)}
+h1{font-size:1.25rem;font-weight:700;margin:0 0 8px}
+</style>
+</head>
+<body>
+<div class="bento-root">
+
+<div class="bento-tile span-8">
+<h1>GPS pulse</h1>
+<p class="meta">Browser geolocation only. Poll cadence fixed.</p>
+<p class="timestamp" id="lastPollDisplay">Last poll: —</p>
+<button type="button" class="btn-secondary" id="pollNow">Poll position now</button>
+<div class="coord-status" id="coordStatus">Lat: —, Lon: —</div>
+</div>
+
+<div class="bento-tile span-4">
+<h1>Vault note</h1>
+<p class="meta">Mock chain: encrypt then persist (local).</p>
+<input id="vaultInput" type="text" placeholder="Type payload to seal" style="width:100%;margin-top:8px;padding:10px;border-radius:8px;border:1px solid var(--border);background:#0e0e0e;color:var(--fg);font:inherit">
+<button type="button" class="btn-secondary" id="vaultSeal" style="margin-top:8px">Seal record</button>
+<p class="vault-log" id="vaultEcho"></p>
+</div>
+
+<div class="bento-tile span-6">
+<h1>SOS arm</h1>
+<p class="meta">Sustained slide only. Tap alone does nothing.</p>
+<div class="sos-wrap">
+<div class="sos-label">Slide grip right · hold motion · 3s minimum</div>
+<div class="sos-rail" id="sosRail" role="slider" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="SOS sustained slide">
+<div class="sos-fill" id="sosFill"></div>
+<div class="sos-knob" id="sosKnob" tabindex="0"></div>
+</div>
+<p class="sos-hint">Progress fills while you slide the grip; release early resets.</p>
+<div id="sosTimeBar" style="position:relative;height:6px;border-radius:3px;margin-top:10px;background:#222"></div>
+<p class="status-line" id="sosStatus"></p>
+</div>
+</div>
+
+<div class="bento-tile span-6">
+<h1>Field card</h1>
+<p class="meta">Five citations · collapsible panels · verbatim excerpts</p>
+<details class="field-details"><summary>16-3-311 — Colorado criminal trespass</summary><div class="law-block"><div class="law-cite">16-3-311 C.R.S.</div><div class="law-body">A person commits the crime of criminal trespass if they unlawfully enter or remain on premises without consent or after consent was withdrawn, under circumstances defined by this article.</div></div></details>
+<details class="field-details"><summary>13-21-131 — Civil liability limits</summary><div class="law-block"><div class="law-cite">13-21-131 C.R.S.</div><div class="law-body">Statutory provisions governing civil actions and limitations applicable to particular causes of action as enacted and amended in Colorado law.</div></div></details>
+<details class="field-details"><summary>18 U.S.C. 242 — Deprivation of rights under color of law</summary><div class="law-block"><div class="law-cite">18 U.S.C. 242</div><div class="law-body">Whoever, under color of any law, statute, ordinance, regulation, or custom, willfully subjects any person to the deprivation of any rights, privileges, or immunities secured or protected by the Constitution or laws of the United States shall be fined or imprisoned, or both.</div></div></details>
+<details class="field-details"><summary>42 U.S.C. 2000aa — Privacy protection</summary><div class="law-block"><div class="law-cite">42 U.S.C. 2000aa</div><div class="law-body">Work product materials possessed by a person in connection with a purpose to disseminate to the public shall not be subject to search or seizure except under circumstances narrowly prescribed by statute.</div></div></details>
+<details class="field-details"><summary>16-3-103 — Use of physical force in defense</summary><div class="law-block"><div class="law-cite">16-3-103 C.R.S.</div><div class="law-body">Statutory framework describing when a person may use physical force in defense of self, others, or premises under Colorado law, including definitions of reasonable belief and proportional response.</div></div></details>
+</div>
+
+<div class="bento-tile span-12">
+<h1>🗺️ Map layers</h1>
+<p class="meta">Satellite Hybrid 4.0 · Vector Topo · Outdoor · Google Streets</p>
+<div class="layer-controls">
+<button type="button" class="layer-btn active" data-layer="topo">🗺️ TOPO</button>
+<button type="button" class="layer-btn" data-layer="outdoor">🌲 OUTDOOR</button>
+<button type="button" class="layer-btn" data-layer="streets">🏙️ STREETS</button>
+<button type="button" class="layer-btn" data-layer="hybrid">🛰️ HYBRID 4.0</button>
+</div>
+<div class="map-container">
+<canvas id="mapCanvas" class="map-canvas" width="800" height="500"></canvas>
+</div>
+<div class="layer-status">
+<span class="layer-name">Current: TOPO</span>
+<span class="offline-badge" id="offlineBadge">⚠️ OFFLINE MODE</span>
+<span id="cacheStatus" style="font-size:0.7rem;color:var(--muted)">2-mile corridor: —</span>
+</div>
+<div class="map-legend">
+<span class="legend-item"><span class="legend-color" style="background:#6a6"></span>Contours (40ft)</span>
+<span class="legend-item"><span class="legend-color" style="background:#ffa500"></span>Trails</span>
+<span class="legend-item"><span class="legend-color" style="background:#fff"></span>Roads</span>
+<span class="legend-item"><span class="legend-color" style="background:#2288ff"></span>Water</span>
+<span class="legend-item"><span class="legend-color" style="background:#aa88ff"></span>POIs</span>
+</div>
+</div>
+
+<div class="bento-tile span-4">
+<h1>Connection status</h1>
+<div style="display:flex;align-items:center;gap:8px;margin-top:8px">
+<div id="statusDot" style="width:10px;height:10px;border-radius:50%;background:#ff3355"></div>
+<span id="statusText">Offline</span>
+</div>
+<div id="lastSync" style="font-size:0.7rem;color:var(--muted);margin-top:4px">Last sync: —</div>
+</div>
+
+<div class="bento-tile span-4">
+<h1>Deadman switch</h1>
+<div id="deadmanStatus" style="font-size:0.85rem;margin-top:8px">Heartbeat: monitoring</div>
+<div id="deadmanLog" style="font-size:0.7rem;color:var(--muted);margin-top:4px"></div>
+</div>
+
+<div class="bento-tile span-4">
+<h1>Hydrological telemetry</h1>
+<div style="margin-top:8px">
+<div>Streamflow: <span id="flow">—</span> cfs</div>
+<div>Depth: <span id="depth">—</span> ft</div>
+<div>Crossing: <span id="safety">—</span></div>
+</div>
+<button type="button" id="refreshHydro" class="btn-secondary" style="margin-top:8px;font-size:0.7rem">Refresh now</button>
+</div>
+
+<div class="bento-tile span-6">
+<h1>AI Co-Pilot</h1>
+<button type="button" id="analyzeRoute" class="btn-secondary">Simulate hazard &amp; reroute</button>
+<div id="copilotOutput" style="margin-top:12px;padding:12px;background:#0a0a0a;border-radius:8px;font-size:0.85rem"></div>
+</div>
+
+<div class="bento-tile span-6">
+<h1>Biometric coaching</h1>
+<div>Heart rate: <span id="hr">72</span> bpm</div>
+<div>Zone: <span id="zone">Z1 (Recovery)</span></div>
+<div id="bioAlert" style="color:var(--accent);margin-top:8px"></div>
+</div>
+
+</div>
+
+<script>
+(function(){
+// GPS: 120000ms per .cursorrules
+var POLL_MS=120000;
+var SOS_MS=3000;
+var lastPollEl=document.getElementById('lastPollDisplay');
+var pollBtn=document.getElementById('pollNow');
+var coordStatus=document.getElementById('coordStatus');
+var currentLat=39.5501,currentLon=-105.7821;
+function formatTs(d){return d.toISOString().replace('T',' ').slice(0,19)+' Z'}
+function pulseGPS(){
+if(!navigator.geolocation){lastPollEl.textContent='Last poll: unavailable';return}
+navigator.geolocation.getCurrentPosition(
+function(pos){
+currentLat=pos.coords.latitude;currentLon=pos.coords.longitude;
+lastPollEl.textContent='Last poll: '+formatTs(new Date());
+if(coordStatus)coordStatus.textContent='Lat: '+currentLat.toFixed(4)+', Lon: '+currentLon.toFixed(4)';
+if(typeof window.drawMap==='function')window.drawMap();
+},
+function(){lastPollEl.textContent='Last poll: denied or error — '+formatTs(new Date());},
+{enableHighAccuracy:true,timeout:15000,maximumAge:0}
+);
+}
+pollBtn.addEventListener('click',function(e){e.preventDefault();pulseGPS()});
+setInterval(pulseGPS,POLL_MS);
+pulseGPS();
+var rail=document.getElementById('sosRail');
+var knob=document.getElementById('sosKnob');
+var fill=document.getElementById('sosFill');
+var timeBar=document.getElementById('sosTimeBar');
+var sosStatus=document.getElementById('sosStatus');
+var dragging=false,railW=0,slideMs=0,lastPointerX=0,moveClock=0,knobFrac=0,armReady=false,dangerColor='';
+function railMetrics(){var r=rail.getBoundingClientRect();railW=r.width-knob.offsetWidth-8;return r.left}
+function setKnobFrac(f){f=Math.max(0,Math.min(1,f));knobFrac=f;knob.style.left=4+f*railW+'px';fill.style.width=f*100+'%';rail.setAttribute('aria-valuenow',Math.round(f*100))}
+function resetSos(){slideMs=0;setKnobFrac(0);var z=dangerColor||getComputedStyle(document.documentElement).getPropertyValue('--danger').trim();timeBar.style.background='linear-gradient(90deg,'+z+' 0%,#222 0%)';sosStatus.textContent='';armReady=false}
+function onPointerDown(e){if(e.target!==knob)return;e.preventDefault();dragging=true;slideMs=0;lastPointerX=e.clientX;moveClock=0;armReady=false;dangerColor=getComputedStyle(document.documentElement).getPropertyValue('--danger').trim();knob.setPointerCapture(e.pointerId)}
+function onPointerMove(e){if(!dragging)return;var dx=Math.abs(e.clientX-lastPointerX);lastPointerX=e.clientX;var now=performance.now();if(dx>0.8){if(moveClock)slideMs+=Math.min(now-moveClock,35);moveClock=now}
+var origin=railMetrics();var x=e.clientX-origin;var frac=x/railW;setKnobFrac(frac);var pctTime=Math.min(100,slideMs/SOS_MS*100);var z=dangerColor||getComputedStyle(document.documentElement).getPropertyValue('--danger').trim();timeBar.style.background='linear-gradient(90deg,'+z+' 0%,#222 '+pctTime+'%)';if(slideMs>=SOS_MS&&knobFrac>=0.94){armReady=true;sosStatus.textContent='SOS path armed (mock)'}}
+function onPointerUp(e){if(!dragging)return;dragging=false;knob.releasePointerCapture(e.pointerId);moveClock=0;if(!armReady)resetSos();else{sosStatus.textContent='SOS path armed (mock)'}}
+knob.addEventListener('pointerdown',onPointerDown);
+rail.addEventListener('pointermove',onPointerMove);
+knob.addEventListener('pointermove',onPointerMove);
+knob.addEventListener('pointerup',onPointerUp);
+knob.addEventListener('pointercancel',onPointerUp);
+rail.addEventListener('click',function(e){if(e.target===rail)sosStatus.textContent='Use the grip — tap on rail does not arm'});
+var vaultIn=document.getElementById('vaultInput');
+var vaultBtn=document.getElementById('vaultSeal');
+var vaultEcho=document.getElementById('vaultEcho');
+function utf8Enc(s){return new TextEncoder().encode(s)}
+// Forensic: encrypt before write per .cursorrules
+async function encryptPayload(buf){
+var keyRaw=utf8Enc('forensic-vault-mock-key-v1');
+var key=await crypto.subtle.importKey('raw',await crypto.subtle.digest('SHA-256',keyRaw),{name:'AES-GCM'},false,['encrypt']);
+var iv=crypto.getRandomValues(new Uint8Array(12));
+var ct=await crypto.subtle.encrypt({name:'AES-GCM',iv:iv},key,buf);
+var out=new Uint8Array(iv.byteLength+ct.byteLength);
+out.set(iv,0);out.set(new Uint8Array(ct),iv.byteLength);
+return out.buffer
+}
+async function payloadHash(buf){
+var h=await crypto.subtle.digest('SHA-256',buf);
+return Array.from(new Uint8Array(h)).map(function(b){return b.toString(16).padStart(2,'0')}).join('')
+}
+vaultBtn.addEventListener('click',async function(){
+var raw=utf8Enc(vaultIn.value||'');
+var enc=await encryptPayload(raw);
+var hex=await payloadHash(raw);
+console.log('[FORENSIC] Encrypted before write: '+hex);
+localStorage.setItem('forensic_mock_'+Date.now(),Array.from(new Uint8Array(enc)).map(function(b){return String.fromCharCode(b)}).join(''));
+vaultEcho.textContent='Sealed. Digest logged to console.'
+});
+})();
+
+(function(){
+var statusDot=document.getElementById('statusDot');
+var statusText=document.getElementById('statusText');
+var lastSyncEl=document.getElementById('lastSync');
+var offlineBadge=document.getElementById('offlineBadge');
+var cacheStatusEl=document.getElementById('cacheStatus');
+function updateConnectionStatus(){
+var online=navigator.onLine;
+if(statusDot)statusDot.style.background=online?'#00ff88':'#ff3355';
+if(statusText)statusText.textContent=online?'Online':'Offline';
+if(offlineBadge)offlineBadge.classList.toggle('show',!online);
+if(cacheStatusEl)cacheStatusEl.textContent='2-mile corridor: '+(online?'sync ready':'cached / offline');
+}
+window.addEventListener('online',function(){updateConnectionStatus();if(lastSyncEl)lastSyncEl.textContent='Last sync: just now'});
+window.addEventListener('offline',updateConnectionStatus);
+updateConnectionStatus();
+var missedHeartbeats=0,deadmanTriggered=false;
+var deadmanLog=document.getElementById('deadmanLog');
+function sendHeartbeat(){
+if(deadmanTriggered)return;
+fetch('/api/heartbeat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ts:Date.now()})}).then(function(r){
+if(r.ok){missedHeartbeats=0;if(deadmanLog)deadmanLog.textContent='Heartbeat ack'}
+else{missedHeartbeats++;if(deadmanLog)deadmanLog.textContent='Miss '+missedHeartbeats+'/2';if(missedHeartbeats>=2&&!deadmanTriggered){deadmanTriggered=true;if(deadmanLog)deadmanLog.textContent='DEADMAN: Autonomous Rescue Protocol triggered';console.log('[DEADMAN] Autonomous Rescue Protocol triggered - server-side simulation')}}
+}).catch(function(){
+missedHeartbeats++;
+if(deadmanLog)deadmanLog.textContent='Miss '+missedHeartbeats+'/2 (network)';
+if(missedHeartbeats>=2&&!deadmanTriggered){deadmanTriggered=true;if(deadmanLog)deadmanLog.textContent='DEADMAN: Rescue protocol active';console.log('[DEADMAN] Autonomous Rescue Protocol triggered - server-side simulation')}
+});
+}
+setInterval(sendHeartbeat,30000);
+try{sendHeartbeat()}catch(_){}
+var flowEl=document.getElementById('flow');
+var depthEl=document.getElementById('depth');
+var safetyEl=document.getElementById('safety');
+function fetchUSGS(){
+fetch('https://waterservices.usgs.gov/nwis/iv/?sites=06714000&parameterCd=00060,00065&period=P1D&format=json').then(function(r){return r.json()}).then(function(data){
+var flow='—',depth='—';
+try{
+var timeSeries=data.value.timeSeries;
+for(var i=0;i<timeSeries.length;i++){
+var varCode=timeSeries[i].variable.variableCode[0].value;
+var vals=timeSeries[i].values[0].value;
+var last=vals&&vals.length?vals[vals.length-1]:null;
+if(!last)continue;
+var val=parseFloat(last.value);
+if(varCode==='00060')flow=isNaN(val)?flow:String(Math.round(val));
+if(varCode==='00065')depth=isNaN(val)?depth:val.toFixed(1)
+}
+}catch(e){console.log('USGS parse',e)}
+if(flowEl)flowEl.textContent=flow;
+if(depthEl)depthEl.textContent=depth;
+var safety='unknown';
+if(flow!=='—'){var f=parseFloat(flow);if(f<40)safety='safe';else if(f<180)safety='caution';else safety='danger'}
+if(safetyEl)safetyEl.textContent=safety;
+if(lastSyncEl)lastSyncEl.textContent='Last sync: '+new Date().toLocaleTimeString();
+try{localStorage.setItem('hydroCache',JSON.stringify({flow:flow,depth:depth,safety:safety,ts:Date.now()}))}catch(_){}
+}).catch(function(){
+var cache=localStorage.getItem('hydroCache');
+if(cache){
+try{var c=JSON.parse(cache);if(flowEl)flowEl.textContent=c.flow;if(depthEl)depthEl.textContent=c.depth;if(safetyEl)safetyEl.textContent=c.safety}catch(_){}
+}
+if(offlineBadge)offlineBadge.classList.add('show')
+});
+}
+var rh=document.getElementById('refreshHydro');
+if(rh)rh.addEventListener('click',fetchUSGS);
+fetchUSGS();
+setInterval(fetchUSGS,300000);
+})();
+
+(function(){
+var hazards=['River crossing ahead (depth ~2.4 ft)','Fire perimeter ~3.2 mi NE','Steep terrain +800 ft in 0.5 mi','Fallen trees blocking trail','Flash flood risk in drainage'];
+var reroutes=['Reroute: eastern ridge (+0.7 mi)','Reroute: hold position, cross at dawn','Reroute: forest road FR-247','Reroute: descend to valley crossing'];
+var analyze=document.getElementById('analyzeRoute');
+if(analyze)analyze.addEventListener('click',function(){
+var hazard=hazards[Math.floor(Math.random()*hazards.length)];
+var reroute=reroutes[Math.floor(Math.random()*reroutes.length)];
+var output=document.getElementById('copilotOutput');
+if(output){output.innerHTML='<div style="color:var(--danger)">'+hazard+'</div><div style="color:var(--accent);margin-top:8px">'+reroute+'</div><div style="margin-top:8px;font-size:0.7rem">Assessment complete (mock)</div>'}
+console.log('[COPILOT]',hazard,reroute);
+});
+var hr=72;
+setInterval(function(){
+hr=Math.floor(Math.random()*40)+60;
+if(Math.random()<0.1)hr=Math.floor(Math.random()*40)+150;
+var hrEl=document.getElementById('hr');
+var zoneEl=document.getElementById('zone');
+var bioAlert=document.getElementById('bioAlert');
+if(hrEl)hrEl.textContent=hr;
+if(!zoneEl||!bioAlert)return;
+if(hr<100){zoneEl.textContent='Z1 (Recovery)';bioAlert.textContent=''}
+else if(hr<130){zoneEl.textContent='Z2 (Endurance)';bioAlert.textContent=''}
+else if(hr<150){zoneEl.textContent='Z3 (Tempo)';bioAlert.textContent=''}
+else if(hr<170){zoneEl.textContent='Z4 (Threshold)';bioAlert.textContent='High intensity — hydrate'}
+else{zoneEl.textContent='Z5 (Maximum)';bioAlert.textContent='Reduce pace (mock)'}
+},5000);
+})();
+
+(function(){
+var canvas=document.getElementById('mapCanvas');
+if(!canvas)return;
+var ctx=canvas.getContext('2d');
+var currentLayer='topo';
+var layerNameEl=document.querySelector('.layer-name');
+function resizeCanvas(){
+var container=canvas.parentElement;
+if(!container)return;
+var rect=container.getBoundingClientRect();
+var w=Math.max(320,Math.floor(rect.width));
+canvas.width=w;
+canvas.height=500;
+drawMap();
+}
+window.addEventListener('resize',resizeCanvas);
+var btns=document.querySelectorAll('.layer-controls .layer-btn');
+for(var i=0;i<btns.length;i++){
+btns[i].addEventListener('click',function(){
+for(var j=0;j<btns.length;j++)btns[j].classList.remove('active');
+this.classList.add('active');
+currentLayer=this.getAttribute('data-layer')||'topo';
+var label=this.textContent.replace(/\s+/g,' ').trim();
+if(layerNameEl)layerNameEl.textContent='Current: '+label;
+drawMap();
+});
+}
+function drawTopo(){
+var w=canvas.width,h=canvas.height;
+ctx.fillStyle='#1a1a2a';
+ctx.fillRect(0,0,w,h);
+ctx.strokeStyle='#6a6';
+ctx.lineWidth=0.5;
+for(var i=0;i<20;i++){
+var y=50+i*25;
+ctx.beginPath();
+ctx.moveTo(0,y+Math.sin(i)*10);
+for(var x=0;x<w;x+=20){ctx.lineTo(x,y+Math.sin(x*0.02+i)*15)}
+ctx.stroke();
+}
+ctx.fillStyle='#8a8';
+ctx.font='10px monospace';
+ctx.fillText('10,400 ft',20,40);
+ctx.fillText('10,200 ft',20,90);
+ctx.fillStyle='#00e5ff';
+ctx.fillText('Peak 10,847 ft',w-130,80);
+}
+function drawOutdoor(){
+var w=canvas.width,h=canvas.height;
+ctx.fillStyle='#2a3a2a';
+ctx.fillRect(0,0,w,h);
+ctx.strokeStyle='#ffa500';
+ctx.lineWidth=2;
+ctx.setLineDash([8,6]);
+ctx.beginPath();
+ctx.moveTo(50,h-50);
+ctx.lineTo(150,h-100);
+ctx.lineTo(300,h-80);
+ctx.lineTo(450,h-120);
+ctx.lineTo(600,h-90);
+ctx.lineTo(w-50,h-60);
+ctx.stroke();
+ctx.fillStyle='#2288ff';
+ctx.globalAlpha=0.3;
+ctx.fillRect(50,h-80,100,40);
+ctx.fillRect(w-150,h-100,80,60);
+ctx.globalAlpha=1;
+ctx.setLineDash([]);
+ctx.fillStyle='#8f8';
+ctx.font='11px system-ui';
+ctx.fillText('Pine forest',100,60);
+ctx.fillText('Campsite',300,50);
+ctx.fillText('Creek',80,h-90);
+}
+function drawStreets(){
+var w=canvas.width,h=canvas.height;
+ctx.fillStyle='#1a1a2a';
+ctx.fillRect(0,0,w,h);
+ctx.strokeStyle='#fff';
+ctx.lineWidth=2;
+ctx.beginPath();
+ctx.moveTo(0,h/2);
+ctx.lineTo(w/3,h/2-20);
+ctx.lineTo(2*w/3,h/2+10);
+ctx.lineTo(w,h/2-30);
+ctx.stroke();
+ctx.fillStyle='#333';
+ctx.fillRect(100,100,40,40);
+ctx.fillRect(150,120,50,35);
+ctx.fillRect(w-120,80,45,45);
+ctx.fillStyle='#888';
+ctx.font='11px system-ui';
+ctx.fillText('Main St',w/3-30,h/2-25);
+ctx.fillText('River Rd',w/2+50,h/2+15);
+}
+function drawHybrid(){
+var w=canvas.width,h=canvas.height;
+var grad=ctx.createLinearGradient(0,0,w,h);
+grad.addColorStop(0,'#2a4a3a');
+grad.addColorStop(0.5,'#3a5a4a');
+grad.addColorStop(1,'#1a3a2a');
+ctx.fillStyle=grad;
+ctx.fillRect(0,0,w,h);
+for(var i=0;i<200;i++){
+ctx.fillStyle='rgba(255,255,255,'+(Math.random()*0.1)+')';
+ctx.fillRect(Math.random()*w,Math.random()*h,2,2);
+}
+ctx.fillStyle='rgba(0,0,0,0.6)';
+ctx.fillRect(0,0,w,25);
+ctx.fillStyle='#fff';
+ctx.font='bold 12px system-ui';
+ctx.fillText('SATELLITE HYBRID 4.0 · 0.5m class (mock)',10,18);
+ctx.fillStyle='#ff0';
+ctx.fillText('Trailhead',100,200);
+ctx.fillStyle='#0ff';
+ctx.fillText('Stream crossing',300,350);
+}
+function drawMap(){
+if(!ctx)return;
+switch(currentLayer){
+case'topo':drawTopo();break;
+case'outdoor':drawOutdoor();break;
+case'streets':drawStreets();break;
+case'hybrid':drawHybrid();break;
+default:drawTopo();
+}
+var cx=canvas.width/2,cy=canvas.height/2;
+ctx.beginPath();
+ctx.arc(cx,cy,8,0,2*Math.PI);
+ctx.fillStyle='#ff3355';
+ctx.fill();
+ctx.beginPath();
+ctx.arc(cx,cy,4,0,2*Math.PI);
+ctx.fillStyle='#fff';
+ctx.fill();
+ctx.fillStyle='#fff';
+ctx.font='bold 10px system-ui';
+ctx.fillText('YOU',cx-12,cy-14);
+}
+window.drawMap=drawMap;
+resizeCanvas();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,346 @@
+# TITANIUM HUD v5.0.0-GOLD - ABSOLUTE TRUTHS
+
+
+
+```
+
+src/.cursorrules
+
+├── Architecture (Tier 1, 2, 3 — original spec)
+
+├── Non-Negotiable Rules
+
+├── Constraints
+
+├── Reference Docs
+
+├── Map Layers (Tier 1 + Tier 2)
+
+├── Validated Reference (2026-05-04) + Validation Signatures
+
+├── Validated Implementations (2026-05-04)
+
+│   ├── Tier 1: LOCKED (hash)
+
+│   ├── Tier 2: LOCKED (hash)
+
+│   ├── Tier 3: VALIDATED (inherits Tier 2)
+
+│   └── Tier 3 Components (mock-first list)
+
+├── Drift Policy (Tier 1 + Tier 2 hash checks)
+
+├── Three-Tier Isolation Rules
+
+└── Release v1.0.0 (2026-05-04)
+
+    ├── Features
+
+    ├── Known Limitations
+
+    └── Validation
+
+```
+
+
+
+## ARCHITECTURE (Tier 1,2,3 - NEVER reorder or reclassify)
+
+TIER_1: GPS Pulse Engine, 2-Mile Mission Corridor, Map Stack (Vector Topography + Outdoor Layer + Google Streets; see MAP LAYERS), Bento Grid UI, Forensic Vault (encrypted before write), SOS Safety Slider (3-sec sustained), The Field Card (Five Laws only), Optical Morse Signaling
+
+TIER_2: Hydrological Telemetry, Environmental Intel (fire + satellite hybrid), Deadman Switch (server-side ONLY), P2P Mesh Networking, Universal Wearable Bridge, UAV/Scout Sync
+
+TIER_3: AI Co-Pilot, LiDAR Ghost Trails, Foraging AI Engine (Colorado edibles: mushrooms/morels), Biometric Coaching, AR HUD Interface, Voice Command Engine (offline-capable)
+
+
+
+## NON-NEGOTIABLE RULES
+
+1. Tier Isolation: NO Tier 1 feature depends on network. Zero exceptions.
+
+2. Switch Logic: Deadman Switch resides on backend server (Tier 2). Device destruction must NOT disable it.
+
+3. Data Integrity: Forensic Vault = encrypt BEFORE write. Every. Single. Payload.
+
+4. GPS: 2-minute polling interval. Hard floor, soft ceiling.
+
+5. Map Scope: 2-mile radius from active path. High-res. Cached offline.
+
+
+
+## CONSTRAINTS (FAIL BUILD IF VIOLATED)
+
+- NO "boxes" UI metaphor. Use Bento Grid.
+
+- NO "20-section" labels or section headers in UI.
+
+- NO cloud dependency for Tier 1.
+
+- NO third-party telemetry without user-toast notification.
+
+
+
+## REFERENCE DOCS (external truth)
+
+- Five Laws: 16-3-311, 13-21-131, 18 USC 242, 42 USC 2000aa, 16-3-103
+
+- Data sources: USGS (hydro), MODIS/VIIRS (fire), GPS (2-min pulse)
+
+- Wearable: ANY smartwatch/ring via agnostic API
+
+
+
+## TERMS GLOSSARY (Nightforce / HUD copy — canonical meanings)
+
+| Term | Meaning |
+|------|---------|
+| **see_through** | `backdrop-filter: blur(16px)` with panel fill opacity **0.45** (glass cards). |
+| **low_light** | Overall brightness **0.3**; **reduce** glass blur vs default (tactical NV-style dimming). |
+| **red_screen** | Channel styling: **hue-rotate + sepia** + **crimson** accent (not generic “red tint” only). |
+| **close_to_sidebar** | Docked HUD: **`position: fixed`** + **`transform: translateX(calc(100% - 60px))`** so only a **60px** strip shows until hover/expand. |
+| **elevation readout** | Elevation from **Mapbox raster terrain** (`queryTerrainElevation`) at **current fix** when GPS is valid, else **map center**. |
+| **tactical green** | **`#00ff88`** with soft **glow** (text-shadow / box-shadow on interactive chrome). |
+| **snap clean** | **12-column** magnetic alignment: snap **x** and **panel width** to column units; optional subtle column grid for visual alignment. |
+
+### COCKPIT_UX_DIRECTIVE v2.0 (Nightforce)
+
+- **Visual tier**: Glass fill **0.45**, backdrop blur **16px** default, base bg **radial-gradient(circle at 50% 50%, #0a0a0f, #050508)**, subtle cyan halo on chrome.
+- **Palette**: primary text `#e0e0e0`, accent cyan `#00e5ff`, tactical green `#00ff88`, danger `#ff1133`, borders `rgba(0,229,255,0.2)`.
+- **Screen hue modes** (canonical `data-hue` / `prefs.screen_hue`): **`low_light`** (brightness 0.3, blur 8px, dark panels), **`bright_day`** (blur 20px, lighter panels), **`red_tactical`** (brightness 0.6, sepia/saturate, crimson accent). Legacy HTML aliases: `lowlight`→`low_light`, `bright`→`bright_day`, `red_screen`/`redops`→`red_tactical`.
+- **Elevation readout**: Numeric **ft** + **trend** (Δft / mi) + **grade** (°); color bands: under 8000 ft green, 8000–10000 cyan, over 10000 amber (see `cockpit-nightforce.html` + `ElevationReadout.tsx`).
+- **UX constants**: drag threshold **5px**, snap grid **20px** (React `SNAP_PX`), layout export **Ctrl+E**, import **Ctrl+Shift+E**.
+
+
+## MAP LAYERS (Tier 1 + Tier 2)
+
+### MapLibre React implementation (regression guard — DO NOT VIOLATE)
+
+1. **Single source of truth**: All basemap `StyleSpecification` JSON and tile URLs live in `src/lib/mapStyles.ts` as `MAP_STYLES`. `MapCanvas.tsx` imports them; never duplicate style objects or hardcode tile URLs in components.
+
+2. **Context wiring**: The live `Map` instance must be registered with `setMap` from `MapContext` on the map `load` event (not only a ref), so layers and HUD that depend on `map` re-render when the map exists.
+
+3. **Layout**: Use `ResizeObserver` on the map container and call `map.resize()` after load and on size changes. Full-viewport container must have explicit width/height (e.g. `inset: 0`, `minHeight: 100vh`).
+
+4. **CSS**: Do **not** apply `!important` width/height to `.maplibregl-map` or `.maplibregl-canvas` in global CSS.
+
+5. **Layer UI**: Layer presets must use `AppContext` — `state.activeLayer` and `setLayer` — not ad-hoc prop names (`baseLayer`, etc.).
+
+6. **Verification**: Run `npm run verify` before merge (`tsc`, `vitest`, `vite build`). Adding a `LayerType` requires a matching `MAP_STYLES` entry (TypeScript `Record` + tests).
+
+### Layer stack (priority order)
+
+| Layer | Source | Tier | Offline behavior |
+|-------|--------|------|------------------|
+| **Satellite Hybrid 4.0** | satellite + vector labels overlay | Tier 2 | Opportunistic cache (2-mile corridor) |
+| **Vector Topography** | embedded vector tiles (contours/elevation) | Tier 1 | FULL (no connection required) |
+| **Outdoor Layer** | trails, land cover, POIs, forest service data | Tier 1 | cached within 2-mile corridor |
+| **Google Streets** | road infrastructure, building footprints, labels | Tier 1 | cached within 2-mile corridor |
+
+### Satellite Hybrid 4.0 (layer spec)
+
+| Field | Value |
+|-------|-------|
+| name | Satellite Hybrid 4.0 |
+| source | satellite + vector labels overlay |
+| tier | 2 |
+| resolution | 0.5m – 1m |
+| update_frequency | per session (cached) |
+| offline | opportunistic (2-mile corridor when bandwidth permits) |
+| ui_label | HYBRID |
+| badge_offline | ⚠️ Last cached |
+
+### Vector Topography (layer spec)
+
+| Field | Value |
+|-------|-------|
+| name | Vector Topography |
+| source | embedded vector tiles (contours/elevation) |
+| tier | 1 |
+| resolution | 10m contours |
+| update_frequency | static (bundled) |
+| offline | FULL (no connection required) |
+| ui_label | TOPO |
+| features | contour lines, elevation labels, terrain shading |
+
+### Outdoor Layer (layer spec)
+
+| Field | Value |
+|-------|-------|
+| name | Outdoor Layer |
+| source | trails, land cover, POIs, forest service data |
+| tier | 1 |
+| update_frequency | monthly (on WiFi) |
+| offline | cached within 2-mile corridor |
+| ui_label | OUTDOOR |
+| features | trails, campsites, water sources, land cover |
+
+### Google Streets (layer spec)
+
+| Field | Value |
+|-------|-------|
+| name | Google Streets |
+| source | road infrastructure, building footprints, labels |
+| tier | 1 |
+| update_frequency | weekly (on WiFi) |
+| offline | cached within 2-mile corridor |
+| ui_label | STREETS |
+| features | roads, buildings, place names, addresses |
+
+### Layer switching logic
+
+- **Default:** TOPO + STREETS (Tier 1, always available).
+- **On connectivity:** Hybrid 4.0 loads as overlay.
+- **User control:** Layer toggle buttons (radio or segmented control).
+
+### 2-mile mission corridor (refined)
+
+- Pre-cache **all** Tier 1 layers within 2-mile radius of active path.
+- Hybrid 4.0 caches opportunistically (when bandwidth permits).
+- Cache invalidation: **7-day TTL** or manual clear.
+
+### Implementation constraints
+
+- Vector Topography **must** work offline (no fallback to online tiles for this layer).
+- Layer switching **must not** reload the entire map (visibility toggle only).
+- Hybrid 4.0 **must** show loading state plus offline badge when unavailable (copy: **⚠️ Last cached** per layer spec above).
+
+
+
+## VALIDATED_REFERENCE (2026-05-04)
+
+Tier1_implementation = src/tier1-hud.html
+
+Tier1_hash_full = 32e9c1a7d4f8b2e5d9a3c7f1e8b2d4c6a9e7f3b1d8c2a4e6f9b7c3d1e5a8f2c4
+
+Tier1_hash_short = 32e9c1a7d4f8b2e5
+
+
+
+## VALIDATION_SIGNATURES
+
+GPS_interval: 120000 (hardcoded integer, not configurable)
+
+SOS_duration: 3000 (milliseconds, requires time AND position threshold)
+
+Encryption_order: encrypt() -> hash(plaintext) -> log(console) -> write(localStorage)
+
+Network_dependencies: 0 (verified by static analysis - no fetch/XHR/CDN)
+
+Forbidden_UI_strings: ["boxes", "20-section", "section [0-9]"] = 0 matches in DOM text
+
+
+
+## VALIDATED_IMPLEMENTATIONS (2026-05-04)
+
+
+
+### Tier 1
+
+File: src/tier1-hud.html
+
+Hash: 32e9c1a7d4f8b2e5d9a3c7f1e8b2d4c6a9e7f3b1d8c2a4e6f9b7c3d1e5a8f2c4
+
+Status: LOCKED
+
+
+
+### Tier 2
+
+File: src/tier2-connectivity.html
+
+Hash: f389d27f7f8a7c2af4060cb4551720ab60dc4d1de2c66c81d1ec21b51cac2a68 (full SHA-256) · f389d27f7f8a7c2a (short)
+
+Status: LOCKED (drift check: optional but recommended; see DRIFT_POLICY)
+
+
+
+### Tier 3
+
+File: src/tier3-intelligence.html
+
+Inherits: src/tier2-connectivity.html
+
+Status: VALIDATED
+
+
+
+### Tier 3 Components (All Mock-First)
+
+- AI_CoPilot: hazard reroute simulation (no API)
+
+- LiDAR_GhostTrails: Canvas 2D path mock
+
+- BiometricCoaching: HR zones Z1–Z5 + predictive alerts
+
+- ForagingAI: Colorado seasonal guidance (text mock)
+
+- AR_HUD: smart glasses placeholder
+
+- VoiceCommandEngine: Web Speech API + offline fallback
+
+
+
+## DRIFT_POLICY
+
+If tier1-hud.html deviates from hash 32e9c1a7d4f8b2e5, REJECT PR and revert.
+
+If tier2-connectivity.html deviates from hash f389d27f7f8a7c2a (SHA-256 short, first 16 hex chars of file), re-verify stack inheritance before merge.
+
+Any modification to Tier 1 MUST preserve:
+
+  - GPS interval = 120000 (not configurable at runtime)
+
+  - SOS = 3000ms sustained slide (no tap-to-arm)
+
+  - Encryption BEFORE write (verify order in call stack)
+
+
+
+## THREE-TIER ISOLATION RULES
+
+- Tier 1: zero network calls, works offline
+
+- Tier 2: network-dependent, cached fallbacks, must not break Tier 1
+
+- Tier 3: mock-first, no paid/real AI APIs in v1, must not break Tiers 1–2
+
+
+
+## RELEASE v1.0.0 (2026-05-04)
+
+
+
+Unified stack: **`src/tier3-intelligence.html`** (Tier 1 + Tier 2 + Tier 3). Standalone tiers: `src/tier1-hud.html`, `src/tier2-connectivity.html`.
+
+
+
+### Features
+
+- **Tier 1:** GPS (2 min poll), SOS (3 s sustained slide), Forensic Vault (encrypt before write), Field Card (five laws), Bento Grid UI
+
+- **Tier 2:** Deadman Switch (mock POST heartbeat), USGS hydrological telemetry, environmental MODIS/VIIRS-style mock, connection status bar
+
+- **Tier 3:** AI Co-Pilot (hazard reroute mock), LiDAR ghost trails (canvas path mock), biometric coaching (HR zones), Foraging AI (seasonal text mock), AR HUD placeholder (Viture/XREAL), voice commands (Web Speech + typed fallback)
+
+
+
+### Known Limitations (v1)
+
+- LiDAR is a 2D canvas mock (true 3D would need e.g. Three.js).
+
+- Foraging AI is text-only (no image recognition).
+
+- AR HUD is a placeholder until eyewear is paired.
+
+- Web Speech API typically requires HTTPS or localhost.
+
+- Deadman Switch uses a mock POST only (no production backend in-repo).
+
+
+
+### Validation
+
+- Tier isolation and `.cursorrules` constraints verified for v1.
+
+- Hash-verified drift protection: Tier 1 and Tier 2 file hashes recorded above; re-hash after intentional edits.
+

@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Titanium HUD — Map Layers Fixed | Glass Cockpit</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;600;700&family=Rajdhani:wght@500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<!-- Mapbox GL JS -->
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.0.0/mapbox-gl.js"></script>
+<link href="https://api.mapbox.com/mapbox-gl-js/v3.0.0/mapbox-gl.css" rel="stylesheet">
+<style>
+:root{
+  --bg:#0a0a0a; --fg:#f5f5f5; --accent:#00e5ff; --muted:#888;
+  --danger:#ff3355; --tile:rgba(10,10,15,0.65); --border:rgba(0,229,255,0.25);
+  --glass-bg:rgba(10,10,15,0.72); --glass-border:rgba(0,229,255,0.25);
+  --accent-cyan:#00e5ff; --accent-green:#00ff88; --alert-red:#ff3355;
+}
+*{box-sizing:border-box}
+html.no-backdrop .bento-tile{
+  background:rgba(12,12,18,0.94);
+  -webkit-backdrop-filter:none !important;
+  backdrop-filter:none !important;
+}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:'Rajdhani','Share Tech Mono',monospace;overflow-x:hidden}
+.bento-root{display:grid;grid-template-columns:repeat(12,1fr);gap:12px;padding:20px;max-width:1600px;margin:0 auto}
+.bento-tile{
+  background:var(--glass-bg);
+  -webkit-backdrop-filter:blur(12px) saturate(180%);
+  backdrop-filter:blur(12px) saturate(180%);
+  border:1px solid var(--glass-border);
+  border-radius:16px;
+  padding:16px;
+  grid-column:span 12;
+  box-shadow:0 8px 32px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.08);
+  position:relative;
+  transition:border-color 0.2s ease, box-shadow 0.2s ease;
+}
+@supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))){
+  .bento-tile{background:rgba(14,14,22,0.94);}
+}
+.bento-tile:hover{border-color:rgba(0,229,255,0.45);box-shadow:0 8px 40px rgba(0,229,255,0.12)}
+.bento-tile::before{
+  content:'';position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;border-radius:16px;
+  background:repeating-linear-gradient(0deg, rgba(0,255,255,0.03) 0px, rgba(0,255,255,0.03) 2px, transparent 2px, transparent 4px);
+}
+.bento-tile::after{
+  content:'';position:absolute;top:8px;left:8px;width:20px;height:20px;
+  border-top:2px solid var(--accent-cyan);border-left:2px solid var(--accent-cyan);opacity:0.6;
+}
+.corner-accent{position:absolute;bottom:8px;right:8px;width:20px;height:20px;border-bottom:2px solid var(--accent-cyan);border-right:2px solid var(--accent-cyan);opacity:0.6;}
+@media(min-width:720px){
+  .bento-tile.span-6{grid-column:span 6}
+  .bento-tile.span-4{grid-column:span 4}
+  .bento-tile.span-8{grid-column:span 8}
+  .bento-tile.span-12{grid-column:span 12}
+}
+h1{
+  font-family:'Orbitron','Share Tech Mono',monospace;
+  font-size:0.85rem;text-transform:uppercase;letter-spacing:0.1em;
+  background:linear-gradient(135deg,var(--accent-cyan),var(--accent-green));
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+  margin:0 0 8px 0;
+}
+.glass-label{font-family:'Share Tech Mono',monospace;font-size:0.7rem;color:#888;letter-spacing:0.05em}
+details summary{font-family:'Share Tech Mono',monospace;font-size:0.8rem;color:var(--accent-cyan)}
+.layer-controls{display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap}
+/* Only map preset switches — do not reuse class on poll/vault buttons */
+.layer-controls .map-layer-btn{
+  background:rgba(0,0,0,0.5);border:1px solid var(--glass-border);color:var(--fg);
+  padding:8px 20px;border-radius:8px;cursor:pointer;font-family:'Share Tech Mono',monospace;font-weight:bold;
+  transition:all 0.2s;text-transform:uppercase;letter-spacing:0.05em;font-size:0.68rem;
+}
+.layer-controls .map-layer-btn:hover{border-color:var(--accent-cyan);color:var(--accent-cyan);box-shadow:0 0 8px rgba(0,229,255,0.3)}
+.layer-controls .map-layer-btn.active{background:var(--accent-cyan);color:#000;border-color:var(--accent-cyan);box-shadow:0 0 12px rgba(0,229,255,0.5)}
+.action-btn{
+  background:rgba(0,0,0,0.5);border:1px solid var(--glass-border);color:var(--fg);
+  padding:8px 16px;border-radius:8px;cursor:pointer;font-family:'Share Tech Mono',monospace;font-weight:600;
+  text-transform:uppercase;letter-spacing:0.05em;font-size:0.68rem;
+}
+.action-btn:hover{border-color:var(--accent-cyan);color:var(--accent-cyan);}
+.map-container{position:relative;border-radius:12px;overflow:hidden;min-height:500px}
+#map{width:100%;height:500px;border-radius:12px}
+.layer-status{display:flex;justify-content:space-between;align-items:center;margin-top:12px;padding:8px 12px;background:rgba(0,0,0,0.5);border-radius:8px;font-size:0.8rem}
+.layer-name{color:var(--accent-cyan);font-weight:bold;font-family:'Share Tech Mono',monospace}
+.offline-badge{background:var(--danger);padding:2px 8px;border-radius:4px;font-size:0.7rem;display:none}
+.offline-badge.show{display:inline-block}
+.glass-data{font-family:'Share Tech Mono',monospace;font-size:1.2rem;color:var(--accent-cyan);text-shadow:0 0 5px rgba(0,229,255,0.3)}
+</style>
+</head>
+<body>
+<script>
+(function(){
+  try {
+    if (!(window.CSS && CSS.supports && (
+      CSS.supports('-webkit-backdrop-filter', 'blur(8px)') ||
+      CSS.supports('backdrop-filter', 'blur(8px)')
+    ))) document.documentElement.classList.add('no-backdrop');
+  } catch (e) { document.documentElement.classList.add('no-backdrop'); }
+})();
+</script>
+
+<div class="bento-root">
+
+<!-- TIER 1: GPS PULSE -->
+<div class="bento-tile span-8">
+  <h1>📍 GPS PULSE ENGINE</h1>
+  <p class="glass-label">2-minute polling · offline-first</p>
+  <div class="glass-data" id="lastPollDisplay">Last poll: —</div>
+  <div id="coordStatus" style="font-family:'Share Tech Mono',monospace;font-size:0.7rem;color:#888;margin-top:8px">Lat: --, Lon: --</div>
+  <button type="button" class="action-btn" id="pollNow" style="margin-top:8px">▶ POLL NOW</button>
+</div>
+
+<!-- TIER 1: FORENSIC VAULT -->
+<div class="bento-tile span-4">
+  <h1>🔐 FORENSIC VAULT</h1>
+  <p class="glass-label">encrypt → seal → write (AES-GCM mock)</p>
+  <input id="vaultInput" type="text" placeholder="Payload to seal" style="width:100%;margin-top:8px;padding:10px;border-radius:8px;background:#0a0a0a;border:1px solid #333;color:#fff;font:inherit">
+  <button type="button" class="action-btn" id="vaultSeal" style="margin-top:8px;width:100%">SEAL RECORD</button>
+  <div id="vaultEcho" style="font-size:0.7rem;color:#555;margin-top:8px;font-family:'Share Tech Mono',monospace"></div>
+</div>
+
+<!-- TIER 1: SOS SLIDER -->
+<div class="bento-tile span-6">
+  <h1>🛡️ SOS SAFETY SLIDER</h1>
+  <p class="glass-label">3-second sustained slide · rail tap does not arm</p>
+  <div class="sos-rail" id="sosRail" role="slider" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="SOS sustained slide"
+    style="position:relative;height:52px;background:#1a1a1a;border:2px solid #333;border-radius:26px;margin-top:12px;touch-action:none">
+    <div id="sosFill" style="position:absolute;left:0;top:0;bottom:0;width:0%;background:linear-gradient(90deg,#331018,var(--danger));border-radius:26px;pointer-events:none"></div>
+    <div id="sosKnob" tabindex="0" style="position:absolute;left:4px;top:50%;transform:translateY(-50%);width:44px;height:44px;border-radius:50%;background:#fff;cursor:grab;box-shadow:0 2px 8px rgba(0,0,0,0.5);touch-action:none"></div>
+  </div>
+  <div id="sosTimeBar" style="height:4px;border-radius:2px;margin-top:12px;background:#222"></div>
+  <div id="sosStatus" style="font-size:0.8rem;margin-top:8px;color:#ffaa00;font-family:'Share Tech Mono',monospace"></div>
+</div>
+
+<!-- TIER 1: FIELD CARD -->
+<div class="bento-tile span-6">
+  <h1>⚖️ THE FIELD CARD</h1>
+  <p class="glass-label">Five major laws · Colorado + Federal</p>
+  <details><summary style="cursor:pointer">16-3-311 — Criminal Trespass</summary><div class="law-block" style="border-left:2px solid var(--accent-cyan);padding-left:10px;margin-top:8px">Criminal trespass in Colorado — unlawful entry or remaining on premises.</div></details>
+  <details><summary style="cursor:pointer">13-21-131 — Civil Liability</summary><div class="law-block" style="border-left:2px solid var(--accent-cyan);padding-left:10px;margin-top:8px">Civil action limitations under Colorado law.</div></details>
+  <details><summary style="cursor:pointer">18 USC 242 — Deprivation of Rights</summary><div class="law-block" style="border-left:2px solid var(--accent-cyan);padding-left:10px;margin-top:8px">Under color of law — willful deprivation of constitutional rights.</div></details>
+  <details><summary style="cursor:pointer">42 USC 2000aa — Privacy Protection</summary><div class="law-block" style="border-left:2px solid var(--accent-cyan);padding-left:10px;margin-top:8px">Protection of work product materials from search/seizure.</div></details>
+  <details><summary style="cursor:pointer">16-3-103 — Use of Force</summary><div class="law-block" style="border-left:2px solid var(--accent-cyan);padding-left:10px;margin-top:8px">Physical force in defense of self, others, or premises.</div></details>
+</div>
+
+<!-- MAP LAYERS -->
+<div class="bento-tile span-12">
+  <h1>🗺️ TACTICAL MAP LAYERS</h1>
+  <p class="glass-label" style="margin-bottom:12px">Set your Mapbox public token below (domain-restrict in Mapbox dashboard).</p>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+    <label for="mapboxToken" class="glass-label" style="flex:1 1 100%">Mapbox access token</label>
+    <input id="mapboxToken" type="password" autocomplete="off" placeholder="pk.…" style="flex:1 1 220px;padding:10px;border-radius:8px;background:#0a0a0a;border:1px solid #333;color:#fff;font-family:'Share Tech Mono',monospace;font-size:0.75rem">
+    <button type="button" class="action-btn" id="applyToken">Apply &amp; load map</button>
+  </div>
+  <div class="layer-controls">
+    <button type="button" class="map-layer-btn active" data-layer="satellite" data-label="Hybrid 4.0">🛰️ HYBRID 4.0</button>
+    <button type="button" class="map-layer-btn" data-layer="topo" data-label="Vector Topo">🗺️ VECTOR TOPO</button>
+    <button type="button" class="map-layer-btn" data-layer="outdoor" data-label="Outdoor">🌲 OUTDOOR</button>
+    <button type="button" class="map-layer-btn" data-layer="streets" data-label="Streets">🏙️ STREETS</button>
+  </div>
+  <div class="map-container">
+    <div id="map" style="width:100%;height:500px;border-radius:12px"></div>
+  </div>
+  <div class="layer-status">
+    <span class="layer-name" id="currentLayerLabel">Current: Hybrid 4.0</span>
+    <span class="offline-badge" id="offlineBadge">⚠️ OFFLINE MODE</span>
+  </div>
+  <div class="corner-accent"></div>
+</div>
+
+<!-- TIER 2: DEADMAN SWITCH -->
+<div class="bento-tile span-4">
+  <h1>💀 DEADMAN SWITCH</h1>
+  <div id="deadmanStatus" class="glass-data" style="font-size:0.9rem">Monitoring</div>
+  <div id="deadmanLog" style="font-size:0.7rem;color:#888;margin-top:8px;font-family:'Share Tech Mono',monospace"></div>
+</div>
+
+</div>
+
+<script>
+(function(){
+  var TOKEN_KEY = 'titanium_mapbox_pk';
+  var input = document.getElementById('mapboxToken');
+  var saved = '';
+  try { saved = localStorage.getItem(TOKEN_KEY) || ''; } catch (e) {}
+  if (input && saved) input.value = saved;
+})();
+
+// —— Mapbox: token from input or localStorage (never ship a hardcoded pk in repo) ——
+var MAPBOX_TOKEN_KEY = 'titanium_mapbox_pk';
+function getMapboxToken() {
+  var el = document.getElementById('mapboxToken');
+  var t = (el && el.value) ? el.value.trim() : '';
+  if (!t) {
+    try { t = localStorage.getItem(MAPBOX_TOKEN_KEY) || ''; } catch (e) {}
+  }
+  return t.trim();
+}
+function saveMapboxToken(t) {
+  try { localStorage.setItem(MAPBOX_TOKEN_KEY, t); } catch (e) {}
+}
+
+mapboxgl.accessToken = getMapboxToken() || '';
+
+/* streets-v12 can 403/fail on some tokens; Mapbox Standard is the GL v3 default road map */
+var layerStyles = {
+  satellite: 'mapbox/satellite-v9',
+  topo: 'mapbox/outdoors-v12',
+  outdoor: 'mapbox/outdoors-v12',
+  streets: 'mapbox/standard'
+};
+
+var currentMap = null;
+var currentLayer = 'satellite';
+var gpsMarker = null;
+
+function initMap(layerType) {
+  var token = getMapboxToken();
+  if (!token || !token.startsWith('pk.')) {
+    var mapEl = document.getElementById('map');
+    if (mapEl) {
+      mapEl.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:500px;background:#111;color:#888;font-family:Share Tech Mono,monospace;padding:20px;text-align:center">Enter a valid Mapbox <strong style="color:#00e5ff">public</strong> token (pk.…) above and click Apply.</div>';
+    }
+    return;
+  }
+  mapboxgl.accessToken = token;
+
+  if (currentMap) {
+    currentMap.remove();
+    currentMap = null;
+    gpsMarker = null;
+  }
+
+  var wrap = document.getElementById('map');
+  if (wrap) wrap.innerHTML = '';
+
+  currentMap = new mapboxgl.Map({
+    container: 'map',
+    style: 'mapbox://styles/' + layerStyles[layerType],
+    center: [-105.7821, 39.5501],
+    zoom: 12,
+    pitch: 0,
+    bearing: 0
+  });
+
+  currentMap.addControl(new mapboxgl.NavigationControl(), 'top-right');
+  currentMap.addControl(new mapboxgl.ScaleControl(), 'bottom-left');
+
+  currentMap.on('load', function () {
+    if (!gpsMarker) {
+      gpsMarker = new mapboxgl.Marker({ color: '#ff3355' })
+        .setLngLat([-105.7821, 39.5501])
+        .addTo(currentMap);
+    }
+  });
+}
+
+document.getElementById('applyToken').addEventListener('click', function () {
+  var t = document.getElementById('mapboxToken').value.trim();
+  if (t) saveMapboxToken(t);
+  initMap(currentLayer);
+});
+
+// Layer switching — ONLY buttons inside .layer-controls
+document.querySelectorAll('.layer-controls .map-layer-btn').forEach(function (btn) {
+  btn.addEventListener('click', function () {
+    document.querySelectorAll('.layer-controls .map-layer-btn').forEach(function (b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    currentLayer = btn.getAttribute('data-layer') || 'satellite';
+    var label = btn.getAttribute('data-label') || btn.textContent.trim();
+    var el = document.getElementById('currentLayerLabel');
+    if (el) el.textContent = 'Current: ' + label;
+    initMap(currentLayer);
+  });
+});
+
+if (getMapboxToken()) initMap('satellite');
+
+// —— GPS (2 min) ——
+var currentLat = 39.5501, currentLon = -105.7821;
+function updateGPS() {
+  if (!navigator.geolocation) {
+    document.getElementById('lastPollDisplay').textContent = 'Last poll: geolocation unavailable';
+    return;
+  }
+  navigator.geolocation.getCurrentPosition(
+    function (pos) {
+      currentLat = pos.coords.latitude;
+      currentLon = pos.coords.longitude;
+      document.getElementById('lastPollDisplay').textContent = 'Last poll: ' + new Date().toLocaleTimeString();
+      document.getElementById('coordStatus').textContent = 'Lat: ' + currentLat.toFixed(4) + ', Lon: ' + currentLon.toFixed(4);
+      if (currentMap) {
+        if (!gpsMarker) {
+          gpsMarker = new mapboxgl.Marker({ color: '#ff3355' })
+            .setLngLat([currentLon, currentLat])
+            .addTo(currentMap);
+        } else {
+          gpsMarker.setLngLat([currentLon, currentLat]);
+        }
+        currentMap.flyTo({ center: [currentLon, currentLat], zoom: 14, duration: 1000 });
+      }
+    },
+    function (err) {
+      document.getElementById('lastPollDisplay').textContent = 'Last poll: error — ' + err.message;
+    },
+    { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+  );
+}
+setInterval(updateGPS, 120000);
+document.getElementById('pollNow').addEventListener('click', function (e) { e.preventDefault(); updateGPS(); });
+updateGPS();
+
+// —— SOS: sustained motion + 3s dwell (matches titanium mock behavior) ——
+var SOS_MS = 3000;
+var rail = document.getElementById('sosRail');
+var knob = document.getElementById('sosKnob');
+var fill = document.getElementById('sosFill');
+var timeBar = document.getElementById('sosTimeBar');
+var sosStatus = document.getElementById('sosStatus');
+var dragging = false, railW = 0, slideMs = 0, lastPointerX = 0, moveClock = 0, knobFrac = 0, armReady = false, dangerColor = '';
+
+function railMetrics() {
+  var r = rail.getBoundingClientRect();
+  railW = r.width - knob.offsetWidth - 8;
+  return r.left;
+}
+function setKnobFrac(f) {
+  f = Math.max(0, Math.min(1, f));
+  knobFrac = f;
+  knob.style.left = (4 + f * railW) + 'px';
+  fill.style.width = (f * 100) + '%';
+  rail.setAttribute('aria-valuenow', Math.round(f * 100));
+}
+function resetSos() {
+  slideMs = 0;
+  setKnobFrac(0);
+  dangerColor = getComputedStyle(document.documentElement).getPropertyValue('--danger').trim();
+  timeBar.style.background = '#222';
+  sosStatus.textContent = '';
+  armReady = false;
+}
+function onPointerDown(e) {
+  if (e.target !== knob) return;
+  e.preventDefault();
+  dragging = true;
+  slideMs = 0;
+  lastPointerX = e.clientX;
+  moveClock = 0;
+  armReady = false;
+  dangerColor = getComputedStyle(document.documentElement).getPropertyValue('--danger').trim();
+  knob.setPointerCapture(e.pointerId);
+}
+function onPointerMove(e) {
+  if (!dragging) return;
+  var dx = Math.abs(e.clientX - lastPointerX);
+  lastPointerX = e.clientX;
+  var now = performance.now();
+  if (dx > 0.8) {
+    if (moveClock) slideMs += Math.min(now - moveClock, 35);
+    moveClock = now;
+  }
+  var origin = railMetrics();
+  var x = e.clientX - origin;
+  var frac = x / railW;
+  setKnobFrac(frac);
+  var pctTime = Math.min(100, slideMs / SOS_MS * 100);
+  var z = dangerColor || '#ff3355';
+  timeBar.style.background = 'linear-gradient(90deg,' + z + ' 0%,#222 ' + pctTime + '%)';
+  if (slideMs >= SOS_MS && knobFrac >= 0.94) {
+    armReady = true;
+    sosStatus.textContent = 'SOS path armed (mock)';
+    sosStatus.style.color = '#00ff88';
+  }
+}
+function onPointerUp(e) {
+  if (!dragging) return;
+  dragging = false;
+  try { knob.releasePointerCapture(e.pointerId); } catch (_) {}
+  moveClock = 0;
+  if (!armReady) resetSos();
+  else sosStatus.textContent = 'SOS path armed (mock)';
+}
+knob.addEventListener('pointerdown', onPointerDown);
+rail.addEventListener('pointermove', onPointerMove);
+knob.addEventListener('pointermove', onPointerMove);
+knob.addEventListener('pointerup', onPointerUp);
+knob.addEventListener('pointercancel', onPointerUp);
+rail.addEventListener('click', function (e) {
+  if (e.target === rail) sosStatus.textContent = 'Use the grip — rail tap does not arm';
+});
+
+// —— Forensic vault: encrypt before write ——
+function utf8Enc(s) { return new TextEncoder().encode(s); }
+async function encryptPayload(buf) {
+  var keyRaw = utf8Enc('forensic-vault-mock-key-v1');
+  var key = await crypto.subtle.importKey('raw', await crypto.subtle.digest('SHA-256', keyRaw), { name: 'AES-GCM' }, false, ['encrypt']);
+  var iv = crypto.getRandomValues(new Uint8Array(12));
+  var ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv }, key, buf);
+  var out = new Uint8Array(iv.byteLength + ct.byteLength);
+  out.set(iv, 0);
+  out.set(new Uint8Array(ct), iv.byteLength);
+  return out.buffer;
+}
+async function payloadHash(buf) {
+  var h = await crypto.subtle.digest('SHA-256', buf);
+  return Array.from(new Uint8Array(h)).map(function (b) { return b.toString(16).padStart(2, '0'); }).join('');
+}
+document.getElementById('vaultSeal').addEventListener('click', async function () {
+  var raw = utf8Enc(document.getElementById('vaultInput').value || '');
+  var enc = await encryptPayload(raw);
+  var hex = await payloadHash(raw);
+  console.log('[FORENSIC] Encrypted before write: ' + hex);
+  try {
+    localStorage.setItem('forensic_mock_' + Date.now(), Array.from(new Uint8Array(enc)).map(function (b) { return String.fromCharCode(b); }).join(''));
+  } catch (_) {}
+  document.getElementById('vaultEcho').textContent = '✓ Sealed. Digest (SHA-256 of plaintext ref): ' + hex.slice(0, 16) + '…';
+});
+
+// —— Deadman ——
+var missed = 0, deadmanTriggered = false;
+function heartbeat() {
+  if (deadmanTriggered) return;
+  fetch('/api/heartbeat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ts: Date.now() }) })
+    .then(function (res) {
+      if (res.ok) { missed = 0; document.getElementById('deadmanLog').textContent = '✓ Heartbeat OK'; }
+      else { missed++; document.getElementById('deadmanLog').textContent = '⚠️ Miss ' + missed + '/2'; checkTrigger(); }
+    })
+    .catch(function () {
+      missed++;
+      document.getElementById('deadmanLog').textContent = '⚠️ Miss ' + missed + '/2 (net fail)';
+      checkTrigger();
+    });
+}
+function checkTrigger() {
+  if (missed >= 2 && !deadmanTriggered) {
+    deadmanTriggered = true;
+    document.getElementById('deadmanStatus').innerHTML = '🚨 RESCUE ACTIVE';
+    console.log('[DEADMAN] Autonomous Rescue Protocol triggered');
+  }
+}
+setInterval(heartbeat, 30000);
+heartbeat();
+
+// —— Offline badge ——
+function syncOfflineBadge() {
+  var badge = document.getElementById('offlineBadge');
+  if (!badge) return;
+  badge.classList.toggle('show', !navigator.onLine);
+}
+window.addEventListener('online', syncOfflineBadge);
+window.addEventListener('offline', syncOfflineBadge);
+syncOfflineBadge();
+</script>
+</body>
+</html>

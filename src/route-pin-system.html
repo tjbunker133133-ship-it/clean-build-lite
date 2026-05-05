@@ -1,0 +1,807 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<!-- Route Pin System v1.0 — inherits Mapbox glass demo pattern (map-layers-mapbox-glass.html). -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Route Pin System v1.0 — Mapbox</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600&family=Rajdhani:wght@500;600&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.0.0/mapbox-gl.js"></script>
+<link href="https://api.mapbox.com/mapbox-gl-js/v3.0.0/mapbox-gl.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@turf/turf@6.5.0/turf.min.js"></script>
+<style>
+:root{
+  --bg:#0a0a0a; --fg:#f5f5f5; --accent:#00e5ff; --muted:#888;
+  --danger:#ff3355; --glass-border:rgba(0,229,255,0.25);
+  --glass-bg:rgba(10,10,15,0.72); --start:#00ff88; --finish:#ff3355;
+}
+*{box-sizing:border-box}
+html.no-backdrop .bento-tile{background:rgba(14,14,22,0.94)!important;backdrop-filter:none!important}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:'Rajdhani','Share Tech Mono',monospace;overflow-x:hidden}
+.bento-root{display:grid;grid-template-columns:repeat(12,1fr);gap:12px;padding:16px;max-width:1680px;margin:0 auto}
+.bento-tile{
+  background:var(--glass-bg);backdrop-filter:blur(12px);border:1px solid var(--glass-border);
+  border-radius:16px;padding:16px;grid-column:span 12;position:relative;
+}
+@media(min-width:900px){ .bento-tile.span-8{grid-column:span 8} .bento-tile.span-4{grid-column:span 4} }
+h1{
+  font-family:Orbitron,monospace;font-size:0.8rem;text-transform:uppercase;letter-spacing:0.12em;
+  background:linear-gradient(135deg,var(--accent),#00ff88);-webkit-background-clip:text;background-clip:text;color:transparent;margin:0 0 8px;
+}
+.glass-label{font-size:0.68rem;color:var(--muted);letter-spacing:0.05em}
+.layer-controls{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+.layer-controls .map-layer-btn{
+  background:rgba(0,0,0,0.5);border:1px solid var(--glass-border);color:var(--fg);
+  padding:8px 16px;border-radius:8px;cursor:pointer;font-weight:600;text-transform:uppercase;font-size:0.65rem;letter-spacing:0.05em;
+}
+.layer-controls .map-layer-btn:hover{border-color:var(--accent);color:var(--accent)}
+.layer-controls .map-layer-btn.active{background:var(--accent);color:#000;border-color:var(--accent)}
+.action-btn{
+  background:rgba(0,0,0,0.45);border:1px solid var(--glass-border);color:var(--fg);padding:8px 14px;border-radius:8px;
+  cursor:pointer;font-weight:600;font-size:0.68rem;text-transform:uppercase;
+}
+.action-btn:hover{border-color:var(--accent);color:var(--accent)}
+.action-btn.danger{border-color:var(--danger);color:var(--danger)}
+.glass-data{font-family:'Share Tech Mono',monospace;font-size:1rem;color:var(--accent)}
+.map-wrap{position:relative;border-radius:12px;overflow:hidden;min-height:420px;flex:1;min-width:260px}
+#map{width:100%;height:min(62vh,560px);border-radius:12px}
+.layer-status{display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-top:10px;padding:8px 12px;background:rgba(0,0,0,0.45);border-radius:8px;font-size:0.75rem}
+.offline-badge{background:var(--danger);padding:2px 8px;border-radius:4px;font-size:0.65rem;display:none}
+.offline-badge.show{display:inline-block}
+.route-flex{display:flex;gap:14px;flex-wrap:wrap;align-items:stretch}
+.route-side{width:100%;max-width:340px;display:flex;flex-direction:column;gap:10px}
+@media(max-width:899px){ .route-side{max-width:none} }
+details.route-totals{border:1px solid var(--glass-border);border-radius:10px;padding:10px;background:rgba(0,0,0,0.35)}
+details.route-totals summary{cursor:pointer;font-weight:700;color:var(--accent);font-size:0.85rem}
+.pin-row{
+  display:flex;align-items:center;gap:8px;padding:8px;border-radius:8px;background:rgba(0,0,0,0.35);
+  border:1px solid rgba(255,255,255,0.08);font-size:0.78rem;touch-action:manipulation;
+}
+.pin-row.arrived{opacity:0.45;filter:grayscale(0.85)}
+.pin-row .emoji{font-size:1.1rem;cursor:pointer;user-select:none}
+.pin-row.start{border-left:3px solid var(--start)}
+.pin-row.finish{border-left:3px solid var(--finish)}
+.pin-tools{margin-left:auto;display:flex;gap:4px;flex-shrink:0}
+.pin-tools button{padding:4px 8px;font-size:0.65rem;min-height:36px;border-radius:6px;border:1px solid #444;background:#111;color:#ccc;cursor:pointer}
+.segment-row{font-size:0.72rem;color:#aaa;padding:4px 0;border-bottom:1px solid #222;font-family:'Share Tech Mono',monospace}
+.nav-readout{
+  padding:12px;border-radius:10px;background:rgba(0,229,255,0.08);border:1px solid rgba(0,229,255,0.25);
+  font-family:'Share Tech Mono',monospace;font-size:0.8rem;line-height:1.5;
+}
+.nav-readout strong{color:var(--accent)}
+.poll-badge{font-size:0.65rem;color:#888;margin-top:6px}
+.route-banner{
+  position:absolute;top:0;left:0;right:0;padding:10px 14px;background:linear-gradient(90deg,#551018,#882030);
+  color:#fff;text-align:center;font-weight:700;font-size:0.8rem;z-index:5;transform:translateY(-100%);transition:transform .25s ease;
+}
+.route-banner.show{transform:translateY(0)}
+.toast{
+  position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(120px);z-index:10000;
+  background:rgba(15,15,22,0.95);border:1px solid var(--danger);color:#fff;padding:12px 20px;border-radius:10px;
+  font-size:0.85rem;max-width:90vw;transition:transform .3s ease;box-shadow:0 8px 32px rgba(0,0,0,0.5);
+}
+.toast.show{transform:translateX(-50%) translateY(0)}
+.help{font-size:0.65rem;color:#666;margin-top:8px;line-height:1.4}
+.corridor-legend{font-size:0.62rem;color:#666;margin-top:6px}
+.mapboxgl-marker.drag-mid{cursor:grab}
+.mapboxgl-marker.drag-mid:active{cursor:grabbing}
+.hint-checkered{
+  background:repeating-conic-gradient(#333 0% 25%, #fff 0% 50%) 50% / 8px 8px;border-radius:50%;
+}
+</style>
+</head>
+<body>
+<script>
+(function(){
+  try{
+    if(!(window.CSS&&CSS.supports&&(CSS.supports('-webkit-backdrop-filter','blur(8px)')||CSS.supports('backdrop-filter','blur(8px)'))))
+      document.documentElement.classList.add('no-backdrop');
+  }catch(e){document.documentElement.classList.add('no-backdrop');}
+})();
+</script>
+
+<div class="bento-root">
+
+<div class="bento-tile span-8">
+  <h1>📍 GPS pulse</h1>
+  <p class="glass-label">Adaptive cadence: 120s default · 30s near corridor edge (within 500 ft)</p>
+  <div class="glass-data" id="lastPollDisplay">Last poll: —</div>
+  <div id="coordStatus" class="glass-label" style="margin-top:8px">Lat: —, Lon: —</div>
+  <div class="poll-badge" id="pollCadence">Poll interval: —</div>
+  <button type="button" class="action-btn" id="pollNow" style="margin-top:8px">Poll now</button>
+</div>
+
+<div class="bento-tile span-4">
+  <h1>📌 Route alerts</h1>
+  <p class="glass-label">Outside 2 mi corridor · toast + banner + vibration (if supported)</p>
+  <div id="alertState" class="glass-label" style="margin-top:8px;color:var(--accent)">Status: inside corridor</div>
+</div>
+
+<div class="bento-tile span-12">
+  <h1>🗺️ Route pin system v1.0</h1>
+  <p class="glass-label">Long-press map (500 ms) or right-click to add pin · Click pin emoji to cycle type (💧 🏕️ 🪑) · First=start · Last=finish</p>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+    <label class="glass-label" for="mapboxToken">Mapbox token</label>
+    <input id="mapboxToken" type="password" autocomplete="off" placeholder="pk.…" style="flex:1;min-width:200px;padding:10px;border-radius:8px;background:#0a0a0a;border:1px solid #333;color:#fff;font:inherit;font-size:0.75rem">
+    <button type="button" class="action-btn" id="applyToken">Apply</button>
+    <button type="button" class="action-btn danger" id="clearRoute" title="Remove all pins">Clear route</button>
+  </div>
+  <div class="layer-controls">
+    <button type="button" class="map-layer-btn active" data-layer="satellite" data-label="Satellite">🛰️ Satellite</button>
+    <button type="button" class="map-layer-btn" data-layer="topo" data-label="Topo">🗺️ Topo</button>
+    <button type="button" class="map-layer-btn" data-layer="outdoor" data-label="Outdoor">🌲 Outdoor</button>
+    <button type="button" class="map-layer-btn" data-layer="streets" data-label="Streets">🏙️ Streets</button>
+  </div>
+
+  <div class="route-flex">
+    <div class="map-wrap">
+      <div id="routeBanner" class="route-banner">⚠️ Outside route corridor (1 mi each side of path)</div>
+      <div id="map"></div>
+      <p class="corridor-legend">Corridor: 2 mi total width (Turf buffer 1 mi). Terrain segments require DEM.</p>
+    </div>
+    <aside class="route-side">
+      <details class="route-totals" id="routeTotals" open>
+        <summary>Route totals</summary>
+        <div id="totalsBody" style="margin-top:10px;font-family:'Share Tech Mono',monospace;font-size:0.8rem;line-height:1.6">
+          Distance: —<br>Elevation gain (est.): —<br>Segments: —
+        </div>
+      </details>
+      <div>
+        <div class="glass-label" style="margin-bottom:6px">Pins (middle: drag on map · reorder ↕)</div>
+        <div id="pinList"></div>
+      </div>
+      <div>
+        <div class="glass-label" style="margin-bottom:6px">Legs</div>
+        <div id="segmentList"></div>
+      </div>
+      <div class="nav-readout" id="navReadout">
+        <strong>Next pin:</strong> —<br>
+        <strong>Finish:</strong> —
+      </div>
+      <p class="help">Arrival: pins fade when GPS within 50 ft. Distance readouts update on each GPS pulse.</p>
+    </aside>
+  </div>
+  <div class="layer-status">
+    <span id="currentLayerLabel" style="color:var(--accent);font-weight:700">Current: Satellite</span>
+    <span class="offline-badge" id="offlineBadge">Offline</span>
+  </div>
+</div>
+
+</div>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<script>
+(function(){
+'use strict';
+
+var MAPBOX_TOKEN_KEY = 'titanium_mapbox_pk';
+var TOKEN_KEY = MAPBOX_TOKEN_KEY;
+
+function getMapboxToken(){
+  var el = document.getElementById('mapboxToken');
+  var t = (el && el.value) ? el.value.trim() : '';
+  if(!t){ try{ t = localStorage.getItem(MAPBOX_TOKEN_KEY) || ''; }catch(e){} }
+  return t.trim();
+}
+function saveMapboxToken(t){ try{ localStorage.setItem(MAPBOX_TOKEN_KEY, t); }catch(e){} }
+
+var input = document.getElementById('mapboxToken');
+try{ if(input && localStorage.getItem(TOKEN_KEY)) input.value = localStorage.getItem(TOKEN_KEY); }catch(e){}
+
+var layerStyles = { satellite:'mapbox/satellite-v9', topo:'mapbox/outdoors-v12', outdoor:'mapbox/outdoors-v12', streets:'mapbox/standard' };
+var currentMap = null;
+var currentLayer = 'satellite';
+var gpsMarker = null;
+
+var LONG_PRESS_MS = 500;
+var MOVE_CANCEL_PX = 12;
+var CORRIDOR_HALF_MI = 1;
+var ARRIVAL_FT = 50;
+var POLL_DEFAULT_MS = 120000;
+var POLL_EDGE_MS = 30000;
+var EDGE_ALERT_FT = 500;
+var MI_TO_FT = 5280;
+
+var PIN_TYPES = [
+  { id:'water', label:'Water', emoji:'💧' },
+  { id:'camp', label:'Camp', emoji:'🏕️' },
+  { id:'rest', label:'Rest', emoji:'🪑' }
+];
+
+var pins = [];
+var pinMarkers = [];
+var arrived = [];
+var longPressTimer = null;
+var longPressStart = null;
+var pollTimer = null;
+var currentPollMs = POLL_DEFAULT_MS;
+var outsideCorridorLatch = false;
+
+function showToast(msg){
+  var t = document.getElementById('toast');
+  if(!t) return;
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(showToast._h);
+  showToast._h = setTimeout(function(){ t.classList.remove('show'); }, 4200);
+}
+
+function vibrateAlert(){
+  try{
+    if(navigator.vibrate) navigator.vibrate([180, 80, 180]);
+  }catch(e){}
+}
+
+function haversineFt(a, b){
+  var R = 20902231;
+  var dLat = (b.lat - a.lat) * Math.PI / 180;
+  var dLon = (b.lng - a.lng) * Math.PI / 180;
+  var la = a.lat * Math.PI / 180, lb = b.lat * Math.PI / 180;
+  var h = Math.sin(dLat/2)*Math.sin(dLat/2) + Math.cos(la)*Math.cos(lb)*Math.sin(dLon/2)*Math.sin(dLon/2);
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+function queryElev(lng, lat){
+  if(!currentMap || typeof currentMap.queryTerrainElevation !== 'function') return null;
+  try{
+    var e = currentMap.queryTerrainElevation({lng:lng, lat:lat});
+    return (e == null || Number.isNaN(e)) ? null : e;
+  }catch(e){ return null; }
+}
+
+function segmentStats(c1, c2){
+  var steps = 6;
+  var prev = queryElev(c1[0], c1[1]);
+  var gainM = 0;
+  for(var i = 1; i <= steps; i++){
+    var t = i / steps;
+    var lng = c1[0] + (c2[0]-c1[0])*t;
+    var lat = c1[1] + (c2[1]-c1[1])*t;
+    var e = queryElev(lng, lat);
+    if(e != null && prev != null && e > prev) gainM += (e - prev);
+    if(e != null) prev = e;
+  }
+  var from = turf.point(c1);
+  var to = turf.point(c2);
+  var mi = turf.distance(from, to, { units:'miles' });
+  return { mi: mi, gainFt: gainM * 3.28084 };
+}
+
+function buildLineCoords(){
+  return pins.map(function(p){ return [p.lng, p.lat]; });
+}
+
+function syncRouteSources(){
+  if(!currentMap || !currentMap.isStyleLoaded()) return;
+
+  var coords = buildLineCoords();
+  var lineFeat = coords.length >= 2
+    ? { type:'Feature', properties:{}, geometry:{ type:'LineString', coordinates:coords } }
+    : { type:'Feature', properties:{}, geometry:{ type:'LineString', coordinates:[] } };
+
+  var srcRoute = currentMap.getSource('route-line');
+  if(srcRoute) srcRoute.setData(lineFeat);
+
+  var bufFeat = { type:'FeatureCollection', features:[] };
+  if(coords.length >= 2){
+    try{
+      var line = turf.lineString(coords);
+      var poly = turf.buffer(line, CORRIDOR_HALF_MI, { units:'miles', steps: 64 });
+      bufFeat.features.push(poly);
+    }catch(e){}
+  }
+  var srcBuf = currentMap.getSource('route-corridor');
+  if(srcBuf) srcBuf.setData(bufFeat);
+
+  var midLabels = { type:'FeatureCollection', features:[] };
+  for(var s = 0; s < pins.length - 1; s++){
+    var a = pins[s], b = pins[s+1];
+    var st = segmentStats([a.lng, a.lat], [b.lng, b.lat]);
+    var midLng = (a.lng + b.lng) / 2;
+    var midLat = (a.lat + b.lat) / 2;
+    var txt = st.mi.toFixed(1) + ' mi | +' + Math.round(st.gainFt) + ' ft';
+    midLabels.features.push({
+      type:'Feature',
+      properties:{ label: txt },
+      geometry:{ type:'Point', coordinates:[midLng, midLat] }
+    });
+  }
+  var srcLab = currentMap.getSource('segment-labels');
+  if(srcLab) srcLab.setData(midLabels);
+
+  rebuildMarkers();
+  renderPinList();
+  renderSegments();
+  updateTotals();
+  updateNavReadout(window._lastUserPt || null);
+}
+
+function makePinElement(pin, index){
+  var el = document.createElement('div');
+  el.style.width = '36px';
+  el.style.height = '36px';
+  el.style.borderRadius = '50%';
+  el.style.display = 'flex';
+  el.style.alignItems = 'center';
+  el.style.justifyContent = 'center';
+  el.style.fontSize = '18px';
+  el.style.border = '2px solid rgba(255,255,255,0.5)';
+  el.style.boxShadow = '0 2px 8px rgba(0,0,0,0.5)';
+  if(index === 0){
+    el.style.background = 'linear-gradient(145deg,#00ff88,#00aa55)';
+    el.textContent = '▶';
+    el.title = 'Start';
+  }else if(index === pins.length - 1 && pins.length > 1){
+    el.style.background = '#ff3355';
+    el.innerHTML = '';
+    var chk = document.createElement('div');
+    chk.className = 'hint-checkered';
+    chk.style.width = '22px'; chk.style.height = '22px'; chk.style.borderRadius = '4px';
+    el.appendChild(chk);
+    el.title = 'Finish';
+  }else{
+    var ty = PIN_TYPES.find(function(t){ return t.id === pin.type; }) || PIN_TYPES[0];
+    el.textContent = ty.emoji;
+    el.style.background = 'rgba(20,30,40,0.95)';
+    el.title = ty.label + ' — tap sidebar emoji to cycle';
+  }
+  if(arrived[index]) el.style.opacity = '0.4';
+  return el;
+}
+
+function rebuildMarkers(){
+  pinMarkers.forEach(function(m){ try{ m.remove(); }catch(e){} });
+  pinMarkers = [];
+  if(!currentMap) return;
+
+  pins.forEach(function(pin, index){
+    var el = makePinElement(pin, index);
+    var mk = new mapboxgl.Marker({ element: el, draggable: isMiddle(index) })
+      .setLngLat([pin.lng, pin.lat])
+      .addTo(currentMap);
+
+    if(isMiddle(index)) el.classList.add('drag-mid');
+
+    mk.on('dragend', function(){
+      var ll = mk.getLngLat();
+      pin.lng = ll.lng; pin.lat = ll.lat;
+      syncRouteSources();
+    });
+
+    el.addEventListener('click', function(e){
+      e.stopPropagation();
+      cyclePinType(index);
+    });
+
+    pinMarkers.push(mk);
+  });
+}
+
+function isMiddle(i){
+  if(pins.length <= 2) return false;
+  return i > 0 && i < pins.length - 1;
+}
+
+function cyclePinType(index){
+  if(index === 0 || index === pins.length - 1) return;
+  var cur = PIN_TYPES.findIndex(function(t){ return t.id === pins[index].type; });
+  cur = (cur + 1) % PIN_TYPES.length;
+  pins[index].type = PIN_TYPES[cur].id;
+  syncRouteSources();
+}
+
+function renderPinList(){
+  var host = document.getElementById('pinList');
+  if(!host) return;
+  host.innerHTML = '';
+  pins.forEach(function(pin, i){
+    var row = document.createElement('div');
+    row.className = 'pin-row';
+    if(i === 0) row.classList.add('start');
+    if(i === pins.length - 1 && pins.length > 1) row.classList.add('finish');
+    if(arrived[i]) row.classList.add('arrived');
+
+    var ty = PIN_TYPES.find(function(t){ return t.id === pin.type; }) || PIN_TYPES[0];
+    var em = document.createElement('span');
+    em.className = 'emoji';
+    em.textContent = (i === 0) ? '▶' : (i === pins.length-1 && pins.length>1) ? '🏁' : ty.emoji;
+    em.title = 'Click to cycle type (middle pins only)';
+    em.onclick = function(){ cyclePinType(i); };
+
+    var meta = document.createElement('span');
+    meta.style.flex = '1';
+    meta.textContent = (i===0?'START':(i===pins.length-1&&pins.length>1)?'FINISH':ty.label) + ' · ' + pin.lat.toFixed(4) + ', ' + pin.lng.toFixed(4);
+
+    var tools = document.createElement('div');
+    tools.className = 'pin-tools';
+    if(isMiddle(i)){
+      var up = document.createElement('button'); up.type='button'; up.textContent='↑'; up.onclick=function(){ reorderPin(i,-1); };
+      var dn = document.createElement('button'); dn.type='button'; dn.textContent='↓'; dn.onclick=function(){ reorderPin(i,1); };
+      var del = document.createElement('button'); del.type='button'; del.textContent='✕'; del.onclick=function(){ deletePin(i); };
+      tools.appendChild(up); tools.appendChild(dn); tools.appendChild(del);
+    }
+
+    row.appendChild(em);
+    row.appendChild(meta);
+    row.appendChild(tools);
+    host.appendChild(row);
+  });
+}
+
+function reorderPin(i, dir){
+  var j = i + dir;
+  if(!isMiddle(i) || j <= 0 || j >= pins.length - 1) return;
+  var t = pins[i]; pins[i] = pins[j]; pins[j] = t;
+  var ta = arrived[i]; arrived[i] = arrived[j]; arrived[j] = ta;
+  syncRouteSources();
+}
+
+function deletePin(i){
+  if(!isMiddle(i) || pins.length <= 2) return;
+  pins.splice(i, 1);
+  arrived.splice(i, 1);
+  syncRouteSources();
+}
+
+function renderSegments(){
+  var host = document.getElementById('segmentList');
+  if(!host) return;
+  host.innerHTML = '';
+  for(var s = 0; s < pins.length - 1; s++){
+    var st = segmentStats([pins[s].lng, pins[s].lat], [pins[s+1].lng, pins[s+1].lat]);
+    var div = document.createElement('div');
+    div.className = 'segment-row';
+    div.textContent = 'Leg ' + (s+1) + ': ' + st.mi.toFixed(1) + ' mi | +' + Math.round(st.gainFt) + ' ft';
+    host.appendChild(div);
+  }
+}
+
+function updateTotals(){
+  var body = document.getElementById('totalsBody');
+  if(!body) return;
+  if(pins.length < 2){
+    body.innerHTML = 'Distance: —<br>Elevation gain (est.): —<br>Segments: 0';
+    return;
+  }
+  var totalMi = 0, totalGain = 0;
+  for(var s = 0; s < pins.length - 1; s++){
+    var st = segmentStats([pins[s].lng, pins[s].lat], [pins[s+1].lng, pins[s+1].lat]);
+    totalMi += st.mi;
+    totalGain += st.gainFt;
+  }
+  body.innerHTML = 'Distance: ' + totalMi.toFixed(2) + ' mi<br>Elevation gain (est.): +' + Math.round(totalGain) + ' ft<br>Segments: ' + (pins.length - 1);
+}
+
+function updateNavReadout(userPt){
+  var el = document.getElementById('navReadout');
+  if(!el) return;
+  if(pins.length === 0){
+    el.innerHTML = '<strong>Next pin:</strong> —<br><strong>Finish:</strong> —';
+    return;
+  }
+  if(!userPt){
+    el.innerHTML = '<strong>Next pin:</strong> (waiting GPS)<br><strong>Finish:</strong> —';
+    return;
+  }
+  var nextI = -1;
+  for(var i = 0; i < pins.length; i++){
+    if(!arrived[i]){ nextI = i; break; }
+  }
+  var ftToNext = '—';
+  if(nextI >= 0){
+    var d = haversineFt({lng:userPt.lng,lat:userPt.lat},{lng:pins[nextI].lng,lat:pins[nextI].lat});
+    ftToNext = (d/5280).toFixed(2) + ' mi (' + Math.round(d) + ' ft)';
+  }
+  var last = pins.length - 1;
+  var dFin = haversineFt({lng:userPt.lng,lat:userPt.lat},{lng:pins[last].lng,lat:pins[last].lat});
+  var finStr = (dFin/5280).toFixed(2) + ' mi (' + Math.round(dFin) + ' ft)';
+  var nextLabel = nextI < 0 ? 'Complete' : (nextI===last ? 'Finish pin' : ('Pin ' + (nextI+1)));
+  el.innerHTML = '<strong>Next pin ('+nextLabel+'):</strong> ' + ftToNext + '<br><strong>Finish:</strong> ' + finStr;
+}
+
+function checkArrivals(userPt){
+  if(!userPt || pins.length === 0) return;
+  for(var i = 0; i < pins.length; i++){
+    var d = haversineFt({lng:userPt.lng,lat:userPt.lat},{lng:pins[i].lng,lat:pins[i].lat});
+    if(d <= ARRIVAL_FT) arrived[i] = true;
+  }
+}
+
+function distanceToRouteMiles(pt){
+  if(pins.length < 2) return 0;
+  var line = turf.lineString(buildLineCoords());
+  var p = turf.point([pt.lng, pt.lat]);
+  try{
+    return turf.pointToLineDistance(p, line, { units:'miles' });
+  }catch(e){ return 999; }
+}
+
+function updatePollInterval(userPt){
+  var ms = POLL_DEFAULT_MS;
+  if(userPt && pins.length >= 2){
+    var dMi = distanceToRouteMiles(userPt);
+    var dFt = dMi * MI_TO_FT;
+    var half = CORRIDOR_HALF_MI * MI_TO_FT;
+    if(dFt <= half){
+      var edgeDist = half - dFt;
+      if(edgeDist <= EDGE_ALERT_FT && edgeDist >= 0) ms = POLL_EDGE_MS;
+    }
+  }
+  if(ms !== currentPollMs){
+    currentPollMs = ms;
+    clearInterval(pollTimer);
+    pollTimer = setInterval(updateGPS, currentPollMs);
+  }
+  var pc = document.getElementById('pollCadence');
+  if(pc) pc.textContent = 'Poll interval: ' + (currentPollMs/1000) + ' s' + (currentPollMs === POLL_EDGE_MS ? ' (near edge)' : '');
+}
+
+function checkCorridorAlert(userPt){
+  var banner = document.getElementById('routeBanner');
+  var state = document.getElementById('alertState');
+  if(!userPt || pins.length < 2){
+    if(banner) banner.classList.remove('show');
+    if(state) state.textContent = 'Status: —';
+    outsideCorridorLatch = false;
+    return;
+  }
+  var dMi = distanceToRouteMiles(userPt);
+  var outside = dMi > CORRIDOR_HALF_MI;
+  if(outside){
+    if(state) state.textContent = 'Status: ⚠️ Outside corridor';
+    if(banner) banner.classList.add('show');
+    if(!outsideCorridorLatch){
+      outsideCorridorLatch = true;
+      showToast('Left route corridor (>1 mi from path center)');
+      vibrateAlert();
+    }
+  }else{
+    outsideCorridorLatch = false;
+    if(banner) banner.classList.remove('show');
+    if(state) state.textContent = 'Status: inside corridor';
+  }
+}
+
+function addPinAt(lngLat){
+  pins.push({ id:Date.now(), lng:lngLat.lng, lat:lngLat.lat, type:'water' });
+  arrived.push(false);
+  syncRouteSources();
+}
+
+function wireMapInteraction(){
+  if(!currentMap) return;
+
+  function clearLP(){
+    if(longPressTimer){ clearTimeout(longPressTimer); longPressTimer = null; }
+    longPressStart = null;
+  }
+
+  currentMap.on('contextmenu', function(e){
+    e.preventDefault();
+    addPinAt(e.lngLat);
+    showToast('Pin added (right-click)');
+  });
+
+  var suppressMouseUntil = 0;
+  function beginLongPress(e){
+    if(e.originalEvent && e.originalEvent.button != null && e.originalEvent.button !== 0) return;
+    if(e.originalEvent && e.originalEvent.touches && e.originalEvent.touches.length > 1) return;
+    clearLP();
+    longPressStart = { lngLat: e.lngLat, px: e.point };
+    longPressTimer = setTimeout(function(){
+      longPressTimer = null;
+      if(longPressStart) addPinAt(longPressStart.lngLat);
+      showToast('Pin added (hold)');
+    }, LONG_PRESS_MS);
+  }
+  currentMap.on('touchstart', function(e){
+    suppressMouseUntil = Date.now() + 800;
+    beginLongPress(e);
+  });
+  currentMap.on('mousedown', function(e){
+    if(Date.now() < suppressMouseUntil) return;
+    beginLongPress(e);
+  });
+
+  function cancelIfMoved(e){
+    if(!longPressStart || !longPressTimer) return;
+    var dx = e.point.x - longPressStart.px.x;
+    var dy = e.point.y - longPressStart.px.y;
+    if(Math.hypot(dx, dy) > MOVE_CANCEL_PX) clearLP();
+  }
+  currentMap.on('mousemove', cancelIfMoved);
+  currentMap.on('touchmove', cancelIfMoved);
+
+  currentMap.on('mouseup', clearLP);
+  currentMap.on('touchend', clearLP);
+  currentMap.on('touchcancel', clearLP);
+  currentMap.on('mouseout', clearLP);
+}
+
+function addRouteLayers(){
+  if(!currentMap.getSource('route-corridor')){
+    currentMap.addSource('route-corridor', {
+      type:'geojson',
+      data:{ type:'FeatureCollection', features:[] }
+    });
+    currentMap.addLayer({
+      id:'route-corridor-fill',
+      type:'fill',
+      source:'route-corridor',
+      paint:{ 'fill-color':'#00e5ff', 'fill-opacity':0.06 }
+    });
+  }
+  if(!currentMap.getSource('route-line')){
+    currentMap.addSource('route-line', {
+      type:'geojson',
+      lineMetrics:true,
+      data:{ type:'Feature', properties:{}, geometry:{ type:'LineString', coordinates:[] } }
+    });
+    currentMap.addLayer({
+      id:'route-line-layer',
+      type:'line',
+      source:'route-line',
+      layout:{ 'line-join':'round', 'line-cap':'round' },
+      paint:{
+        'line-width':3,
+        'line-gradient':[
+          'interpolate',['linear'],['line-progress'],
+          0,'#00ffff',
+          0.5,'#00e5ff',
+          1,'#006680'
+        ]
+      }
+    });
+  }
+  if(!currentMap.getSource('segment-labels')){
+    currentMap.addSource('segment-labels', {
+      type:'geojson',
+      data:{ type:'FeatureCollection', features:[] }
+    });
+    currentMap.addLayer({
+      id:'segment-symbol',
+      type:'symbol',
+      source:'segment-labels',
+      layout:{
+        'text-field':['get','label'],
+        'text-size':11,
+        'text-font':['DIN Offc Pro Medium','Arial Unicode MS Bold'],
+        'text-offset':[0,1.2]
+      },
+      paint:{
+        'text-color':'#00e5ff',
+        'text-halo-color':'#000',
+        'text-halo-width':1.2
+      }
+    });
+  }
+}
+
+function addTerrain(){
+  if(!currentMap || !currentMap.isStyleLoaded()) return;
+  try{
+    if(currentMap.getSource('mapbox-dem')){
+      currentMap.setTerrain({ source:'mapbox-dem', exaggeration:1 });
+      return;
+    }
+    currentMap.addSource('mapbox-dem', {
+      type:'raster-dem',
+      url:'mapbox://mapbox.mapbox-terrain-dem-v1',
+      tileSize:512,
+      maxzoom:14
+    });
+    currentMap.setTerrain({ source:'mapbox-dem', exaggeration:1 });
+  }catch(e){ console.warn('terrain', e); }
+}
+
+function initMap(layerType){
+  var token = getMapboxToken();
+  if(!token || !token.startsWith('pk.')){
+    document.getElementById('map').innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:420px;background:#111;color:#888">Enter a valid Mapbox public token (pk.…)</div>';
+    return;
+  }
+  mapboxgl.accessToken = token;
+  if(currentMap){ currentMap.remove(); currentMap = null; gpsMarker = null; }
+
+  document.getElementById('map').innerHTML = '';
+  currentMap = new mapboxgl.Map({
+    container:'map',
+    style:'mapbox://styles/' + layerStyles[layerType],
+    center:[-105.7821,39.5501],
+    zoom:12
+  });
+  currentMap.addControl(new mapboxgl.NavigationControl(),'top-right');
+  currentMap.addControl(new mapboxgl.ScaleControl(),'bottom-left');
+
+  currentMap.on('load', function(){
+    addTerrain();
+    addRouteLayers();
+    wireMapInteraction();
+    syncRouteSources();
+    if(!gpsMarker){
+      gpsMarker = new mapboxgl.Marker({ color:'#ff3355' })
+        .setLngLat([-105.7821,39.5501])
+        .addTo(currentMap);
+    }
+    setTimeout(function(){ addTerrain(); syncRouteSources(); }, 400);
+  });
+}
+
+document.getElementById('applyToken').addEventListener('click', function(){
+  var t = document.getElementById('mapboxToken').value.trim();
+  if(t) saveMapboxToken(t);
+  initMap(currentLayer);
+});
+
+document.querySelectorAll('.layer-controls .map-layer-btn').forEach(function(btn){
+  btn.addEventListener('click', function(){
+    document.querySelectorAll('.layer-controls .map-layer-btn').forEach(function(b){ b.classList.remove('active'); });
+    btn.classList.add('active');
+    currentLayer = btn.getAttribute('data-layer') || 'satellite';
+    var label = btn.getAttribute('data-label') || '';
+    var el = document.getElementById('currentLayerLabel');
+    if(el) el.textContent = 'Current: ' + label;
+    initMap(currentLayer);
+  });
+});
+
+document.getElementById('clearRoute').addEventListener('click', function(){
+  pins = []; arrived = [];
+  syncRouteSources();
+});
+
+function updateGPS(){
+  if(!navigator.geolocation){
+    document.getElementById('lastPollDisplay').textContent = 'Geolocation unavailable';
+    return;
+  }
+  navigator.geolocation.getCurrentPosition(
+    function(pos){
+      var lat = pos.coords.latitude, lon = pos.coords.longitude;
+      document.getElementById('lastPollDisplay').textContent = 'Last poll: ' + new Date().toLocaleTimeString();
+      document.getElementById('coordStatus').textContent = 'Lat: ' + lat.toFixed(5) + ', Lon: ' + lon.toFixed(5);
+      var pt = { lng:lon, lat:lat };
+      window._lastUserPt = pt;
+      if(currentMap){
+        if(!gpsMarker){
+          gpsMarker = new mapboxgl.Marker({ color:'#ff3355' }).setLngLat([lon,lat]).addTo(currentMap);
+        }else gpsMarker.setLngLat([lon,lat]);
+      }
+      var arrivedBefore = arrived.slice();
+      checkArrivals(pt);
+      updatePollInterval(pt);
+      checkCorridorAlert(pt);
+      updateNavReadout(pt);
+      var changed = false;
+      for(var ai = 0; ai < pins.length; ai++){
+        if(arrivedBefore[ai] !== arrived[ai]){ changed = true; break; }
+      }
+      if(changed) syncRouteSources();
+    },
+    function(err){
+      document.getElementById('lastPollDisplay').textContent = 'GPS error: ' + err.message;
+    },
+    { enableHighAccuracy:true, timeout:20000, maximumAge:0 }
+  );
+}
+
+pollTimer = setInterval(updateGPS, currentPollMs);
+document.getElementById('pollNow').addEventListener('click', function(e){ e.preventDefault(); updateGPS(); });
+
+function syncOffline(){
+  var b = document.getElementById('offlineBadge');
+  if(b) b.classList.toggle('show', !navigator.onLine);
+}
+window.addEventListener('online', syncOffline);
+window.addEventListener('offline', syncOffline);
+syncOffline();
+
+if(getMapboxToken()) initMap('satellite');
+updateGPS();
+
+})();
+</script>
+</body>
+</html>

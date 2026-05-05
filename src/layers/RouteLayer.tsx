@@ -1,22 +1,23 @@
 import { useEffect } from 'react'
 import { useMapContext } from '../context/MapContext'
 import { useAppContext } from '../context/AppContext'
+import * as maplibregl from 'maplibre-gl'
 
 const ROUTE_SOURCE_ID = 'tactical-route-source'
+const CORRIDOR_LAYER_ID = 'tactical-route-corridor-layer'
 const ROUTE_LAYER_ID = 'tactical-route-layer'
 
 export default function RouteLayer() {
-  const { mapRef } = useMapContext()
+  const { map } = useMapContext()
   const { state } = useAppContext()
 
   useEffect(() => {
-    const map = mapRef.current
     if (!map) return
+    let rafId: number | null = null
 
-    const updateRoute = () => {
+    const buildGeojson = (): GeoJSON.FeatureCollection => {
       const coordinates = state.waypoints.map((w) => [w.lng, w.lat])
-
-      const geojson: GeoJSON.FeatureCollection = {
+      return {
         type: 'FeatureCollection',
         features:
           coordinates.length >= 2
@@ -32,70 +33,41 @@ export default function RouteLayer() {
               ]
             : [],
       }
-
-      const source = map.getSource(ROUTE_SOURCE_ID) as maplibregl.GeoJSONSource | undefined
-
-      if (source) {
-        source.setData(geojson)
-      } else {
-        // Wait for style to be loaded
-        const addLayers = () => {
-          if (map.getSource(ROUTE_SOURCE_ID)) return
-
-          map.addSource(ROUTE_SOURCE_ID, {
-            type: 'geojson',
-            data: geojson,
-          })
-
-          map.addLayer({
-            id: ROUTE_LAYER_ID,
-            type: 'line',
-            source: ROUTE_SOURCE_ID,
-            layout: {
-              'line-join': 'round',
-              'line-cap': 'round',
-            },
-            paint: {
-              'line-color': '#00ffb4',
-              'line-width': 1.5,
-              'line-opacity': 0.6,
-              'line-dasharray': [4, 4],
-            },
-          })
-        }
-
-        if (map.isStyleLoaded()) {
-          addLayers()
-        } else {
-          map.once('styledata', addLayers)
-        }
-      }
     }
 
-    // Re-add after style change
-    const onStyleData = () => {
-      // Source was removed with style change, re-add
+    const ensureRouteLayers = (geojson: GeoJSON.FeatureCollection) => {
       if (!map.getSource(ROUTE_SOURCE_ID)) {
-        const coordinates = state.waypoints.map((w) => [w.lng, w.lat])
-        const geojson: GeoJSON.FeatureCollection = {
-          type: 'FeatureCollection',
-          features:
-            coordinates.length >= 2
-              ? [
-                  {
-                    type: 'Feature',
-                    properties: {},
-                    geometry: { type: 'LineString', coordinates },
-                  },
-                ]
-              : [],
-        }
-        map.addSource(ROUTE_SOURCE_ID, { type: 'geojson', data: geojson })
+        map.addSource(ROUTE_SOURCE_ID, {
+          type: 'geojson',
+          data: geojson,
+        })
+      }
+      if (!map.getLayer(CORRIDOR_LAYER_ID)) {
+        map.addLayer({
+          id: CORRIDOR_LAYER_ID,
+          type: 'line',
+          source: ROUTE_SOURCE_ID,
+          layout: {
+            'line-join': 'round',
+            'line-cap': 'round',
+          },
+          paint: {
+            'line-color': '#00ffb4',
+            'line-width': 22,
+            'line-opacity': 0.14,
+            'line-blur': 0.9,
+          },
+        })
+      }
+      if (!map.getLayer(ROUTE_LAYER_ID)) {
         map.addLayer({
           id: ROUTE_LAYER_ID,
           type: 'line',
           source: ROUTE_SOURCE_ID,
-          layout: { 'line-join': 'round', 'line-cap': 'round' },
+          layout: {
+            'line-join': 'round',
+            'line-cap': 'round',
+          },
           paint: {
             'line-color': '#00ffb4',
             'line-width': 1.5,
@@ -106,13 +78,44 @@ export default function RouteLayer() {
       }
     }
 
+    const runUpdate = () => {
+      const geojson = buildGeojson()
+      const source = map.getSource(ROUTE_SOURCE_ID) as maplibregl.GeoJSONSource | undefined
+      if (source) {
+        source.setData(geojson)
+        return
+      }
+      const ensure = () => {
+        if (!map.isStyleLoaded()) return
+        ensureRouteLayers(geojson)
+      }
+      if (map.isStyleLoaded()) ensure()
+      else map.once('styledata', ensure)
+    }
+
+    const scheduleUpdate = () => {
+      if (rafId != null) window.cancelAnimationFrame(rafId)
+      rafId = window.requestAnimationFrame(() => {
+        rafId = null
+        runUpdate()
+      })
+    }
+
+    const onStyleData = () => {
+      scheduleUpdate()
+    }
+
     map.on('styledata', onStyleData)
-    updateRoute()
+    scheduleUpdate()
 
     return () => {
+      if (rafId != null) {
+        window.cancelAnimationFrame(rafId)
+        rafId = null
+      }
       map.off('styledata', onStyleData)
     }
-  }, [state.waypoints]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [state.waypoints, map])
 
   return null
 }
