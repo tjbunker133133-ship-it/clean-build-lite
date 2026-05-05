@@ -51,6 +51,7 @@ export default function MapCanvas() {
   keepArmedRef.current = keepWaypointToolArmed
   const clearLabelAfterDropRef = useRef(clearLabelAfterDrop)
   clearLabelAfterDropRef.current = clearLabelAfterDrop
+  const [watchdogNotice, setWatchdogNotice] = useState(false)
 
   // Create map once; swap style when base layer changes
   useEffect(() => {
@@ -63,6 +64,7 @@ export default function MapCanvas() {
     let fallbackLocked = false
     let map: maplibregl.Map | null = null
     let lastTouchDropAt = 0
+    let lastUserInteractionAt = Date.now()
     let touchMoved = false
     let multiTouchActive = false
     let touchStart: { x: number; y: number } | null = null
@@ -71,6 +73,13 @@ export default function MapCanvas() {
       typeof navigator !== 'undefined' &&
       /AppleWebKit/i.test(navigator.userAgent || '') &&
       /iPhone|iPad|iPod|Macintosh/i.test(navigator.userAgent || '')
+    const tapDiagnosticsEnabled =
+      typeof window !== 'undefined' &&
+      (window.location.search.includes('tapdiag=1') || localStorage.getItem('hud_tapdiag') === '1')
+    const tapDiag = (msg: string) => {
+      if (tapDiagnosticsEnabled) console.info(`[tapdiag] ${msg}`)
+    }
+    let watchdogTimer: number | null = null
 
     // Render blank maps are usually tied to WebGL/context or sizing churn.
     // Strategy: show static OSM until MapLibre reaches `idle` with tiles drawn.
@@ -162,6 +171,7 @@ export default function MapCanvas() {
 
       mapRef.current = map
       skipLayerSyncRef.current = true
+      setWatchdogNotice(false)
 
       let renderTimer: number | null = window.setTimeout(() => {
         // Safari/WebKit can occasionally create a black map until a fresh context.
@@ -254,6 +264,19 @@ export default function MapCanvas() {
             markReady()
           }
         }, isAppleWebKit ? 220 : 320)
+        if (watchdogTimer != null) window.clearTimeout(watchdogTimer)
+        watchdogTimer = window.setTimeout(() => {
+          if (cancelled || !map) return
+          if (Date.now() - lastUserInteractionAt > 12000) {
+            try {
+              map.resize()
+            } catch {
+              // ignore
+            }
+            setWatchdogNotice(true)
+            tapDiag('watchdog nudged map after inactivity window')
+          }
+        }, 13000)
       }
 
       map.once('load', onLoad)
@@ -321,28 +344,35 @@ export default function MapCanvas() {
       }
 
       map.on('click', (e: any) => {
+        lastUserInteractionAt = Date.now()
         // iOS emits synthetic click shortly after a successful touch drop.
         if (Date.now() - lastTouchDropAt < 550) return
+        tapDiag('click placement attempt')
         placeWaypoint(e, 'click')
       })
       map.on('touchstart', (e: any) => {
+        lastUserInteractionAt = Date.now()
         const pointCount = Array.isArray(e?.points) ? e.points.length : 0
         multiTouchActive = pointCount > 1
         const p = e?.points?.[0]
         touchStart = p ? { x: p.x, y: p.y } : null
         touchLast = touchStart
         touchMoved = false
+        tapDiag(`touchstart points=${pointCount}`)
       })
       map.on('touchmove', (e: any) => {
+        lastUserInteractionAt = Date.now()
         const p = e?.points?.[0]
         if (!p || !touchStart) return
         touchLast = { x: p.x, y: p.y }
         const moveTolerance = isAppleWebKit ? 18 : 10
         if (Math.hypot(p.x - touchStart.x, p.y - touchStart.y) > moveTolerance) {
           touchMoved = true
+          tapDiag('touchmove crossed drag tolerance')
         }
       })
       map.on('touchend', (e: any) => {
+        lastUserInteractionAt = Date.now()
         if (multiTouchActive) {
           const remaining = Array.isArray(e?.points) ? e.points.length : 0
           if (remaining <= 1) multiTouchActive = false
@@ -351,6 +381,7 @@ export default function MapCanvas() {
         if (touchMoved) return
         const dropped = placeWaypoint(e, 'touch')
         if (dropped) lastTouchDropAt = Date.now()
+        tapDiag(`touchend dropped=${String(dropped)}`)
       })
     }
 
@@ -378,6 +409,10 @@ export default function MapCanvas() {
       if (resizeRafRef.current != null) {
         cancelAnimationFrame(resizeRafRef.current)
         resizeRafRef.current = null
+      }
+      if (watchdogTimer != null) {
+        window.clearTimeout(watchdogTimer)
+        watchdogTimer = null
       }
       cancelled = true
       try {
@@ -519,6 +554,27 @@ export default function MapCanvas() {
           >
             Map fallback active
           </div>
+        </div>
+      )}
+      {watchdogNotice && (
+        <div
+          style={{
+            position: 'absolute',
+            left: '50%',
+            bottom: 16,
+            transform: 'translateX(-50%)',
+            zIndex: 3,
+            borderRadius: 10,
+            border: '1px solid rgba(125,255,138,0.5)',
+            background: 'rgba(8,14,10,0.86)',
+            color: '#d8f4db',
+            fontSize: 11,
+            letterSpacing: '0.05em',
+            padding: '8px 10px',
+            pointerEvents: 'none',
+          }}
+        >
+          MAP INPUT WATCHDOG ACTIVE
         </div>
       )}
       <div

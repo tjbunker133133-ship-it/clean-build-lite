@@ -3,11 +3,13 @@ import React, {
   useContext,
   useReducer,
   useCallback,
+  useEffect,
   type ReactNode
 } from 'react'
 import type { AppState, AppAction, Waypoint, LayerType, WaypointType } from '../types'
 
 const DEAD_MAN_DURATION = 300
+const APP_STORAGE_KEY = 'tactical_hud_app_state_v1'
 
 const initialState: AppState = {
   waypoints: [],
@@ -90,8 +92,66 @@ interface AppContextValue {
 
 const AppContext = createContext<AppContextValue | null>(null)
 
+function isWaypointType(value: unknown): value is WaypointType {
+  return value === 'default' || value === 'camp' || value === 'water' || value === 'rest' || value === 'finish'
+}
+
+function isLayerType(value: unknown): value is LayerType {
+  return value === 'streets' || value === 'satellite' || value === 'topo' || value === 'outdoor'
+}
+
+function sanitizeWaypoint(raw: unknown): Waypoint | null {
+  if (!raw || typeof raw !== 'object') return null
+  const item = raw as Partial<Waypoint>
+  if (typeof item.id !== 'string' || typeof item.label !== 'string') return null
+  if (typeof item.lng !== 'number' || !Number.isFinite(item.lng)) return null
+  if (typeof item.lat !== 'number' || !Number.isFinite(item.lat)) return null
+  if (typeof item.createdAt !== 'number' || !Number.isFinite(item.createdAt)) return null
+  if (!isWaypointType(item.type)) return null
+  return {
+    id: item.id,
+    lng: item.lng,
+    lat: item.lat,
+    label: item.label.slice(0, 64),
+    type: item.type,
+    createdAt: item.createdAt,
+  }
+}
+
+function loadInitialState(): AppState {
+  if (typeof window === 'undefined') return initialState
+  try {
+    const raw = localStorage.getItem(APP_STORAGE_KEY)
+    if (!raw) return initialState
+    const parsed = JSON.parse(raw) as Partial<AppState> | null
+    if (!parsed || typeof parsed !== 'object') return initialState
+    const waypoints = Array.isArray(parsed.waypoints)
+      ? parsed.waypoints.map(sanitizeWaypoint).filter((v): v is Waypoint => Boolean(v))
+      : []
+    return {
+      ...initialState,
+      waypoints,
+      activeLayer: isLayerType(parsed.activeLayer) ? parsed.activeLayer : initialState.activeLayer,
+      selectedWaypointId: typeof parsed.selectedWaypointId === 'string' ? parsed.selectedWaypointId : null,
+      pendingWaypointType: isWaypointType(parsed.pendingWaypointType) ? parsed.pendingWaypointType : initialState.pendingWaypointType,
+      nextWaypointLabel: typeof parsed.nextWaypointLabel === 'string' ? parsed.nextWaypointLabel.slice(0, 64) : '',
+      keepWaypointToolArmed: typeof parsed.keepWaypointToolArmed === 'boolean' ? parsed.keepWaypointToolArmed : initialState.keepWaypointToolArmed,
+      clearLabelAfterDrop: typeof parsed.clearLabelAfterDrop === 'boolean' ? parsed.clearLabelAfterDrop : initialState.clearLabelAfterDrop,
+      showMapLabels: typeof parsed.showMapLabels === 'boolean' ? parsed.showMapLabels : initialState.showMapLabels,
+      showMapDistances: typeof parsed.showMapDistances === 'boolean' ? parsed.showMapDistances : initialState.showMapDistances,
+      deadManTimeLeft:
+        typeof parsed.deadManTimeLeft === 'number' && Number.isFinite(parsed.deadManTimeLeft)
+          ? Math.max(0, Math.min(72 * 3600, Math.round(parsed.deadManTimeLeft)))
+          : initialState.deadManTimeLeft,
+      deadManActive: typeof parsed.deadManActive === 'boolean' ? parsed.deadManActive : initialState.deadManActive,
+    }
+  } catch {
+    return initialState
+  }
+}
+
 export function AppProvider({ children }: { children: ReactNode }) {
-  const [state, dispatch] = useReducer(appReducer, initialState)
+  const [state, dispatch] = useReducer(appReducer, initialState, loadInitialState)
 
   const addWaypoint = useCallback((wp: Waypoint) => {
     dispatch({ type: 'ADD_WAYPOINT', payload: wp })
@@ -144,6 +204,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const resetDeadMan = useCallback(() => {
     dispatch({ type: 'RESET_DEAD_MAN' })
   }, [])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(APP_STORAGE_KEY, JSON.stringify(state))
+    } catch {
+      // Ignore storage failures (private mode/quota).
+    }
+  }, [state])
 
   return (
     <AppContext.Provider

@@ -5,7 +5,16 @@ import './index.css'
 import { registerSW } from 'virtual:pwa-register'
 
 if (import.meta.env.PROD) {
-  registerSW({ immediate: true })
+  const activateUpdate = registerSW({
+    immediate: true,
+    onNeedRefresh() {
+      window.dispatchEvent(
+        new CustomEvent('hud:sw-update', {
+          detail: { activate: activateUpdate },
+        }),
+      )
+    },
+  })
 }
 
 if (typeof window !== 'undefined') {
