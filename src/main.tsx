@@ -4,7 +4,9 @@ import App from './App'
 import './index.css'
 import { registerSW } from 'virtual:pwa-register'
 
-registerSW({ immediate: true })
+if (import.meta.env.PROD) {
+  registerSW({ immediate: true })
+}
 
 if (typeof window !== 'undefined') {
   ;(window as any).__hudRuntimeGuards = true
