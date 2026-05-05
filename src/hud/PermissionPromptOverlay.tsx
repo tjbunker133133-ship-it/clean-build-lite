@@ -1,26 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useGPS } from '../hooks/useGPS'
-import {
-  getPermissionSnapshot,
-  requestCameraPermission,
-  requestGeolocationPermission,
-  requestMicrophonePermission,
-  requestMotionPermission,
-  requestNotificationPermission,
-  requestOrientationPermission,
-  type PermissionStateLike,
-} from '../lib/devicePermissions'
-import {
-  androidLocationFixClipboardLines,
-  copyTextToClipboard,
-  safariLocationFixClipboardLines,
-  tryOpenAndroidLocationSettings,
-  tryOpenIosLocationPrivacySettings,
-  tryOpenIosLocationPrivacySettingsAlternate,
-} from '../lib/systemSettingsLinks'
+import { getPermissionSnapshot, type PermissionStateLike } from '../lib/devicePermissions'
+import PermissionWizard from './PermissionWizard'
 
 const KEY = 'hud_permission_overlay_seen_v1'
 const APPLE_GPS_STUCK_MS = 10_000
+
+function sensorApisAvailable() {
+  const orient = typeof (DeviceOrientationEvent as any)?.requestPermission === 'function'
+  const motion = typeof (DeviceMotionEvent as any)?.requestPermission === 'function'
+  return { orient, motion }
+}
 
 export default function PermissionPromptOverlay() {
   const gps = useGPS()
@@ -35,7 +25,7 @@ export default function PermissionPromptOverlay() {
   const [orient, setOrient] = useState<PermissionStateLike>('unknown')
   const [motion, setMotion] = useState<PermissionStateLike>('unknown')
   const [busy, setBusy] = useState(false)
-  const [linkHint, setLinkHint] = useState<string | null>(null)
+
   const isAppleMobile = useMemo(() => {
     const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : ''
     return /iPhone|iPad|iPod/i.test(ua)
@@ -50,10 +40,10 @@ export default function PermissionPromptOverlay() {
 
   const platformHint = useMemo(() => {
     const ua = navigator.userAgent || ''
-    const isAndroid = /Android/i.test(ua)
+    const isAndroidUa = /Android/i.test(ua)
     const isWindows = /Windows/i.test(ua)
     const isApple = /iPhone|iPad|iPod|Macintosh/i.test(ua)
-    if (isAndroid) {
+    if (isAndroidUa) {
       return 'Android: allow prompts, then check Chrome site settings if any permission stays blocked.'
     }
     if (isWindows) {
@@ -63,6 +53,20 @@ export default function PermissionPromptOverlay() {
       return 'Apple: iOS/Safari requires explicit user taps for each permission prompt.'
     }
     return 'Allow each browser prompt. If blocked, reopen site permissions from your browser address bar.'
+  }, [])
+
+  const allRequested = useMemo(() => {
+    const { orient: needOrient, motion: needMotion } = sensorApisAvailable()
+    const list: PermissionStateLike[] = [geo, mic, camera, notif]
+    if (needOrient) list.push(orient)
+    if (needMotion) list.push(motion)
+    return list.every((s) => s === 'granted' || s === 'denied' || s === 'unsupported')
+  }, [geo, mic, camera, notif, orient, motion])
+
+  useEffect(() => {
+    const { orient: needOrient, motion: needMotion } = sensorApisAvailable()
+    if (!needOrient) setOrient('unsupported')
+    if (!needMotion) setMotion('unsupported')
   }, [])
 
   useEffect(() => {
@@ -77,7 +81,6 @@ export default function PermissionPromptOverlay() {
     })
   }, [])
 
-  /** Apple: re-open overlay if GPS denied or no fix after prolonged search (user may have dismissed early). */
   useEffect(() => {
     if (!isAppleMobile) return
     const refreshSnapshot = () => {
@@ -130,52 +133,10 @@ export default function PermissionPromptOverlay() {
     return () => window.removeEventListener('hud:show-permissions', onShow)
   }, [])
 
-  const permissionRowStyle: React.CSSProperties = {
-    minHeight: 40,
-    borderRadius: 8,
-    border: '1px solid rgba(199,206,198,0.35)',
-    background: 'rgba(199,206,198,0.12)',
-    color: '#e2e8e2',
-    fontSize: 11,
-    fontWeight: 700,
-    letterSpacing: '0.08em',
-    cursor: 'pointer',
-  }
-
-  const allRequested = useMemo(
-    () => [geo, mic, camera, notif, orient, motion].every((s) => s === 'granted' || s === 'denied' || s === 'unsupported'),
-    [geo, mic, camera, notif, orient, motion],
-  )
-
   const close = useCallback(() => {
     localStorage.setItem(KEY, '1')
     setVisible(false)
   }, [])
-
-  const runOne = useCallback(async (fn: () => Promise<PermissionStateLike>, set: (s: PermissionStateLike) => void) => {
-    if (busy) return
-    setBusy(true)
-    try {
-      set(await fn())
-    } finally {
-      setBusy(false)
-    }
-  }, [busy])
-
-  const runAll = useCallback(async () => {
-    if (busy) return
-    setBusy(true)
-    try {
-      setGeo(await requestGeolocationPermission())
-      setMic(await requestMicrophonePermission())
-      setCamera(await requestCameraPermission())
-      setNotif(await requestNotificationPermission())
-      setOrient(await requestOrientationPermission())
-      setMotion(await requestMotionPermission())
-    } finally {
-      setBusy(false)
-    }
-  }, [busy])
 
   if (!visible) return null
 
@@ -192,221 +153,30 @@ export default function PermissionPromptOverlay() {
         padding: 16,
       }}
     >
-      <div
-        style={{
-          width: 'min(560px, 100%)',
-          borderRadius: 12,
-          border: '1px solid rgba(125,255,138,0.45)',
-          background: 'rgba(8,12,14,0.92)',
-          color: '#d8e3d8',
-          padding: 14,
-          display: 'grid',
-          gap: 8,
-        }}
-      >
-        <div style={{ fontSize: 12, letterSpacing: '0.12em', color: '#7dff8a', fontWeight: 800 }}>
-          DEVICE PERMISSIONS REQUIRED
-        </div>
-        <div style={{ fontSize: 11, color: '#b8c4b8' }}>
-          {platformHint}
-          {isAppleMobile && (
-            <span style={{ display: 'block', marginTop: 6, color: '#9ec4a8' }}>
-              If GPS stays on SEARCH or DENIED, tap LOCATION below — Safari only grants location after a direct user
-              action.
-            </span>
-          )}
-        </div>
-        {(isAppleMobile || isAndroid) && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <div style={{ fontSize: 10, letterSpacing: '0.08em', color: '#8a9a8c' }}>QUICK OPEN (USER TAP REQUIRED)</div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-              {isAppleMobile && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setLinkHint(
-                        'Leaving HUD briefly — if Settings does not open, iOS blocked the link. Use COPY SAFARI STEPS.',
-                      )
-                      window.setTimeout(() => setLinkHint(null), 9000)
-                      tryOpenIosLocationPrivacySettings()
-                    }}
-                    style={{
-                      ...permissionRowStyle,
-                      flex: '1 1 140px',
-                      borderColor: 'rgba(125,255,138,0.55)',
-                      background: 'rgba(125,255,138,0.18)',
-                      color: '#e4fcea',
-                    }}
-                  >
-                    OPEN IPHONE SETTINGS · LOCATION
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setLinkHint('Trying alternate deep link…')
-                      window.setTimeout(() => setLinkHint(null), 5000)
-                      tryOpenIosLocationPrivacySettingsAlternate()
-                    }}
-                    style={{ ...permissionRowStyle, flex: '1 1 120px' }}
-                  >
-                    TRY ALT SETTINGS LINK
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void copyTextToClipboard(safariLocationFixClipboardLines()).then((ok) => {
-                        setLinkHint(ok ? 'Safari steps copied — paste in Notes if useful.' : 'Copy failed — use list below.')
-                        window.setTimeout(() => setLinkHint(null), 6000)
-                      })
-                    }}
-                    style={{ ...permissionRowStyle, flex: '1 1 120px' }}
-                  >
-                    COPY SAFARI STEPS
-                  </button>
-                </>
-              )}
-              {isAndroid && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setLinkHint('Opening Android location settings…')
-                      window.setTimeout(() => setLinkHint(null), 6000)
-                      tryOpenAndroidLocationSettings()
-                    }}
-                    style={{
-                      ...permissionRowStyle,
-                      flex: '1 1 160px',
-                      borderColor: 'rgba(125,255,138,0.55)',
-                      background: 'rgba(125,255,138,0.14)',
-                    }}
-                  >
-                    OPEN ANDROID LOCATION SETTINGS
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void copyTextToClipboard(androidLocationFixClipboardLines()).then((ok) => {
-                        setLinkHint(ok ? 'Android steps copied.' : 'Copy failed — use list in red box if shown.')
-                        window.setTimeout(() => setLinkHint(null), 6000)
-                      })
-                    }}
-                    style={{ ...permissionRowStyle, flex: '1 1 120px' }}
-                  >
-                    COPY ANDROID STEPS
-                  </button>
-                </>
-              )}
-            </div>
-            {linkHint && (
-              <div style={{ fontSize: 10, color: '#a8d4b8', lineHeight: 1.35 }}>{linkHint}</div>
-            )}
-          </div>
-        )}
-        {locationDenied && (
-          <div
-            style={{
-              padding: '10px 12px',
-              borderRadius: 10,
-              border: '1px solid rgba(255,107,135,0.55)',
-              background: 'rgba(40,12,20,0.55)',
-              fontSize: 11,
-              color: '#ffd0d8',
-              lineHeight: 1.45,
-            }}
-          >
-            <div style={{ fontWeight: 800, letterSpacing: '0.1em', color: '#ff8a9d', marginBottom: 6 }}>
-              LOCATION DENIED — FIX IN SYSTEM SETTINGS
-            </div>
-            {isAppleMobile ? (
-              <ol style={{ margin: 0, paddingLeft: 18 }}>
-                <li>
-                  Open <strong>Settings</strong> → <strong>Privacy &amp; Security</strong> → <strong>Location Services</strong>{' '}
-                  (must be ON).
-                </li>
-                <li>
-                  <strong>Safari</strong> → <strong>Location</strong> → choose <strong>While Using</strong> or{' '}
-                  <strong>Ask</strong>. Then return here and tap <strong>LOCATION</strong> again.
-                </li>
-                <li>
-                  If you added this app to the Home Screen, also check <strong>Settings</strong> → your <strong>app name</strong>{' '}
-                  → <strong>Location</strong> → <strong>While Using</strong>.
-                </li>
-                <li>
-                  In Safari, tap <strong>aA</strong> (or address bar) → <strong>Website Settings</strong> → set Location to{' '}
-                  <strong>Ask</strong> or <strong>Allow</strong>.
-                </li>
-              </ol>
-            ) : isAndroid ? (
-              <ol style={{ margin: 0, paddingLeft: 18 }}>
-                <li>
-                  Chrome: <strong>⋮</strong> → <strong>Settings</strong> → <strong>Site settings</strong> → <strong>Location</strong>{' '}
-                  → allow this site, or clear Block for this origin.
-                </li>
-                <li>
-                  System: <strong>Settings</strong> → <strong>Location</strong> ON, and app/browser location allowed.
-                </li>
-              </ol>
-            ) : (
-              <p style={{ margin: 0 }}>
-                Allow location for this site in your browser&apos;s site permissions (lock icon or address bar), then tap{' '}
-                <strong>LOCATION</strong> again.
-              </p>
-            )}
-            <button
-              type="button"
-              onClick={() => void runOne(requestGeolocationPermission, setGeo)}
-              disabled={busy}
-              style={{
-                ...permissionRowStyle,
-                marginTop: 10,
-                borderColor: 'rgba(255,138,160,0.65)',
-                background: 'rgba(255,80,120,0.2)',
-                color: '#ffe8ec',
-              }}
-            >
-              RETRY LOCATION AFTER SETTINGS
-            </button>
-          </div>
-        )}
-        <button type="button" onClick={() => void runAll()} disabled={busy} style={permissionRowStyle}>
-          {busy ? 'REQUESTING…' : 'REQUEST ALL NOW'}
-        </button>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
-          <button type="button" onClick={() => void runOne(requestGeolocationPermission, setGeo)} disabled={busy} style={permissionRowStyle}>
-            LOCATION ({geo})
-          </button>
-          <button type="button" onClick={() => void runOne(requestMicrophonePermission, setMic)} disabled={busy} style={permissionRowStyle}>
-            MICROPHONE ({mic})
-          </button>
-          <button type="button" onClick={() => void runOne(requestCameraPermission, setCamera)} disabled={busy} style={permissionRowStyle}>
-            CAMERA ({camera})
-          </button>
-          <button type="button" onClick={() => void runOne(requestNotificationPermission, setNotif)} disabled={busy} style={permissionRowStyle}>
-            NOTIFICATIONS ({notif})
-          </button>
-          <button type="button" onClick={() => void runOne(requestOrientationPermission, setOrient)} disabled={busy} style={permissionRowStyle}>
-            ORIENTATION ({orient})
-          </button>
-          <button type="button" onClick={() => void runOne(requestMotionPermission, setMotion)} disabled={busy} style={permissionRowStyle}>
-            MOTION ({motion})
-          </button>
-        </div>
-        <button
-          type="button"
-          onClick={close}
-          disabled={!allRequested}
-          style={{
-            ...permissionRowStyle,
-            borderColor: allRequested ? 'rgba(125,255,138,0.55)' : 'rgba(180,180,180,0.25)',
-            color: allRequested ? '#d8ffe0' : '#9da6a0',
-          }}
-        >
-          CONTINUE TO HUD
-        </button>
-      </div>
+      <PermissionWizard
+        visible={visible}
+        geo={geo}
+        mic={mic}
+        camera={camera}
+        notif={notif}
+        orient={orient}
+        motion={motion}
+        setGeo={setGeo}
+        setMic={setMic}
+        setCamera={setCamera}
+        setNotif={setNotif}
+        setOrient={setOrient}
+        setMotion={setMotion}
+        gps={gps}
+        isAppleMobile={isAppleMobile}
+        isAndroid={isAndroid}
+        platformHint={platformHint}
+        locationDenied={locationDenied}
+        allRequested={allRequested}
+        busy={busy}
+        setBusy={setBusy}
+        onClose={close}
+      />
     </div>
   )
 }
-

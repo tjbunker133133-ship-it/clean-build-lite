@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-type GPSData = {
+export type GPSData = {
   lat: number | null
   lng: number | null
   accuracy: number | null
@@ -20,8 +20,32 @@ let listeners: ((g: GPSData) => void)[] = []
 let watcherId: number | null = null
 let startupTimeoutId: number | null = null
 
+const LAST_GPS_FIX_KEY = 'hud_last_gps_fix_v1'
+const LAST_MAP_CENTER_KEY = 'hud_last_map_center_v1'
+
+function sameGPS(a: GPSData, b: GPSData): boolean {
+  const near = (x: number | null, y: number | null, eps: number) => {
+    if (x == null && y == null) return true
+    if (x == null || y == null) return false
+    return Math.abs(x - y) <= eps
+  }
+  return (
+    near(a.lat, b.lat, 0.000001) &&
+    near(a.lng, b.lng, 0.000001) &&
+    near(a.accuracy, b.accuracy, 0.25) &&
+    a.status === b.status &&
+    (a.error ?? '') === (b.error ?? '')
+  )
+}
+
 function emit() {
   listeners.forEach((l) => l(shared))
+}
+
+function setShared(next: GPSData) {
+  if (sameGPS(shared, next)) return
+  shared = next
+  emit()
 }
 
 function clearStartupTimeout() {
@@ -33,7 +57,7 @@ function clearStartupTimeout() {
 
 function loadCachedFix(): GPSData | null {
   try {
-    const raw = localStorage.getItem('hud_last_gps_fix_v1')
+    const raw = localStorage.getItem(LAST_GPS_FIX_KEY)
     if (!raw) return null
     const cached = JSON.parse(raw) as GPSData
     if (typeof cached?.lat !== 'number' || typeof cached?.lng !== 'number') return null
@@ -48,99 +72,109 @@ function loadCachedFix(): GPSData | null {
   }
 }
 
+function loadMapCenterFallback(): GPSData | null {
+  try {
+    const raw = localStorage.getItem(LAST_MAP_CENTER_KEY)
+    if (!raw) return null
+    const cached = JSON.parse(raw) as { lat?: number; lng?: number }
+    if (typeof cached?.lat !== 'number' || typeof cached?.lng !== 'number') return null
+    return {
+      lat: cached.lat,
+      lng: cached.lng,
+      accuracy: null,
+      status: 'searching',
+    }
+  } catch {
+    return null
+  }
+}
+
+function persistCurrentFix() {
+  try {
+    localStorage.setItem(LAST_GPS_FIX_KEY, JSON.stringify(shared))
+  } catch {}
+}
+
+function setFallbackFix(status: GPSData['status'], error: string) {
+  const gps = loadCachedFix()
+  if (gps) {
+    setShared({ ...gps, status, error })
+    return
+  }
+  const mapCenter = loadMapCenterFallback()
+  if (mapCenter) {
+    setShared({ ...mapCenter, status, error })
+    return
+  }
+  setShared({ ...shared, status, error })
+}
+
 function startGPS() {
   if (watcherId !== null) return
   if (!navigator.geolocation) {
-    shared = { ...shared, status: 'unsupported', error: 'Geolocation not supported' }
-    emit()
+    setShared({ ...shared, status: 'unsupported', error: 'Geolocation not supported' })
     return
   }
   const cached = loadCachedFix()
   if (cached) {
-    shared = { ...cached, status: 'searching', error: undefined }
-    emit()
+    setShared({ ...cached, status: 'searching', error: undefined })
+  } else {
+    const mapCenter = loadMapCenterFallback()
+    if (mapCenter) {
+      setShared({ ...mapCenter, status: 'searching', error: undefined })
+    }
   }
-  shared = { ...shared, status: 'searching', error: undefined }
-  emit()
+  setShared({ ...shared, status: 'searching', error: undefined })
   clearStartupTimeout()
   startupTimeoutId = window.setTimeout(() => {
     if (shared.status === 'searching') {
-      shared = {
-        ...shared,
-        status: 'error',
-        error: 'GPS timeout: check permissions or signal',
-      }
-      emit()
+      setFallbackFix('error', 'GPS timeout: using last known location')
     }
   }, 12000)
 
   // Prime quickly on platforms where watchPosition callbacks are delayed.
+  const isAppleWebKit =
+    typeof navigator !== 'undefined' &&
+    /AppleWebKit/i.test(navigator.userAgent || '') &&
+    /iPhone|iPad|iPod|Macintosh/i.test(navigator.userAgent || '')
   navigator.geolocation.getCurrentPosition(
     (pos) => {
-      shared = {
+      setShared({
         lat: pos.coords.latitude,
         lng: pos.coords.longitude,
         accuracy: pos.coords.accuracy,
         status: 'locked',
-      }
+      })
       clearStartupTimeout()
-      try {
-        localStorage.setItem('hud_last_gps_fix_v1', JSON.stringify(shared))
-      } catch {}
-      emit()
+      persistCurrentFix()
     },
-    () => {},
-    { enableHighAccuracy: true, maximumAge: 15000, timeout: 8000 },
+    (err) => {
+      if (err?.code === 1) setFallbackFix('denied', 'Location permission denied')
+    },
+    { enableHighAccuracy: true, maximumAge: 15000, timeout: isAppleWebKit ? 10000 : 8000 },
   )
 
   watcherId = navigator.geolocation.watchPosition(
     (pos) => {
-      shared = {
+      setShared({
         lat: pos.coords.latitude,
         lng: pos.coords.longitude,
         accuracy: pos.coords.accuracy,
         status: 'locked',
-      }
+      })
       clearStartupTimeout()
-      try {
-        localStorage.setItem('hud_last_gps_fix_v1', JSON.stringify(shared))
-      } catch {}
-      emit()
+      persistCurrentFix()
     },
     (err) => {
       console.warn('GPS error:', err)
       clearStartupTimeout()
       const denied = err?.code === 1
-      if (shared.lat == null || shared.lng == null) {
-        try {
-          const raw = localStorage.getItem('hud_last_gps_fix_v1')
-          if (raw) {
-            const cached = JSON.parse(raw) as GPSData
-            if (typeof cached?.lat === 'number' && typeof cached?.lng === 'number') {
-              shared = {
-                lat: cached.lat,
-                lng: cached.lng,
-                accuracy: cached.accuracy ?? null,
-                status: denied ? 'denied' : 'error',
-                error: denied ? 'Location permission denied' : 'GPS unavailable',
-              }
-              emit()
-              return
-            }
-          }
-        } catch {}
-      }
-      shared = {
-        ...shared,
-        status: denied ? 'denied' : 'error',
-        error: denied ? 'Location permission denied' : 'GPS unavailable',
-      }
-      emit()
+      setFallbackFix(denied ? 'denied' : 'error', denied ? 'Location permission denied' : 'GPS unavailable')
     },
     {
       enableHighAccuracy: true,
-      maximumAge: 3000,
-      timeout: 10000,
+      maximumAge: isAppleWebKit ? 8000 : 3000,
+      timeout: isAppleWebKit ? 15000 : 10000,
     }
   )
 }
