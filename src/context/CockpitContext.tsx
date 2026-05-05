@@ -20,6 +20,7 @@ import {
   EASE,
   SNAP_PX,
 } from '../types/cockpit'
+import { cockpitViewport } from '../lib/viewport'
 
 const PREFS_DEFAULT: CockpitPrefs = {
   /** 8 + intensity*20 ≈ 16px blur at 0.4 — COCKPIT_UX v2 */
@@ -83,7 +84,8 @@ function detectDevicePreset(): DevicePreset {
   const ua = navigator.userAgent || ''
   const isiOS = /iPhone|iPad|iPod/i.test(ua)
   const isAndroid = /Android/i.test(ua)
-  const shortEdge = Math.min(window.innerWidth, window.innerHeight)
+  const { vw, vh } = cockpitViewport()
+  const shortEdge = Math.min(vw, vh)
   const isTabletLike = shortEdge >= 700 && shortEdge <= 1100
   if (isiOS && !isTabletLike) return 'iphone'
   if (isAndroid && !isTabletLike) return 'android'
@@ -201,8 +203,7 @@ function normalizeNoOverlapLayout(panels: PanelMap): PanelMap {
   const next: PanelMap = Object.fromEntries(
     Object.entries(panels).map(([id, p]) => [id, { ...p }]),
   )
-  const vw = typeof window !== 'undefined' ? window.innerWidth : 1440
-  const vh = typeof window !== 'undefined' ? window.innerHeight : 900
+  const { vw, vh } = cockpitViewport()
   const pad = 14
   const topMinY = 36
 
@@ -473,8 +474,7 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
       y = snap(y)
       const pad = 14
       const selfH = Math.max(46, height || 200)
-      const vw = typeof window !== 'undefined' ? window.innerWidth : 1440
-      const vh = typeof window !== 'undefined' ? window.innerHeight : 900
+      const { vw, vh } = cockpitViewport()
 
       const panelHeight = (pid: string, p: CockpitPanelRect) => {
         const defaults: Record<string, number> = {

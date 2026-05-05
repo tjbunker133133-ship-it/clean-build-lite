@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useCockpit } from '../context/CockpitContext'
+import { cockpitViewport } from '../lib/viewport'
 import { DURATION_MS, EASE } from '../types/cockpit'
 
 export type CockpitHudPanelProps = {
@@ -66,12 +67,7 @@ function dockBadge(panelId: string, title: string): { icon: string; abbr: string
 type DragMode = 'none' | 'pending' | 'move' | 'resize'
 
 function viewportSize() {
-  if (typeof window === 'undefined') return { vw: 1280, vh: 720 }
-  const vv = window.visualViewport
-  // iOS Safari address bar can change visible viewport without resizing layout viewport.
-  const vw = Math.round(vv?.width ?? window.innerWidth)
-  const vh = Math.round(vv?.height ?? window.innerHeight)
-  return { vw, vh }
+  return cockpitViewport()
 }
 
 export default function CockpitHudPanel({
@@ -701,13 +697,17 @@ export default function CockpitHudPanel({
         ? '#d66179'
         : '#9ea7a0'
   const dockReveal = glow ? DOCK_PEEK_STRIP_PX : DOCK_VISIBLE_STRIP_PX
+  // Count must stay consistent with normalizeNoOverlapLayout during dock transitions:
+  // treat this panel as docked if local OR committed state says so (avoids strip taller than slot step).
   const sideDockCount = Math.max(
     1,
-    Object.entries(panels).filter(
-      ([id, panel]) =>
-        (id === panelId ? docked : panel?.docked) &&
-        (id === panelId ? dockSide : (panel?.dockSide ?? 'left')) === dockSide,
-    ).length,
+    Object.entries(panels).filter(([id, panel]) => {
+      const peerDocked =
+        id === panelId ? docked || !!panel?.docked : !!panel?.docked
+      const peerSide =
+        id === panelId ? dockSide : (panel?.dockSide ?? 'left')
+      return peerDocked && peerSide === dockSide
+    }).length,
   )
   const dockedHeight = computeDockMetrics(viewportSize().vh, sideDockCount).height
   const dockHeaderHeight = docked ? (isCoarsePointer ? 36 : 34) : (isCoarsePointer ? 46 : 44)

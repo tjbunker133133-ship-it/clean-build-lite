@@ -73,8 +73,17 @@ export default function MapCanvas() {
     mapRef.current = map
     skipLayerSyncRef.current = true
 
+    let lastRw = 0
+    let lastRh = 0
     const resize = () => {
       try {
+        const r = container.getBoundingClientRect()
+        const rw = Math.round(r.width)
+        const rh = Math.round(r.height)
+        if (rw < 2 || rh < 2) return
+        if (rw === lastRw && rh === lastRh) return
+        lastRw = rw
+        lastRh = rh
         map.resize()
       } catch {
         /* ignore */
