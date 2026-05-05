@@ -86,6 +86,14 @@ export default function MapCanvas() {
     })
     roRef.current.observe(container)
 
+    const vv = window.visualViewport
+    const onVisualViewportChange = () => {
+      requestAnimationFrame(resize)
+    }
+    vv?.addEventListener('resize', onVisualViewportChange)
+    vv?.addEventListener('scroll', onVisualViewportChange)
+    window.addEventListener('orientationchange', onVisualViewportChange)
+
     const onLoad = () => {
       setMap(map)
       requestAnimationFrame(() => {
@@ -143,6 +151,9 @@ export default function MapCanvas() {
 
     return () => {
       map.off('error', onError)
+      vv?.removeEventListener('resize', onVisualViewportChange)
+      vv?.removeEventListener('scroll', onVisualViewportChange)
+      window.removeEventListener('orientationchange', onVisualViewportChange)
       roRef.current?.disconnect()
       roRef.current = null
       setMap(null)

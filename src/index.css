@@ -75,11 +75,21 @@ html.platform-ios .cockpit-panel button:hover {
 }
 
 html.platform-android .cockpit-panel {
+  backdrop-filter: blur(10px) saturate(1.06);
+  -webkit-backdrop-filter: blur(10px) saturate(1.06);
   box-shadow: 0 8px 28px rgba(0,0,0,0.58), 0 0 0 1px rgba(125,255,138,0.28) !important;
+  max-width: min(94vw, 400px) !important;
 }
 
 html.platform-android .cockpit-panel [role="banner"] {
+  letter-spacing: 0.12em !important;
+  min-height: 48px;
   text-shadow: 0 0 8px rgba(125,255,138,0.34) !important;
+}
+
+/* Touch-first: avoid sticky :hover lift on Chrome Android after tap */
+html.platform-android .cockpit-panel button:hover {
+  transform: none;
 }
 
 html.platform-mobile .cockpit-panel {
