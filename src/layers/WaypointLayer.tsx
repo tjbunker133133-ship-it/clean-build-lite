@@ -15,7 +15,7 @@ function markerVisual(type: WaypointType): { color: string; symbol: string } {
 
 export default function WaypointLayer() {
   const { map } = useMapContext()
-  const { state } = useAppContext()
+  const { state, removeWaypoint, updateWaypoint } = useAppContext()
   const { waypoints, showMapLabels, showMapDistances } = state
 
   const markersRef = useRef<Record<string, maplibregl.Marker>>({})
@@ -73,7 +73,7 @@ export default function WaypointLayer() {
         hit.style.display = 'flex'
         hit.style.alignItems = 'center'
         hit.style.justifyContent = 'center'
-        hit.style.touchAction = 'manipulation'
+        hit.style.touchAction = 'none'
         hit.style.cursor = 'pointer'
         el.style.width = lowPowerMode ? '22px' : '26px'
         el.style.height = lowPowerMode ? '22px' : '26px'
@@ -91,6 +91,31 @@ export default function WaypointLayer() {
         el.style.userSelect = 'none'
         el.textContent = v.symbol
         hit.appendChild(el)
+
+        const deleteBadge = document.createElement('button')
+        deleteBadge.type = 'button'
+        deleteBadge.textContent = '×'
+        deleteBadge.style.position = 'absolute'
+        deleteBadge.style.top = '-4px'
+        deleteBadge.style.right = '-4px'
+        deleteBadge.style.width = '18px'
+        deleteBadge.style.height = '18px'
+        deleteBadge.style.borderRadius = '999px'
+        deleteBadge.style.border = '1px solid rgba(255,255,255,0.75)'
+        deleteBadge.style.background = 'rgba(150,35,52,0.9)'
+        deleteBadge.style.color = '#ffe8ee'
+        deleteBadge.style.fontSize = '12px'
+        deleteBadge.style.lineHeight = '1'
+        deleteBadge.style.padding = '0'
+        deleteBadge.style.display = 'grid'
+        deleteBadge.style.placeItems = 'center'
+        deleteBadge.style.cursor = 'pointer'
+        deleteBadge.style.boxShadow = '0 1px 6px rgba(0,0,0,0.45)'
+        deleteBadge.style.touchAction = 'manipulation'
+        deleteBadge.style.pointerEvents = 'auto'
+        deleteBadge.setAttribute('aria-label', `Delete waypoint ${wp.label}`)
+        hit.style.position = 'relative'
+        hit.appendChild(deleteBadge)
 
         if (overlaysReady && showMapLabels) {
           const label = document.createElement('div')
@@ -111,7 +136,42 @@ export default function WaypointLayer() {
           hit.appendChild(label)
         }
 
-        const marker = new maplibregl.Marker({ element: hit }).setLngLat([wp.lng, wp.lat]).addTo(map)
+        const askDelete = () => {
+          const ok = window.confirm(`Delete waypoint "${wp.label}"?`)
+          if (!ok) return
+          removeWaypoint(wp.id)
+        }
+        deleteBadge.addEventListener('pointerdown', (ev) => {
+          ev.preventDefault()
+          ev.stopPropagation()
+        })
+        deleteBadge.addEventListener('click', (ev) => {
+          ev.preventDefault()
+          ev.stopPropagation()
+          askDelete()
+        })
+        // Desktop and some Android browsers: right click / long-press context menu.
+        hit.addEventListener('contextmenu', (ev) => {
+          ev.preventDefault()
+          ev.stopPropagation()
+          askDelete()
+        })
+
+        const marker = new maplibregl.Marker({
+          element: hit,
+          draggable: true,
+          clickTolerance: 4,
+        })
+          .setLngLat([wp.lng, wp.lat])
+          .addTo(map)
+        marker.on('dragstart', () => {
+          map.dragPan.disable()
+        })
+        marker.on('dragend', () => {
+          map.dragPan.enable()
+          const pos = marker.getLngLat()
+          updateWaypoint(wp.id, { lng: pos.lng, lat: pos.lat })
+        })
         markersRef.current[wp.id] = marker
       })
 
@@ -152,7 +212,7 @@ export default function WaypointLayer() {
         rebuildRafRef.current = null
       }
     }
-  }, [waypoints, map, showMapLabels, showMapDistances, overlaysReady, lowPowerMode])
+  }, [waypoints, map, showMapLabels, showMapDistances, overlaysReady, lowPowerMode, removeWaypoint, updateWaypoint])
 
   useEffect(() => {
     return () => {

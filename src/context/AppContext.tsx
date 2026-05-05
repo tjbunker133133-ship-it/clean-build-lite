@@ -13,7 +13,7 @@ const APP_STORAGE_KEY = 'tactical_hud_app_state_v1'
 
 const initialState: AppState = {
   waypoints: [],
-  activeLayer: 'streets',
+  activeLayer: 'satellite',
   selectedWaypointId: null,
   pendingWaypointType: 'default',
   nextWaypointLabel: '',
@@ -36,6 +36,13 @@ function appReducer(state: AppState, action: AppAction): AppState {
       return {
         ...state,
         waypoints: action.payload,
+      }
+    case 'UPDATE_WAYPOINT':
+      return {
+        ...state,
+        waypoints: state.waypoints.map((w) =>
+          w.id === action.payload.id ? { ...w, ...action.payload.patch } : w,
+        ),
       }
     case 'REMOVE_WAYPOINT':
       return {
@@ -77,6 +84,7 @@ interface AppContextValue {
   state: AppState
   addWaypoint: (wp: Waypoint) => void
   setWaypoints: (wps: Waypoint[]) => void
+  updateWaypoint: (id: string, patch: Partial<Waypoint>) => void
   removeWaypoint: (id: string) => void
   selectWaypoint: (id: string | null) => void
   setLayer: (layer: LayerType) => void
@@ -161,6 +169,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     dispatch({ type: 'SET_WAYPOINTS', payload: wps })
   }, [])
 
+  const updateWaypoint = useCallback((id: string, patch: Partial<Waypoint>) => {
+    dispatch({ type: 'UPDATE_WAYPOINT', payload: { id, patch } })
+  }, [])
+
   const removeWaypoint = useCallback((id: string) => {
     dispatch({ type: 'REMOVE_WAYPOINT', payload: id })
   }, [])
@@ -219,6 +231,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         state,
         addWaypoint,
         setWaypoints,
+        updateWaypoint,
         removeWaypoint,
         selectWaypoint,
         setLayer,

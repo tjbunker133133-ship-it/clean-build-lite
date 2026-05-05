@@ -28,6 +28,7 @@ export interface AppState {
 export type AppAction =
   | { type: 'ADD_WAYPOINT'; payload: Waypoint }
   | { type: 'SET_WAYPOINTS'; payload: Waypoint[] }
+  | { type: 'UPDATE_WAYPOINT'; payload: { id: string; patch: Partial<Waypoint> } }
   | { type: 'REMOVE_WAYPOINT'; payload: string }
   | { type: 'SELECT_WAYPOINT'; payload: string | null }
   | { type: 'SET_LAYER'; payload: LayerType }
