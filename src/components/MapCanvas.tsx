@@ -293,10 +293,11 @@ export default function MapCanvas() {
         // Users may keep the tool rail docked while actively placing pins.
         const nextIdx = waypointCountRef.current + 1
         const type = pendingTypeRef.current
-        if (type === 'default') return
         const manualLabel = nextWaypointLabelRef.current.trim().slice(0, 64)
         const autoBase =
-          type === 'finish'
+          type === 'default'
+            ? 'WP'
+            : type === 'finish'
             ? 'FINISH'
             : type === 'rest'
               ? 'REST'

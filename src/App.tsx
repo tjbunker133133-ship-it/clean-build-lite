@@ -13,6 +13,7 @@ import CockpitEdgeZones from './hud/CockpitEdgeZones'
 import CockpitLayoutHotspot from './hud/CockpitLayoutHotspot'
 import CockpitHudShell from './hud/CockpitHudShell'
 import ElevationReadout from './hud/ElevationReadout'
+import PermissionPromptOverlay from './hud/PermissionPromptOverlay'
 
 const MapCanvas = lazy(() => import('./components/MapCanvas'))
 const WaypointLayer = lazy(() => import('./layers/WaypointLayer'))
@@ -62,6 +63,7 @@ export default function App() {
 
           {/* ── Atmospheric overlays (z-index: 1-2) ── */}
           <ScanlineOverlay />
+          <PermissionPromptOverlay />
 
           <CockpitHudShell>
             <CockpitKeyboard />
