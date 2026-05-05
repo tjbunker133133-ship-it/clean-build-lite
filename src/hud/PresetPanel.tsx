@@ -3,7 +3,7 @@ import HudPanel from './HudPanel'
 import { useCockpit } from '../context/CockpitContext'
 
 export default function PresetPanel() {
-  const { setScreenHue, setDisplayTuning, updatePanel } = useCockpit()
+  const { setScreenHue, setDisplayTuning, updatePanel, applyDeviceOptimization, devicePreset } = useCockpit()
 
   const applyNightPatrol = () => {
     setScreenHue('low_light')
@@ -154,6 +154,9 @@ export default function PresetPanel() {
         </button>
         <button type="button" data-no-drag onClick={applyWindowsPreset} style={btnStyle()}>
           WINDOWS
+        </button>
+        <button type="button" data-no-drag onClick={applyDeviceOptimization} style={btnStyle()}>
+          OPTIMIZE THIS DEVICE ({devicePreset.toUpperCase()})
         </button>
         <div style={{ display: 'grid', gap: 6, marginTop: 4 }}>
           <div style={{ fontSize: 10, letterSpacing: '0.1em', color: '#a8b2aa' }}>

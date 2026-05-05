@@ -30,7 +30,7 @@ const PREFS_DEFAULT: CockpitPrefs = {
   panel_gap_px: 0,
   animations_enabled: true,
   layout_version: 'nightforce_v3',
-  screen_hue: 'low_light',
+  screen_hue: 'bright_day',
   low_hud_brightness: 0.9,
   low_map_brightness: 0.14,
   bright_hud_brightness: 1.32,
@@ -49,10 +49,14 @@ interface StoredState {
 }
 
 type DevicePreset = 'iphone' | 'android' | 'tablet' | 'desktop'
+const DEVICE_TUNE_VERSION = 'device_tune_v2'
 const DOCK_EDGE_INSET_PX = 8
 const DOCKED_PANEL_STACK_PX = 8
 const DOCKED_PANEL_MIN_HEIGHT_PX = 76
 const DOCKED_PANEL_MAX_HEIGHT_PX = 92
+const DOCKED_PANEL_WIDTH_PX = 280
+const DOCK_TOP_OFFSET_PX = 48
+const DOCK_BOTTOM_GUTTER_PX = 12
 
 function snap(n: number): number {
   return Math.round(n / SNAP_PX) * SNAP_PX
@@ -109,7 +113,7 @@ function firstRunPreset(device: DevicePreset): {
   if (device === 'iphone') {
     return {
       prefs: {
-        screen_hue: 'low_light',
+        screen_hue: 'bright_day',
         glass_intensity: 0.34,
         panel_opacity: 0.48,
         low_hud_brightness: 0.92,
@@ -129,7 +133,7 @@ function firstRunPreset(device: DevicePreset): {
   if (device === 'android') {
     return {
       prefs: {
-        screen_hue: 'low_light',
+        screen_hue: 'bright_day',
         glass_intensity: 0.42,
         panel_opacity: 0.52,
         low_hud_brightness: 0.96,
@@ -164,6 +168,67 @@ function firstRunPreset(device: DevicePreset): {
   return { prefs: {}, panelPatches: {} }
 }
 
+function deviceOptimizationPrefs(device: DevicePreset): Partial<CockpitPrefs> {
+  if (device === 'iphone') {
+    return {
+      glass_intensity: 0.3,
+      panel_opacity: 0.46,
+      panel_gap_px: 0,
+      animations_enabled: true,
+      low_hud_brightness: 0.94,
+      low_map_brightness: 0.16,
+      bright_hud_brightness: 1.22,
+      bright_map_brightness: 1.1,
+      red_hue_rotate: -62,
+      red_saturation: 0.52,
+      red_brightness: 0.66,
+    }
+  }
+  if (device === 'android') {
+    return {
+      glass_intensity: 0.36,
+      panel_opacity: 0.5,
+      panel_gap_px: 0,
+      animations_enabled: true,
+      low_hud_brightness: 0.96,
+      low_map_brightness: 0.14,
+      bright_hud_brightness: 1.24,
+      bright_map_brightness: 1.12,
+      red_hue_rotate: -62,
+      red_saturation: 0.54,
+      red_brightness: 0.68,
+    }
+  }
+  if (device === 'tablet') {
+    return {
+      glass_intensity: 0.44,
+      panel_opacity: 0.5,
+      panel_gap_px: 0,
+      animations_enabled: true,
+      low_hud_brightness: 0.92,
+      low_map_brightness: 0.16,
+      bright_hud_brightness: 1.26,
+      bright_map_brightness: 1.14,
+      red_hue_rotate: -62,
+      red_saturation: 0.52,
+      red_brightness: 0.67,
+    }
+  }
+  return {
+    glass_intensity: 0.46,
+    panel_opacity: 0.5,
+    panel_gap_px: 0,
+    animations_enabled: true,
+    low_hud_brightness: 0.92,
+    low_map_brightness: 0.15,
+    bright_hud_brightness: 1.3,
+    bright_map_brightness: 1.18,
+    red_hue_rotate: -62,
+    red_saturation: 0.52,
+    red_brightness: 0.66,
+  }
+}
+
 function saveState(panels: PanelMap, prefs: CockpitPrefs) {
   try {
     const body: StoredState = { v: 2, panels, prefs }
@@ -194,9 +259,9 @@ function panelHeightGuess(pid: string, p: CockpitPanelRect): number {
 }
 
 function computeDockMetrics(vh: number, count: number) {
-  const minY = 36
+  const minY = DOCK_TOP_OFFSET_PX
   const safeCount = Math.max(1, count)
-  const available = Math.max(140, vh - minY - 4)
+  const available = Math.max(140, vh - minY - DOCK_BOTTOM_GUTTER_PX)
   const stackTotal = Math.max(0, safeCount - 1) * DOCKED_PANEL_STACK_PX
   const perPanel = Math.floor((available - stackTotal) / safeCount)
   const height = Math.max(
@@ -204,7 +269,7 @@ function computeDockMetrics(vh: number, count: number) {
     Math.min(DOCKED_PANEL_MAX_HEIGHT_PX, perPanel),
   )
   const step = height + DOCKED_PANEL_STACK_PX
-  const maxY = Math.max(minY, vh - height - 4)
+  const maxY = Math.max(minY, vh - height - DOCK_BOTTOM_GUTTER_PX)
   return { minY, maxY, step, height }
 }
 
@@ -236,6 +301,7 @@ function normalizeNoOverlapLayout(panels: PanelMap, gapPx = 0): PanelMap {
     lane.forEach((id, idx) => {
       const slot = Math.min(slotCount - 1, idx)
       const p = next[id]
+      p.w = DOCKED_PANEL_WIDTH_PX
       p.y = snap(Math.max(minY, Math.min(minY + slot * step, maxY)))
       p.x =
         side === 'right'
@@ -296,6 +362,7 @@ function normalizeNoOverlapLayout(panels: PanelMap, gapPx = 0): PanelMap {
 }
 
 interface CockpitContextValue {
+  devicePreset: DevicePreset
   panels: PanelMap
   prefs: CockpitPrefs
   accent: string
@@ -328,6 +395,7 @@ interface CockpitContextValue {
   setReducedTransparency: (v: boolean) => void
   mapInteractionBlocked: boolean
   setMapInteractionBlocked: (v: boolean) => void
+  applyDeviceOptimization: () => void
 }
 
 const CockpitContext = createContext<CockpitContextValue | null>(null)
@@ -363,6 +431,7 @@ const DEFAULT_PANELS = (): PanelMap => ({
 })
 
 export function CockpitProvider({ children }: { children: ReactNode }) {
+  const devicePreset = detectDevicePreset()
   const loaded = useRef(loadState())
   const seededPanelsRef = useRef<PanelMap>({
     ...DEFAULT_PANELS(),
@@ -390,6 +459,39 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
     mq.addEventListener?.('change', apply)
     return () => mq.removeEventListener?.('change', apply)
   }, [])
+  const applyDeviceOptimization = useCallback(() => {
+    const device = detectDevicePreset()
+    const patch = deviceOptimizationPrefs(device)
+    setPrefs((prev) => {
+      const next = { ...prev, ...patch }
+      persist(panels, next)
+      return next
+    })
+    try {
+      localStorage.setItem(
+        `${COCKPIT_STORAGE_KEY}_device_tune`,
+        JSON.stringify({ v: DEVICE_TUNE_VERSION, device }),
+      )
+    } catch {
+      /* ignore */
+    }
+  }, [panels, persist])
+
+  useEffect(() => {
+    let alreadyApplied = false
+    try {
+      const raw = localStorage.getItem(`${COCKPIT_STORAGE_KEY}_device_tune`)
+      if (raw) {
+        const parsed = JSON.parse(raw) as { v?: string; device?: DevicePreset }
+        alreadyApplied = parsed?.v === DEVICE_TUNE_VERSION && parsed?.device === devicePreset
+      }
+    } catch {
+      /* ignore */
+    }
+    if (!alreadyApplied) {
+      applyDeviceOptimization()
+    }
+  }, [applyDeviceOptimization, devicePreset])
 
   useEffect(() => {
     if (autoPresetAppliedRef.current) return
@@ -499,6 +601,9 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
             dockSide: patch.dockSide,
           } as CockpitPanelRect)
         const nextPanel = { ...cur, ...patch }
+        if (nextPanel.docked) {
+          nextPanel.w = DOCKED_PANEL_WIDTH_PX
+        }
         const unchanged =
           nearlyEqual(cur.x, nextPanel.x) &&
           nearlyEqual(cur.y, nextPanel.y) &&
@@ -733,6 +838,7 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
   const value = useMemo<CockpitContextValue>(
     () => ({
       panels,
+      devicePreset,
       prefs,
       accent,
       snapCoord,
@@ -754,9 +860,11 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
       setReducedTransparency,
       mapInteractionBlocked,
       setMapInteractionBlocked,
+      applyDeviceOptimization,
     }),
     [
       panels,
+      devicePreset,
       prefs,
       accent,
       snapCoord,
@@ -778,6 +886,7 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
       setReducedTransparency,
       mapInteractionBlocked,
       setMapInteractionBlocked,
+      applyDeviceOptimization,
     ],
   )
 
