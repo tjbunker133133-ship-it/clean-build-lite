@@ -336,14 +336,7 @@ interface CockpitContextValue {
 const CockpitContext = createContext<CockpitContextValue | null>(null)
 
 const DEFAULT_PANELS = (): PanelMap => ({
-  layers: {
-    x: 16,
-    y: 60,
-    w: 160,
-    h: null,
-    z: 400,
-    minimized: false,
-  },
+  layers: { x: 16, y: 60, w: 160, h: null, z: 400, minimized: false },
   waypoints: {
     x: 20,
     y: typeof window !== 'undefined' ? Math.max(80, window.innerHeight - 140) : 400,
@@ -360,12 +353,26 @@ const DEFAULT_PANELS = (): PanelMap => ({
     z: 402,
     minimized: false,
   },
+  coords: { x: 16, y: 280, w: 280, h: null, z: 403, minimized: false },
+  elevation: { x: 420, y: 60, w: 240, h: null, z: 404, minimized: false },
+  clock: { x: 760, y: 60, w: 260, h: null, z: 405, minimized: false },
+  display: { x: 1040, y: 60, w: 280, h: null, z: 406, minimized: false },
+  location: { x: 1220, y: 60, w: 300, h: null, z: 407, minimized: false },
+  voice: { x: 1220, y: 260, w: 340, h: null, z: 408, minimized: false },
+  weather: { x: 1220, y: 500, w: 300, h: null, z: 409, minimized: false },
+  presets: { x: 760, y: 200, w: 300, h: null, z: 410, minimized: false },
+  sos: { x: 1080, y: 420, w: 280, h: null, z: 411, minimized: false },
+  preflight: { x: 16, y: 180, w: 320, h: null, z: 412, minimized: false },
 })
 
 export function CockpitProvider({ children }: { children: ReactNode }) {
   const loaded = useRef(loadState())
+  const seededPanelsRef = useRef<PanelMap>({
+    ...DEFAULT_PANELS(),
+    ...(loaded.current?.panels ?? {}),
+  })
   const [panels, setPanels] = useState<PanelMap>(() =>
-    normalizeNoOverlapLayout(loaded.current?.panels ?? DEFAULT_PANELS()),
+    normalizeNoOverlapLayout(seededPanelsRef.current),
   )
   const [prefs, setPrefs] = useState<CockpitPrefs>(() =>
     loaded.current?.prefs ? { ...PREFS_DEFAULT, ...loaded.current.prefs } : PREFS_DEFAULT,
@@ -479,9 +486,31 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
   const updatePanel = useCallback(
     (id: string, patch: Partial<CockpitPanelRect>) => {
       setPanels((prev) => {
-        const cur = prev[id] ?? DEFAULT_PANELS()[id]
-        if (!cur) return prev
-        const merged = { ...prev, [id]: { ...cur, ...patch } }
+        const cur =
+          prev[id] ??
+          DEFAULT_PANELS()[id] ??
+          ({
+            x: typeof patch.x === 'number' ? patch.x : 16,
+            y: typeof patch.y === 'number' ? patch.y : 80,
+            w: typeof patch.w === 'number' ? patch.w : 280,
+            h: patch.h ?? null,
+            z: nextZ.current++,
+            minimized: typeof patch.minimized === 'boolean' ? patch.minimized : false,
+            docked: patch.docked,
+            dockSide: patch.dockSide,
+          } as CockpitPanelRect)
+        const nextPanel = { ...cur, ...patch }
+        const unchanged =
+          cur.x === nextPanel.x &&
+          cur.y === nextPanel.y &&
+          cur.w === nextPanel.w &&
+          cur.h === nextPanel.h &&
+          cur.z === nextPanel.z &&
+          cur.minimized === nextPanel.minimized &&
+          (cur.docked ?? false) === (nextPanel.docked ?? false) &&
+          (cur.dockSide ?? 'left') === (nextPanel.dockSide ?? 'left')
+        if (unchanged) return prev
+        const merged = { ...prev, [id]: nextPanel }
         const next = normalizeNoOverlapLayout(merged)
         persist(next, prefs)
         return next
@@ -583,7 +612,14 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
       const raw = localStorage.getItem(COCKPIT_STORAGE_KEY + '_scene_backup')
       if (!raw) return
       const o = JSON.parse(raw) as StoredState
-      if (o?.panels) setPanels(normalizeNoOverlapLayout(o.panels))
+      if (o?.panels) {
+        setPanels(
+          normalizeNoOverlapLayout({
+            ...DEFAULT_PANELS(),
+            ...o.panels,
+          }),
+        )
+      }
       if (o?.prefs) setPrefs({ ...PREFS_DEFAULT, ...o.prefs })
     } catch {
       /* ignore */
@@ -661,7 +697,10 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
           const o = JSON.parse(String(reader.result)) as Partial<StoredState>
           if (!o.panels && !o.prefs) return
           setPanels((prev) => {
-            const np = normalizeNoOverlapLayout(o.panels ?? prev)
+            const np = normalizeNoOverlapLayout({
+              ...DEFAULT_PANELS(),
+              ...(o.panels ?? prev),
+            })
             setPrefs((pr) => {
               const npr = { ...PREFS_DEFAULT, ...pr, ...o.prefs } as CockpitPrefs
               saveState(np, npr)

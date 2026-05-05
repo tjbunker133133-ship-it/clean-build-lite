@@ -18,18 +18,36 @@ export default function CoordDisplay() {
 
     setReady(true)
 
-    const update = (e: MapMouseEvent) => {
-      if (!e?.lngLat) return
+    const setFromLngLat = (lng: number, lat: number) => {
       setCoords({
-        lng: e.lngLat.lng,
-        lat: e.lngLat.lat,
+        lng,
+        lat,
       })
     }
 
-    map.on('mousemove', update)
+    const updateFromEvent = (e: MapMouseEvent) => {
+      if (!e?.lngLat) return
+      setFromLngLat(e.lngLat.lng, e.lngLat.lat)
+    }
+    const updateFromCenter = () => {
+      const c = map.getCenter()
+      setFromLngLat(c.lng, c.lat)
+    }
+
+    // Initialize immediately so panel is useful before pointer movement.
+    updateFromCenter()
+    // Desktop pointer tracking.
+    map.on('mousemove', updateFromEvent)
+    // Mobile + keyboard navigation + programmatic camera updates.
+    map.on('move', updateFromCenter)
+    map.on('moveend', updateFromCenter)
+    map.on('idle', updateFromCenter)
 
     return () => {
-      map.off('mousemove', update)
+      map.off('mousemove', updateFromEvent)
+      map.off('move', updateFromCenter)
+      map.off('moveend', updateFromCenter)
+      map.off('idle', updateFromCenter)
     }
   }, [map])
 
