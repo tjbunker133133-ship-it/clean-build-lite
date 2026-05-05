@@ -7,6 +7,7 @@ import { useGPS } from '../hooks/useGPS'
 import { formatDistance, haversineDistance, totalRouteDistance } from '../lib/haversine'
 import { HALF_CORRIDOR_FEET, corridorSeverity, corridorZoneLabel, distancePointToRouteFeet } from '../lib/corridor'
 import { fetchWeather } from '../lib/weather'
+import { requestMicrophonePermission } from '../lib/devicePermissions'
 
 type VoiceState = 'sleeping' | 'listening' | 'processing' | 'success' | 'failure'
 
@@ -529,7 +530,15 @@ export default function VoicePanel() {
         <button
           type="button"
           data-no-drag
-          onClick={() => {
+          onClick={async () => {
+            if (!armed) {
+              const mic = await requestMicrophonePermission()
+              if (mic !== 'granted') {
+                setVoiceState('failure')
+                setStatusText('🎤 Microphone permission needed')
+                return
+              }
+            }
             setArmed((v) => !v)
             setVoiceState((s) => (s === 'sleeping' ? 'listening' : 'sleeping'))
             setStatusText((t) => (t.includes('listening') ? '🎤 HUD (tap to wake)' : '🎤 HUD listening'))
@@ -711,7 +720,10 @@ export default function VoicePanel() {
               <strong>TIER 1</strong> Display: night, low light, bright, reset.
             </div>
             <div>
-              <strong>TIER 2 (stub)</strong>: weather, fire, water, deadman.
+              <strong>TIER 2</strong>: weather (live when configured).
+            </div>
+            <div>
+              <strong>TIER 2 (stub)</strong>: fire, water, deadman.
             </div>
             <div>
               <strong>TIER 3 (stub)</strong>: ai route, biometric, forage, lidar, ar, voice continuous.

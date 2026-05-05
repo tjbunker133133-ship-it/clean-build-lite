@@ -1,9 +1,23 @@
 import { useEffect, useMemo, useState } from 'react'
 import HudPanel from './HudPanel'
 import { useGPS } from '../hooks/useGPS'
+import {
+  getPermissionSnapshot,
+  requestGeolocationPermission,
+  requestMicrophonePermission,
+  requestMotionPermission,
+  requestNotificationPermission,
+  requestOrientationPermission,
+  type PermissionStateLike,
+} from '../lib/devicePermissions'
 
 type CheckState = 'pass' | 'warn' | 'fail'
-type ManualCheckKey = 'contactsLoaded' | 'audioAudible' | 'corridorVerified' | 'sosDryRun'
+type ManualCheckKey =
+  | 'contactsLoaded'
+  | 'audioAudible'
+  | 'corridorVerified'
+  | 'deadmanRenew'
+  | 'sosDryRun'
 
 type CheckRow = {
   label: string
@@ -68,13 +82,18 @@ export default function PreflightPanel() {
   const [online, setOnline] = useState(navigator.onLine)
   const [geoPerm, setGeoPerm] = useState<PermissionState | 'unknown'>('unknown')
   const [micPerm, setMicPerm] = useState<PermissionState | 'unknown'>('unknown')
+  const [notifPerm, setNotifPerm] = useState<PermissionStateLike>('unknown')
+  const [orientationPerm, setOrientationPerm] = useState<PermissionStateLike>('unknown')
+  const [motionPerm, setMotionPerm] = useState<PermissionStateLike>('unknown')
   const [isStandalone, setIsStandalone] = useState(false)
   const [recheckTick, setRecheckTick] = useState(0)
   const [lastRecheckAt, setLastRecheckAt] = useState<number | null>(null)
+  const [requestingPerms, setRequestingPerms] = useState(false)
   const [manual, setManual] = useState<Record<ManualCheckKey, boolean>>({
     contactsLoaded: false,
     audioAudible: false,
     corridorVerified: false,
+    deadmanRenew: false,
     sosDryRun: false,
   })
 
@@ -118,25 +137,12 @@ export default function PreflightPanel() {
 
   useEffect(() => {
     let alive = true
-    if (!navigator.permissions?.query) return
-    navigator.permissions
-      .query({ name: 'geolocation' as PermissionName })
-      .then((s) => {
-        if (!alive) return
-        setGeoPerm(s.state)
-      })
-      .catch(() => {
-        if (alive) setGeoPerm('unknown')
-      })
-    navigator.permissions
-      .query({ name: 'microphone' as PermissionName })
-      .then((s) => {
-        if (!alive) return
-        setMicPerm(s.state)
-      })
-      .catch(() => {
-        if (alive) setMicPerm('unknown')
-      })
+    void getPermissionSnapshot().then((snapshot) => {
+      if (!alive) return
+      setGeoPerm(snapshot.geolocation === 'unsupported' ? 'unknown' : snapshot.geolocation)
+      setMicPerm(snapshot.microphone === 'unsupported' ? 'unknown' : snapshot.microphone)
+      setNotifPerm(snapshot.notifications)
+    })
     return () => {
       alive = false
     }
@@ -195,6 +201,24 @@ export default function PreflightPanel() {
         weight: 1,
       },
       {
+        label: 'Notification Permission',
+        state: notifPerm === 'granted' ? 'pass' : notifPerm === 'prompt' ? 'warn' : 'warn',
+        detail: notifPerm,
+        weight: 0.8,
+      },
+      {
+        label: 'Orientation Permission',
+        state: orientationPerm === 'granted' ? 'pass' : orientationPerm === 'unsupported' ? 'warn' : 'warn',
+        detail: orientationPerm,
+        weight: 0.8,
+      },
+      {
+        label: 'Motion Permission',
+        state: motionPerm === 'granted' ? 'pass' : motionPerm === 'unsupported' ? 'warn' : 'warn',
+        detail: motionPerm,
+        weight: 0.8,
+      },
+      {
         label: 'Voice Recognition',
         state: speechSupported ? 'pass' : 'warn',
         detail: speechSupported ? 'Supported' : 'Fallback typed mode',
@@ -215,7 +239,7 @@ export default function PreflightPanel() {
         critical: true,
       },
     ]
-  }, [endpoint, geoPerm, gps.lat, gps.lng, isStandalone, micPerm, online, savedContactsCount, speechSupported, recheckTick])
+  }, [endpoint, geoPerm, gps.lat, gps.lng, isStandalone, micPerm, notifPerm, motionPerm, orientationPerm, online, savedContactsCount, speechSupported, recheckTick])
 
   const checksWeight = checks.reduce((sum, c) => sum + (c.weight ?? 1), 0)
   const checksScore = checks.reduce(
@@ -226,6 +250,7 @@ export default function PreflightPanel() {
     { key: 'contactsLoaded', label: 'Contacts loaded and route-selected', weight: 1.1 },
     { key: 'audioAudible', label: 'Alarm is clearly audible on device', weight: 0.8 },
     { key: 'corridorVerified', label: 'Corridor warning verified with live GPS', weight: 0.8 },
+    { key: 'deadmanRenew', label: 'Deadman renew + timeout flow verified', weight: 1.1 },
     { key: 'sosDryRun', label: 'SOS dry-run + disarm tested', weight: 1.3 },
   ]
   const manualWeight = manualRows.reduce((sum, row) => sum + row.weight, 0)
@@ -241,7 +266,7 @@ export default function PreflightPanel() {
     { label: 'Emergency contact loaded', pass: savedContactsCount > 0 },
     { label: 'GPS permission granted', pass: geoPerm === 'granted' },
     { label: 'GPS lock acquired', pass: gpsLock },
-    { label: 'Deadman renew verified', pass: manual.corridorVerified },
+    { label: 'Deadman renew verified', pass: manual.deadmanRenew },
     { label: 'SOS dry-run verified', pass: manual.sosDryRun },
   ]
   const hardGatePass = hardGates.every((g) => g.pass)
@@ -250,6 +275,28 @@ export default function PreflightPanel() {
   const runAutoRecheck = () => {
     setRecheckTick((v) => v + 1)
     setLastRecheckAt(Date.now())
+  }
+
+  const requestAllPermissions = async () => {
+    setRequestingPerms(true)
+    try {
+      const [geo, mic, notif, orientation, motion] = await Promise.all([
+        requestGeolocationPermission(),
+        requestMicrophonePermission(),
+        requestNotificationPermission(),
+        requestOrientationPermission(),
+        requestMotionPermission(),
+      ])
+      setGeoPerm(geo === 'unsupported' ? 'unknown' : geo)
+      setMicPerm(mic === 'unsupported' ? 'unknown' : mic)
+      setNotifPerm(notif)
+      setOrientationPerm(orientation)
+      setMotionPerm(motion)
+      setLastRecheckAt(Date.now())
+      setRecheckTick((v) => v + 1)
+    } finally {
+      setRequestingPerms(false)
+    }
   }
 
   return (
@@ -304,6 +351,24 @@ export default function PreflightPanel() {
           }}
         >
           RUN AUTO RECHECK
+        </button>
+        <button
+          type="button"
+          data-no-drag
+          onClick={() => void requestAllPermissions()}
+          style={{
+            minHeight: 38,
+            borderRadius: 8,
+            border: '1px solid rgba(255,209,102,0.45)',
+            background: 'rgba(255,209,102,0.14)',
+            color: '#ffe6b3',
+            cursor: 'pointer',
+            fontSize: 11,
+            letterSpacing: '0.08em',
+            fontWeight: 700,
+          }}
+        >
+          {requestingPerms ? 'REQUESTING PERMISSIONS…' : 'REQUEST ALL DEVICE PERMISSIONS'}
         </button>
         {lastRecheckAt != null && (
           <div style={{ fontSize: 10, color: '#9ea7a0' }}>
