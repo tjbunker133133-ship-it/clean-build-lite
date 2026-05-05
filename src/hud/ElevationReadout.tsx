@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { useMapContext } from '../context/MapContext'
 import HudPanel from './HudPanel'
+import { useGPS } from '../hooks/useGPS'
+import { fetchElevationMeters } from '../lib/elevation'
 
 function distMi(
   lat1: number,
@@ -32,6 +34,7 @@ function bandForFt(ft: number): Band {
  */
 export default function ElevationReadout() {
   const { map } = useMapContext()
+  const gps = useGPS()
   const [main, setMain] = useState('— ft')
   const [trend, setTrend] = useState('—')
   const [grade, setGrade] = useState('grade —')
@@ -45,7 +48,7 @@ export default function ElevationReadout() {
   useEffect(() => {
     if (!map) return
 
-    const sample = () => {
+    const sample = async () => {
       const c = map.getCenter()
       const q = map as { queryTerrainElevation?: (ll: { lng: number; lat: number }) => number | null }
       let m: number | null = null
@@ -53,6 +56,9 @@ export default function ElevationReadout() {
         m = q.queryTerrainElevation?.(c) ?? null
       } catch {
         m = null
+      }
+      if ((m == null || Number.isNaN(m)) && gps.lat != null && gps.lng != null) {
+        m = await fetchElevationMeters(gps.lat, gps.lng)
       }
       if (m == null || Number.isNaN(m)) {
         m =
@@ -93,12 +99,12 @@ export default function ElevationReadout() {
 
     map.on('moveend', sample)
     map.on('idle', sample)
-    sample()
+    void sample()
     return () => {
       map.off('moveend', sample)
       map.off('idle', sample)
     }
-  }, [map])
+  }, [map, gps.lat, gps.lng])
 
   const color =
     band === 'low'

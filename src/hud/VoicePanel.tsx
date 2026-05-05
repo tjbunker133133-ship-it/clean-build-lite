@@ -8,6 +8,7 @@ import { formatDistance, haversineDistance, totalRouteDistance } from '../lib/ha
 import { HALF_CORRIDOR_FEET, corridorSeverity, corridorZoneLabel, distancePointToRouteFeet } from '../lib/corridor'
 import { fetchWeather } from '../lib/weather'
 import { requestMicrophonePermission } from '../lib/devicePermissions'
+import { fetchElevationMeters } from '../lib/elevation'
 
 type VoiceState = 'sleeping' | 'listening' | 'processing' | 'success' | 'failure'
 
@@ -301,8 +302,16 @@ export default function VoicePanel() {
       try {
         const c = map.getCenter()
         const m = (map as any).queryTerrainElevation?.(c)
-        if (m == null || Number.isNaN(m)) return report('Elevation unavailable.', false)
-        return report(`Current elevation ${Math.round(m * 3.28084)} feet.`)
+        if (m != null && !Number.isNaN(m)) {
+          return report(`Current elevation ${Math.round(m * 3.28084)} feet.`)
+        }
+        if (gps.lat != null && gps.lng != null) {
+          const fallback = await fetchElevationMeters(gps.lat, gps.lng)
+          if (fallback != null && !Number.isNaN(fallback)) {
+            return report(`Current elevation ${Math.round(fallback * 3.28084)} feet.`)
+          }
+        }
+        return report('Elevation unavailable.', false)
       } catch {
         return report('Elevation unavailable.', false)
       }

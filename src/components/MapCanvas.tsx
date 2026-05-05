@@ -18,6 +18,7 @@ export default function MapCanvas() {
   const mapRef = useRef<maplibregl.Map | null>(null)
   const roRef = useRef<ResizeObserver | null>(null)
   const resizeRafRef = useRef<number | null>(null)
+  const startupResetAttemptsRef = useRef(0)
   const skipLayerSyncRef = useRef(true)
   const [staticFallbackVisible, setStaticFallbackVisible] = useState(true)
   const { setMap, setStatus } = useMapContext()
@@ -163,8 +164,13 @@ export default function MapCanvas() {
       skipLayerSyncRef.current = true
 
       let renderTimer: number | null = window.setTimeout(() => {
-        // If we never got an idle frame, keep the static fallback visible and
-        // try OSM raster fallback to improve chances of recovery.
+        // Safari/WebKit can occasionally create a black map until a fresh context.
+        // Perform one hard reset before locking into fallback mode.
+        if (startupResetAttemptsRef.current < 1) {
+          startupResetAttemptsRef.current += 1
+          hardReset()
+          return
+        }
         fallbackLocked = true
         setStaticFallbackVisible(true)
         setStatus('fallback')
@@ -237,6 +243,7 @@ export default function MapCanvas() {
       }
 
       const onLoad = () => {
+        startupResetAttemptsRef.current = 0
         setMap(map)
         scheduleResize()
         scheduleResize()

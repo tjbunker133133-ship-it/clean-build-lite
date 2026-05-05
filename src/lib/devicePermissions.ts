@@ -45,6 +45,17 @@ export async function requestMicrophonePermission(): Promise<PermissionStateLike
   }
 }
 
+export async function requestCameraPermission(): Promise<PermissionStateLike> {
+  if (!navigator.mediaDevices?.getUserMedia) return 'unsupported'
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true })
+    stream.getTracks().forEach((t) => t.stop())
+    return 'granted'
+  } catch {
+    return 'denied'
+  }
+}
+
 export async function requestNotificationPermission(): Promise<PermissionStateLike> {
   if (typeof Notification === 'undefined' || !Notification.requestPermission) return 'unsupported'
   const state = await Notification.requestPermission()

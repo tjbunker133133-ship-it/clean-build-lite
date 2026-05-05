@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import HudPanel from './HudPanel'
 import { useGPS } from '../hooks/useGPS'
 import {
+  requestCameraPermission,
   getPermissionSnapshot,
   requestGeolocationPermission,
   requestMicrophonePermission,
@@ -85,6 +86,7 @@ export default function PreflightPanel() {
   const [notifPerm, setNotifPerm] = useState<PermissionStateLike>('unknown')
   const [orientationPerm, setOrientationPerm] = useState<PermissionStateLike>('unknown')
   const [motionPerm, setMotionPerm] = useState<PermissionStateLike>('unknown')
+  const [cameraPerm, setCameraPerm] = useState<PermissionStateLike>('unknown')
   const [isStandalone, setIsStandalone] = useState(false)
   const [recheckTick, setRecheckTick] = useState(0)
   const [lastRecheckAt, setLastRecheckAt] = useState<number | null>(null)
@@ -219,6 +221,12 @@ export default function PreflightPanel() {
         weight: 0.8,
       },
       {
+        label: 'Camera Permission',
+        state: cameraPerm === 'granted' ? 'pass' : cameraPerm === 'unsupported' ? 'warn' : 'warn',
+        detail: cameraPerm,
+        weight: 0.7,
+      },
+      {
         label: 'Voice Recognition',
         state: speechSupported ? 'pass' : 'warn',
         detail: speechSupported ? 'Supported' : 'Fallback typed mode',
@@ -239,7 +247,7 @@ export default function PreflightPanel() {
         critical: true,
       },
     ]
-  }, [endpoint, geoPerm, gps.lat, gps.lng, isStandalone, micPerm, notifPerm, motionPerm, orientationPerm, online, savedContactsCount, speechSupported, recheckTick])
+  }, [endpoint, geoPerm, gps.lat, gps.lng, isStandalone, micPerm, notifPerm, motionPerm, orientationPerm, cameraPerm, online, savedContactsCount, speechSupported, recheckTick])
 
   const checksWeight = checks.reduce((sum, c) => sum + (c.weight ?? 1), 0)
   const checksScore = checks.reduce(
@@ -280,15 +288,16 @@ export default function PreflightPanel() {
   const requestAllPermissions = async () => {
     setRequestingPerms(true)
     try {
-      const [geo, mic, notif, orientation, motion] = await Promise.all([
-        requestGeolocationPermission(),
-        requestMicrophonePermission(),
-        requestNotificationPermission(),
-        requestOrientationPermission(),
-        requestMotionPermission(),
-      ])
+      // Run sequentially from the same user gesture for better iOS Safari reliability.
+      const geo = await requestGeolocationPermission()
+      const mic = await requestMicrophonePermission()
+      const camera = await requestCameraPermission()
+      const notif = await requestNotificationPermission()
+      const orientation = await requestOrientationPermission()
+      const motion = await requestMotionPermission()
       setGeoPerm(geo === 'unsupported' ? 'unknown' : geo)
       setMicPerm(mic === 'unsupported' ? 'unknown' : mic)
+      setCameraPerm(camera)
       setNotifPerm(notif)
       setOrientationPerm(orientation)
       setMotionPerm(motion)
