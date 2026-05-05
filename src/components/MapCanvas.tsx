@@ -28,7 +28,7 @@ export default function MapCanvas() {
     setPendingType,
     setNextWaypointLabel,
   } = useAppContext()
-  const { panels, prefs } = useCockpit()
+  const { prefs } = useCockpit()
   const {
     activeLayer,
     pendingWaypointType,
@@ -51,8 +51,6 @@ export default function MapCanvas() {
   keepArmedRef.current = keepWaypointToolArmed
   const clearLabelAfterDropRef = useRef(clearLabelAfterDrop)
   clearLabelAfterDropRef.current = clearLabelAfterDrop
-  const waypointDockedRef = useRef(!!panels.waypoints?.docked)
-  waypointDockedRef.current = !!panels.waypoints?.docked
 
   // Create map once; swap style when base layer changes
   useEffect(() => {
@@ -268,8 +266,8 @@ export default function MapCanvas() {
         hardReset()
       })
 
-      map.on('click', (e) => {
-        if (!map) return
+      const placeWaypoint = (e: { lngLat: { lng: number; lat: number } }) => {
+        if (!map || !e?.lngLat) return
         const now = Date.now()
         // Stability guard: prevent accidental double-drops from rapid taps/clicks.
         if (now - lastDropAtRef.current < 220) return
@@ -277,7 +275,8 @@ export default function MapCanvas() {
 
         // Ignore placement while map camera is moving (drag/pan/kinetic movement).
         if (map.isMoving()) return
-        if (waypointDockedRef.current) return
+        // Allow iOS/mobile waypoint drops even when the panel is docked.
+        // Users may keep the tool rail docked while actively placing pins.
         const nextIdx = waypointCountRef.current + 1
         const type = pendingTypeRef.current
         if (type === 'default') return
@@ -303,7 +302,10 @@ export default function MapCanvas() {
         }
         if (!keepArmedRef.current) setPendingType('default')
         if (clearLabelAfterDropRef.current && manualLabel) setNextWaypointLabel('')
-      })
+      }
+
+      map.on('click', placeWaypoint as any)
+      map.on('touchend', placeWaypoint as any)
     }
 
     roRef.current = new ResizeObserver(() => {
