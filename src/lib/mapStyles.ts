@@ -39,18 +39,11 @@ function rasterStyle(
 
 /** Every `LayerType` must have an entry — TypeScript enforces the mapping. */
 export const MAP_STYLES: Record<LayerType, StyleSpecification> = {
-  /**
-   * Road-forward basemap (distinct from `outdoor` / fallback OSM).
-   * Carto Voyager raster — avoids duplicate tile stack vs outdoor-only OSM.
-   */
+  /** Road-forward basemap using canonical OSM raster tiles. */
   streets: rasterStyle(
-    'carto-voyager',
-    [
-      'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
-      'https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
-      'https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
-    ],
-    '© OpenStreetMap contributors © CARTO',
+    'streets-osm',
+    ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+    '© OpenStreetMap contributors',
   ),
   satellite: rasterStyle(
     'satellite-tiles',

@@ -33,6 +33,8 @@ const PREFS_DEFAULT: CockpitPrefs = {
   screen_hue: 'low_light',
   low_hud_brightness: 0.9,
   low_map_brightness: 0.14,
+  bright_hud_brightness: 1.32,
+  bright_map_brightness: 1.18,
   red_hue_rotate: -62,
   red_saturation: 0.52,
   red_brightness: 0.68,
@@ -222,27 +224,7 @@ function normalizeNoOverlapLayout(panels: PanelMap, gapPx = 0): PanelMap {
   const dockedIds = Object.keys(next).filter((id) => next[id]?.docked)
   const dockObstacles: Array<{ l: number; t: number; r: number; b: number }> = []
 
-  // Pass 1: rebalance dock lanes so each side only keeps as many panels
-  // as can fit vertically; overflow is moved to the opposite side.
-  ;(['left', 'right'] as const).forEach((side) => {
-    const opposite: typeof side = side === 'left' ? 'right' : 'left'
-    const lane = dockedIds
-      .filter((id) => (next[id].dockSide ?? 'left') === side)
-      .sort((a, b) => (next[a].y === next[b].y ? a.localeCompare(b) : next[a].y - next[b].y))
-    if (!lane.length) return
-    const { minY, maxY, step } = computeDockMetrics(vh, lane.length)
-    const slotCount = Math.max(1, Math.floor((maxY - minY) / step) + 1)
-    if (lane.length > slotCount) {
-      const overflow = lane.slice(slotCount)
-      for (const id of overflow) {
-        const p = next[id]
-        if (!p) continue
-        p.dockSide = opposite
-      }
-    }
-  })
-
-  // Pass 2: lay out each dock lane with its (possibly updated) members,
+  // Lay out each dock lane with user-selected side assignment,
   // and record them as obstacles for floating panels.
   for (const side of ['left', 'right'] as const) {
     const lane = dockedIds
@@ -344,6 +326,8 @@ interface CockpitContextValue {
   /** Apply CSS vars + classes to document root */
   reducedTransparency: boolean
   setReducedTransparency: (v: boolean) => void
+  mapInteractionBlocked: boolean
+  setMapInteractionBlocked: (v: boolean) => void
 }
 
 const CockpitContext = createContext<CockpitContextValue | null>(null)
@@ -395,6 +379,7 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
   )
   const [highContrast, setHighContrast] = useState(false)
   const [reducedTransparency, setReducedTransparency] = useState(false)
+  const [mapInteractionBlocked, setMapInteractionBlocked] = useState(false)
   const autoPresetAppliedRef = useRef(false)
   useEffect(() => {
     if (typeof window === 'undefined' || !window.matchMedia) return
@@ -493,16 +478,9 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
 
   const snapCoord = useCallback((n: number) => snap(n), [])
 
-  const raisePanel = useCallback((id: string) => {
-    setPanels((prev) => {
-      const p = prev[id]
-      if (!p) return prev
-      const nz = nextZ.current++
-      const next = { ...prev, [id]: { ...p, z: nz } }
-      persist(next, prefs)
-      return next
-    })
-  }, [persist, prefs])
+  const raisePanel = useCallback((_id: string) => {
+    // Stable layering by design: no panel focus raise.
+  }, [])
 
   const updatePanel = useCallback(
     (id: string, patch: Partial<CockpitPanelRect>) => {
@@ -774,6 +752,8 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
       highContrast,
       reducedTransparency,
       setReducedTransparency,
+      mapInteractionBlocked,
+      setMapInteractionBlocked,
     }),
     [
       panels,
@@ -796,6 +776,8 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
       highContrast,
       reducedTransparency,
       setReducedTransparency,
+      mapInteractionBlocked,
+      setMapInteractionBlocked,
     ],
   )
 

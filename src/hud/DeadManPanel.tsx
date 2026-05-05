@@ -5,7 +5,7 @@
  * NEW vs old:
  *   - Timer shows HH:MM:SS (was MM:SS)
  *   - ACTIVATE button when timer not yet running
- *   - +1 HR extend button (disabled after first use per cycle)
+ *   - +1 HR extend button (repeatable per cycle)
  *   - Critical state (≤15 min) pulses amber
  *   - Progress bar based on full 4-hour window
  */

@@ -4,7 +4,7 @@ import { screenHueFilter } from '../lib/cockpitScreenHue'
 
 /** Wraps all HUD layers except the map so screen hue filters tactical chrome only. */
 export default function CockpitHudShell({ children }: { children: ReactNode }) {
-  const { prefs } = useCockpit()
+  const { prefs, mapInteractionBlocked } = useCockpit()
   const hue = useMemo(
     () => screenHueFilter(prefs.screen_hue, prefs),
     [prefs],
@@ -19,6 +19,19 @@ export default function CockpitHudShell({ children }: { children: ReactNode }) {
         ...hue,
       }}
     >
+      {mapInteractionBlocked && (
+        <div
+          aria-hidden
+          style={{
+            position: 'absolute',
+            inset: 0,
+            zIndex: 99,
+            pointerEvents: 'auto',
+            touchAction: 'none',
+            background: 'transparent',
+          }}
+        />
+      )}
       {children}
     </div>
   )

@@ -119,7 +119,10 @@ export default function VoicePanel() {
   const [morseEnabled, setMorseEnabled] = useState(false)
   const [torchEnabled, setTorchEnabled] = useState(false)
   const recognitionRef = useRef<any>(null)
+  const armedRef = useRef(false)
+  armedRef.current = armed
   const wakeUntilRef = useRef(0)
+  const parseAndRunRef = useRef<(text: string) => Promise<void>>(async () => {})
   const supportsRec =
     typeof window !== 'undefined' &&
     !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)
@@ -427,7 +430,7 @@ export default function VoicePanel() {
     report(`Unknown command: ${cmd}. Say HUD help for directory.`, false)
   }
 
-  const parseAndRun = (text: string) => {
+  const parseAndRun = async (text: string) => {
     const norm = normalize(text)
     const now = Date.now()
     const i = norm.indexOf(`${WAKE_WORD} `)
@@ -440,15 +443,20 @@ export default function VoicePanel() {
       const commandsPart = i === -1 ? '' : norm.slice(i + WAKE_WORD.length).trim()
       const parts = commandsPart.split(/\bthen\b/).map((s) => s.trim()).filter(Boolean)
       if (parts.length === 0) return report('Ready. Say HUD plus command.', true)
-      for (const p of parts) void runCommand(p)
+      for (const p of parts) {
+        await runCommand(p)
+      }
       return
     }
 
     if (continuousMode || now <= wakeUntilRef.current) {
       const parts = norm.split(/\bthen\b/).map((s) => s.trim()).filter(Boolean)
-      for (const p of parts) void runCommand(p)
+      for (const p of parts) {
+        await runCommand(p)
+      }
     }
   }
+  parseAndRunRef.current = parseAndRun
 
   useEffect(() => {
     const onMorseState = (ev: Event) => {
@@ -486,11 +494,11 @@ export default function VoicePanel() {
         .slice(e.resultIndex)
         .map((r: any) => r[0]?.transcript ?? '')
         .join(' ')
-      parseAndRun(transcript)
+      void parseAndRunRef.current(transcript)
     }
     rec.onerror = () => setVoiceState('failure')
     rec.onend = () => {
-      if (armed) {
+      if (armedRef.current) {
         try {
           rec.start()
         } catch {
@@ -506,7 +514,7 @@ export default function VoicePanel() {
         // ignore
       }
     }
-  }, [armed, supportsRec, gps.lat, gps.lng, state.waypoints.length, continuousMode])
+  }, [armed, supportsRec])
 
   return (
     <HudPanel

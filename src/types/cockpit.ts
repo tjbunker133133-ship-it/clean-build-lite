@@ -28,6 +28,8 @@ export interface CockpitPrefs {
   /** User-tuned display controls */
   low_hud_brightness: number
   low_map_brightness: number
+  bright_hud_brightness: number
+  bright_map_brightness: number
   red_hue_rotate: number
   red_saturation: number
   red_brightness: number

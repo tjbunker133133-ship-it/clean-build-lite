@@ -10,6 +10,7 @@ export default function PresetPanel() {
     setDisplayTuning({
       low_hud_brightness: 0.95,
       low_map_brightness: 0.12,
+      panel_gap_px: 0,
       red_hue_rotate: -62,
       red_saturation: 0.5,
       red_brightness: 0.66,
@@ -20,14 +21,14 @@ export default function PresetPanel() {
 
   const applyDayNav = () => {
     setScreenHue('bright_day')
-    setDisplayTuning({ low_hud_brightness: 0.9, low_map_brightness: 0.16 })
+    setDisplayTuning({ low_hud_brightness: 0.9, low_map_brightness: 0.16, panel_gap_px: 0 })
     updatePanel('layers', { x: 16, y: 60, docked: false })
     updatePanel('waypoints', { x: 20, y: 420, docked: false })
   }
 
   const applyRecon = () => {
     setScreenHue('red_tactical')
-    setDisplayTuning({ red_hue_rotate: -64, red_saturation: 0.52, red_brightness: 0.64 })
+    setDisplayTuning({ red_hue_rotate: -64, red_saturation: 0.52, red_brightness: 0.64, panel_gap_px: 0 })
     updatePanel('voice', { x: 1240, y: 280, docked: false })
     updatePanel('location', { x: 1240, y: 60, docked: false })
   }
@@ -37,6 +38,7 @@ export default function PresetPanel() {
     setDisplayTuning({
       glass_intensity: 0.34,
       panel_opacity: 0.48,
+      panel_gap_px: 0,
       low_hud_brightness: 0.92,
       low_map_brightness: 0.16,
       red_hue_rotate: -60,
@@ -53,6 +55,7 @@ export default function PresetPanel() {
     setDisplayTuning({
       glass_intensity: 0.42,
       panel_opacity: 0.52,
+      panel_gap_px: 0,
       low_hud_brightness: 0.96,
       low_map_brightness: 0.14,
       red_hue_rotate: -62,
@@ -69,6 +72,7 @@ export default function PresetPanel() {
     setDisplayTuning({
       glass_intensity: 0.5,
       panel_opacity: 0.5,
+      panel_gap_px: 0,
       low_hud_brightness: 0.9,
       low_map_brightness: 0.16,
       red_hue_rotate: -62,
@@ -79,6 +83,33 @@ export default function PresetPanel() {
     updatePanel('waypoints', { x: 20, y: 420, docked: false, minimized: false })
     updatePanel('voice', { x: 1180, y: 280, docked: false, minimized: false })
     updatePanel('sos', { x: 1180, y: 520, docked: false, minimized: false })
+  }
+
+  const applyWindowsPreset = () => {
+    setScreenHue('bright_day')
+    setDisplayTuning({
+      glass_intensity: 0.46,
+      panel_opacity: 0.5,
+      panel_gap_px: 0,
+      low_hud_brightness: 0.92,
+      low_map_brightness: 0.15,
+      red_hue_rotate: -62,
+      red_saturation: 0.52,
+      red_brightness: 0.66,
+    })
+    updatePanel('layers', { x: 16, y: 60, w: 180, docked: false, minimized: false })
+    updatePanel('waypoints', { x: 20, y: 420, w: 340, docked: false, minimized: false })
+    updatePanel('display', { x: 980, y: 60, w: 300, docked: false, minimized: false })
+    updatePanel('location', { x: 980, y: 260, w: 320, docked: false, minimized: false })
+    updatePanel('voice', { x: 980, y: 500, w: 340, docked: false, minimized: false })
+  }
+
+  const setEdgeConnectSpacing = () => {
+    setDisplayTuning({ panel_gap_px: 0 })
+  }
+
+  const setComfortSpacing = () => {
+    setDisplayTuning({ panel_gap_px: 10 })
   }
 
   return (
@@ -121,6 +152,22 @@ export default function PresetPanel() {
         <button type="button" data-no-drag onClick={applyTabletPreset} style={btnStyle()}>
           TABLET
         </button>
+        <button type="button" data-no-drag onClick={applyWindowsPreset} style={btnStyle()}>
+          WINDOWS
+        </button>
+        <div style={{ display: 'grid', gap: 6, marginTop: 4 }}>
+          <div style={{ fontSize: 10, letterSpacing: '0.1em', color: '#a8b2aa' }}>
+            PANEL SPACING
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button type="button" data-no-drag onClick={setEdgeConnectSpacing} style={{ ...btnStyle(), flex: 1 }}>
+              EDGE CONNECT
+            </button>
+            <button type="button" data-no-drag onClick={setComfortSpacing} style={{ ...btnStyle(), flex: 1 }}>
+              COMFORT GAP
+            </button>
+          </div>
+        </div>
       </div>
     </HudPanel>
   )

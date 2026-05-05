@@ -95,7 +95,7 @@ export function useDeadMan(onExpire?: () => void): UseDeadManReturn {
     if (!isActive) return
     const tick = () => {
       const rem = Math.max(0, expiresAt - Date.now())
-      setRemainingMs(rem)
+      setRemainingMs((prev) => (prev === rem ? prev : rem))
       if (rem === 0 && !firedRef.current) {
         firedRef.current = true
         onExpireRef.current?.()
@@ -125,20 +125,22 @@ export function useDeadMan(onExpire?: () => void): UseDeadManReturn {
 
   const extend = useCallback(() => {
     if (isActive) {
+      setExtended(true)
       setExpiresAt((prev) => {
         const n = prev + EXTEND_MS
-        save({ expiresAt: n, extended: false, durationMs })
+        save({ expiresAt: n, extended: true, durationMs })
         return n
       })
       setRemainingMs((prev) => prev + EXTEND_MS)
       return
     }
     const nextDurationMs = Math.min(durationMs + EXTEND_MS, MAX_DURATION_MIN * 60_000)
+    setExtended(true)
     setDurationMs(nextDurationMs)
     setRemainingMs(nextDurationMs)
     const previewExpiry = Date.now() + nextDurationMs
     setExpiresAt(previewExpiry)
-    save({ expiresAt: previewExpiry, extended: false, durationMs: nextDurationMs })
+    save({ expiresAt: previewExpiry, extended: true, durationMs: nextDurationMs })
   }, [durationMs, isActive])
 
   const activate = useCallback(() => {
@@ -186,7 +188,7 @@ export function useDeadMan(onExpire?: () => void): UseDeadManReturn {
 
   return {
     remainingMs, timeLeft, isCritical, isWarning, isExpired,
-    hasExtended: false, isActive, expiresAt, durationMs, formattedTime,
+    hasExtended: extended, isActive, expiresAt, durationMs, formattedTime,
     reset, extend, activate, deactivate, setDurationMinutes,
   }
 }

@@ -364,41 +364,41 @@ export default function MapCanvas() {
         transition: 'filter 180ms var(--cockpit-ease, ease)',
       }}
     >
-      <div
-        aria-hidden
-        style={{
-          position: 'absolute',
-          inset: 0,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          opacity: staticFallbackVisible ? 1 : 0,
-          visibility: staticFallbackVisible ? 'visible' : 'hidden',
-          transition: 'opacity 220ms ease, visibility 220ms ease',
-          background:
-            'radial-gradient(circle at 50% 45%, rgba(28,42,52,0.9), rgba(8,14,18,0.96) 62%, rgba(5,9,12,0.98) 100%)',
-          pointerEvents: 'none',
-          zIndex: 2,
-          color: '#b9d4dd',
-          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-          letterSpacing: '0.08em',
-          textTransform: 'uppercase',
-          fontSize: 11,
-          textShadow: '0 0 10px rgba(0,0,0,0.55)',
-        }}
-      >
+      {staticFallbackVisible && (
         <div
+          aria-hidden
           style={{
-            padding: '10px 14px',
-            borderRadius: 10,
-            border: '1px solid rgba(148,193,207,0.35)',
-            background: 'rgba(8,14,18,0.54)',
-            backdropFilter: 'blur(2px)',
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            transition: 'opacity 220ms ease, visibility 220ms ease',
+            background:
+              'radial-gradient(circle at 50% 45%, rgba(28,42,52,0.9), rgba(8,14,18,0.96) 62%, rgba(5,9,12,0.98) 100%)',
+            pointerEvents: 'none',
+            zIndex: 2,
+            color: '#b9d4dd',
+            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+            letterSpacing: '0.08em',
+            textTransform: 'uppercase',
+            fontSize: 11,
+            textShadow: '0 0 10px rgba(0,0,0,0.55)',
           }}
         >
-          Map fallback active
+          <div
+            style={{
+              padding: '10px 14px',
+              borderRadius: 10,
+              border: '1px solid rgba(148,193,207,0.35)',
+              background: 'rgba(8,14,18,0.54)',
+              backdropFilter: 'blur(2px)',
+            }}
+          >
+            Map fallback active
+          </div>
         </div>
-      </div>
+      )}
       <div
         ref={containerRef}
         style={{

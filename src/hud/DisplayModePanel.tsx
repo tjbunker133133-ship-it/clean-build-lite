@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react'
 import HudPanel from './HudPanel'
 import { useCockpit } from '../context/CockpitContext'
 import type { ScreenHueMode } from '../types/cockpit'
@@ -11,21 +12,31 @@ const HUE_BUTTONS: { mode: ScreenHueMode; label: string; hint: string }[] = [
 export default function DisplayModePanel() {
   const { prefs, setScreenHue, setDisplayTuning } = useCockpit()
   const active = prefs.screen_hue
+  const sliderStyle: CSSProperties = {
+    width: '100%',
+    accentColor: active === 'red_tactical' ? '#ff5c7a' : '#9fe4ad',
+  }
   const resetCurrentMode = () => {
     if (active === 'low_light') {
       setDisplayTuning({ low_hud_brightness: 0.9, low_map_brightness: 0.14 })
       return
     }
+    if (active === 'bright_day') {
+      setDisplayTuning({ bright_hud_brightness: 1.32, bright_map_brightness: 1.18 })
+      return
+    }
     if (active === 'red_tactical') {
-      setDisplayTuning({ red_hue_rotate: -58, red_saturation: 0.52, red_brightness: 0.68 })
+      setDisplayTuning({ red_hue_rotate: -50, red_saturation: 0.6, red_brightness: 0.68 })
     }
   }
   const applyNightPreset = () => {
     setDisplayTuning({
       low_hud_brightness: 0.92,
-      low_map_brightness: 0.12,
-      red_hue_rotate: -62,
-      red_saturation: 0.5,
+      low_map_brightness: 0.3,
+      bright_hud_brightness: 1.32,
+      bright_map_brightness: 1.18,
+      red_hue_rotate: -50,
+      red_saturation: 0.6,
       red_brightness: 0.66,
     })
   }
@@ -120,18 +131,50 @@ export default function DisplayModePanel() {
                 value={prefs.low_hud_brightness}
                 data-no-drag
                 onChange={(e) => setDisplayTuning({ low_hud_brightness: Number(e.target.value) })}
+                style={sliderStyle}
               />
             </label>
             <label style={{ fontSize: 10, color: 'var(--cockpit-panel-subtle)', display: 'grid', gap: 4 }}>
               LOW MAP BRIGHTNESS ({prefs.low_map_brightness.toFixed(2)})
               <input
                 type="range"
-                min={0.08}
-                max={0.35}
+                min={0.2}
+                max={0.55}
                 step={0.01}
                 value={prefs.low_map_brightness}
                 data-no-drag
                 onChange={(e) => setDisplayTuning({ low_map_brightness: Number(e.target.value) })}
+                style={sliderStyle}
+              />
+            </label>
+          </div>
+        )}
+        {active === 'bright_day' && (
+          <div style={{ display: 'grid', gap: 8 }}>
+            <label style={{ fontSize: 10, color: 'var(--cockpit-panel-subtle)', display: 'grid', gap: 4 }}>
+              BRIGHT HUD BRIGHTNESS ({prefs.bright_hud_brightness.toFixed(2)})
+              <input
+                type="range"
+                min={1.0}
+                max={1.6}
+                step={0.01}
+                value={prefs.bright_hud_brightness}
+                data-no-drag
+                onChange={(e) => setDisplayTuning({ bright_hud_brightness: Number(e.target.value) })}
+                style={sliderStyle}
+              />
+            </label>
+            <label style={{ fontSize: 10, color: 'var(--cockpit-panel-subtle)', display: 'grid', gap: 4 }}>
+              BRIGHT MAP BRIGHTNESS ({prefs.bright_map_brightness.toFixed(2)})
+              <input
+                type="range"
+                min={1.0}
+                max={1.4}
+                step={0.01}
+                value={prefs.bright_map_brightness}
+                data-no-drag
+                onChange={(e) => setDisplayTuning({ bright_map_brightness: Number(e.target.value) })}
+                style={sliderStyle}
               />
             </label>
           </div>
@@ -142,12 +185,13 @@ export default function DisplayModePanel() {
               RED HUE SHIFT ({prefs.red_hue_rotate} deg)
               <input
                 type="range"
-                min={-70}
-                max={-20}
+                min={-60}
+                max={-42}
                 step={1}
                 value={prefs.red_hue_rotate}
                 data-no-drag
                 onChange={(e) => setDisplayTuning({ red_hue_rotate: Number(e.target.value) })}
+                style={sliderStyle}
               />
             </label>
             <label style={{ fontSize: 10, color: 'var(--cockpit-panel-subtle)', display: 'grid', gap: 4 }}>
@@ -155,11 +199,12 @@ export default function DisplayModePanel() {
               <input
                 type="range"
                 min={0.45}
-                max={1}
+                max={0.95}
                 step={0.01}
                 value={prefs.red_saturation}
                 data-no-drag
                 onChange={(e) => setDisplayTuning({ red_saturation: Number(e.target.value) })}
+                style={sliderStyle}
               />
             </label>
             <label style={{ fontSize: 10, color: 'var(--cockpit-panel-subtle)', display: 'grid', gap: 4 }}>
@@ -172,6 +217,7 @@ export default function DisplayModePanel() {
                 value={prefs.red_brightness}
                 data-no-drag
                 onChange={(e) => setDisplayTuning({ red_brightness: Number(e.target.value) })}
+                style={sliderStyle}
               />
             </label>
           </div>
