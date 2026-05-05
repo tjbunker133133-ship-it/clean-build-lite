@@ -126,10 +126,11 @@ export default function CockpitHudPanel({
     /iPhone|iPad|iPod/i.test(navigator.userAgent || '')
   const isCoarsePointer =
     typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
-  const dragThreshold = isIOSWebKit ? 14 : isCoarsePointer ? 10 : DRAG_THRESHOLD_PX
-  const edgeDockZone = isIOSWebKit ? 44 : isCoarsePointer ? 34 : EDGE_DOCK_ZONE_PX
-  const panelSnapThreshold = isIOSWebKit ? 14 : isCoarsePointer ? 10 : PANEL_SNAP_THRESHOLD_PX
-  const dockRelockGuard = isIOSWebKit ? 72 : isCoarsePointer ? 64 : DOCK_RELOCK_GUARD_PX
+  const dragThreshold = isIOSWebKit ? 14 : isCoarsePointer ? 12 : DRAG_THRESHOLD_PX
+  const edgeDockZone = isIOSWebKit ? 44 : isCoarsePointer ? 40 : EDGE_DOCK_ZONE_PX
+  const panelSnapThreshold = isIOSWebKit ? 14 : isCoarsePointer ? 12 : PANEL_SNAP_THRESHOLD_PX
+  const dockRelockGuard = isIOSWebKit ? 96 : isCoarsePointer ? 64 : DOCK_RELOCK_GUARD_PX
+  const dockUndockSwipe = isIOSWebKit ? 12 : DOCK_UNDOCK_SWIPE_PX
 
   const avoidRuntimeOverlap = useCallback(
     (x: number, y: number, w: number, h: number) => {
@@ -301,6 +302,32 @@ export default function CockpitHudPanel({
     }
   }, [layout, panelId, updatePanel, minimized, isCoarsePointer, minHeight, getDockedY])
 
+  // Keep stored panel dimensions aligned with actual rendered size so
+  // collision math remains accurate and panels cannot silently overlap.
+  useEffect(() => {
+    const el = rootRef.current
+    if (!el || !layout || docked || minimized) return
+
+    const syncSize = () => {
+      const rect = el.getBoundingClientRect()
+      const rw = Math.round(rect.width)
+      const rh = Math.round(rect.height)
+      if (!Number.isFinite(rw) || !Number.isFinite(rh)) return
+      const wDelta = Math.abs((layout.w ?? 0) - rw)
+      const hDelta = Math.abs((layout.h ?? 0) - rh)
+      if (wDelta > 6 || hDelta > 6 || layout.h == null) {
+        updatePanel(panelId, { w: rw, h: rh })
+      }
+    }
+
+    syncSize()
+    const ro = new ResizeObserver(() => {
+      requestAnimationFrame(syncSize)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [panelId, updatePanel, layout, docked, minimized])
+
   const commitPosition = useCallback(() => {
     const el = rootRef.current
     const rect = el?.getBoundingClientRect()
@@ -345,14 +372,15 @@ export default function CockpitHudPanel({
       return
     }
 
-    const next = { x: sx, y: sy }
+    const runtimeResolved = avoidRuntimeOverlap(sx, sy, s.w, Math.max(minHeight, height))
+    const next = { x: runtimeResolved.x, y: runtimeResolved.y }
     posRef.current = next
     setPos(next)
     setDockPreview(null)
     setSnapGuide({ x: null, y: null })
     updatePanel(panelId, {
-      x: sx,
-      y: sy,
+      x: next.x,
+      y: next.y,
       w: s.w,
       h: Math.max(minHeight, s.h ?? Math.ceil(rect?.height ?? minHeight)),
       minimized,
@@ -373,6 +401,7 @@ export default function CockpitHudPanel({
     getDockedY,
     dockRelockGuard,
     edgeDockZone,
+    avoidRuntimeOverlap,
   ])
 
   useEffect(() => {
@@ -566,6 +595,33 @@ export default function CockpitHudPanel({
     })
   }
 
+  const minimizeToDock = () => {
+    const side = dockSide
+    const s = sizeRef.current
+    const { vw } = viewportSize()
+    const x =
+      side === 'right'
+        ? Math.max(0, vw - s.w - DOCK_EDGE_INSET_PX)
+        : DOCK_EDGE_INSET_PX
+    const y = getDockedY(side, posRef.current.y)
+    const dockPos = { x, y }
+    posRef.current = dockPos
+    setPos(dockPos)
+    setMinimized(true)
+    setDocked(true)
+    setDockPreview(null)
+    undockedAt.current = null
+    updatePanel(panelId, {
+      x: dockPos.x,
+      y: dockPos.y,
+      w: s.w,
+      h: s.h,
+      minimized: true,
+      docked: true,
+      dockSide: side,
+    })
+  }
+
   const glassBlur = `blur(${8 + prefs.glass_intensity * 20}px) saturate(1.15)`
   const panelOpacity =
     prefs.screen_hue === 'low_light' ? Math.min(0.42, prefs.panel_opacity * 0.9) : prefs.panel_opacity * 0.96
@@ -619,8 +675,8 @@ export default function CockpitHudPanel({
     if (Math.abs(dx) > 6 || Math.abs(dy) > 6) dockGesture.current.moved = true
     const shouldUndock =
       dockSide === 'left'
-        ? dx >= DOCK_UNDOCK_SWIPE_PX && Math.abs(dy) < 28
-        : dx <= -DOCK_UNDOCK_SWIPE_PX && Math.abs(dy) < 28
+        ? dx >= dockUndockSwipe && Math.abs(dy) < (isIOSWebKit ? 38 : 28)
+        : dx <= -dockUndockSwipe && Math.abs(dy) < (isIOSWebKit ? 38 : 28)
     if (shouldUndock) {
       dockGesture.current.active = false
       // Pull-out interaction: undock and continue into move mode.
@@ -774,6 +830,36 @@ export default function CockpitHudPanel({
               <span>{title}</span>
             </span>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <button
+                type="button"
+                data-no-drag
+                onClick={(e) => {
+                  e.stopPropagation()
+                  minimizeToDock()
+                }}
+                aria-label={`Minimize ${title} to dock`}
+                title="Minimize to dock"
+                style={{
+                  background: `${accent}14`,
+                  border: `1px solid ${accent}77`,
+                  color: accent,
+                  cursor: 'pointer',
+                  borderRadius: 4,
+                  minHeight: 28,
+                  minWidth: 28,
+                  lineHeight: 1,
+                  fontSize: 12,
+                  fontWeight: 700,
+                  letterSpacing: '0.08em',
+                  textShadow: `0 0 8px ${accent}55`,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: 0,
+                }}
+              >
+                ▬
+              </button>
               <span style={{ opacity: 0.65, fontSize: 8, color: panelSubtleText }}>⋮⋮</span>
             </div>
           </>

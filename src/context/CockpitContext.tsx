@@ -45,6 +45,9 @@ interface StoredState {
 }
 
 type DevicePreset = 'iphone' | 'android' | 'tablet' | 'desktop'
+const DOCK_EDGE_INSET_PX = 8
+const DOCKED_PANEL_STACK_PX = 8
+const DOCKED_PANEL_HEIGHT_PX = 92
 
 function snap(n: number): number {
   return Math.round(n / SNAP_PX) * SNAP_PX
@@ -158,6 +161,94 @@ function saveState(panels: PanelMap, prefs: CockpitPrefs) {
   }
 }
 
+function panelHeightGuess(pid: string, p: CockpitPanelRect): number {
+  const defaults: Record<string, number> = {
+    layers: 230,
+    waypoints: 92,
+    deadman: 320,
+    coords: 160,
+    elevation: 150,
+    clock: 120,
+    display: 220,
+    location: 240,
+    voice: 360,
+    weather: 180,
+    presets: 220,
+    sos: 300,
+    preflight: 300,
+  }
+  return Math.max(44, p.h ?? (p.minimized ? 44 : (defaults[pid] ?? 220)))
+}
+
+function normalizeNoOverlapLayout(panels: PanelMap): PanelMap {
+  const next: PanelMap = Object.fromEntries(
+    Object.entries(panels).map(([id, p]) => [id, { ...p }]),
+  )
+  const vw = typeof window !== 'undefined' ? window.innerWidth : 1440
+  const vh = typeof window !== 'undefined' ? window.innerHeight : 900
+  const pad = 12
+  const minY = 36
+
+  const dockedIds = Object.keys(next).filter((id) => next[id]?.docked)
+  for (const side of ['left', 'right'] as const) {
+    const lane = dockedIds
+      .filter((id) => (next[id].dockSide ?? 'left') === side)
+      .sort((a, b) => (next[a].y === next[b].y ? a.localeCompare(b) : next[a].y - next[b].y))
+    const step = DOCKED_PANEL_HEIGHT_PX + DOCKED_PANEL_STACK_PX
+    const maxY = vh - DOCKED_PANEL_HEIGHT_PX - 4
+    const slotCount = Math.max(1, Math.floor((maxY - minY) / step) + 1)
+    lane.forEach((id, idx) => {
+      const slot = Math.min(slotCount - 1, idx)
+      const p = next[id]
+      p.y = snap(Math.max(minY, Math.min(minY + slot * step, maxY)))
+      p.x =
+        side === 'right'
+          ? Math.max(0, vw - p.w - DOCK_EDGE_INSET_PX)
+          : DOCK_EDGE_INSET_PX
+      p.dockSide = side
+      p.docked = true
+    })
+  }
+
+  const floating = Object.entries(next)
+    .filter(([, p]) => !p.docked)
+    .sort((a, b) => a[1].z - b[1].z)
+  const placed: Array<{ l: number; t: number; r: number; b: number }> = []
+  for (const [id, p] of floating) {
+    const w = p.w
+    const h = panelHeightGuess(id, p)
+    let x = snap(Math.max(0, Math.min(p.x, vw - w)))
+    let y = snap(Math.max(minY, Math.min(p.y, vh - h)))
+    for (let iter = 0; iter < 16; iter++) {
+      let hit = false
+      const a = { l: x, t: y, r: x + w, b: y + h }
+      for (const b of placed) {
+        const overlap = !(a.r <= b.l + pad || a.l >= b.r - pad || a.b <= b.t + pad || a.t >= b.b - pad)
+        if (!overlap) continue
+        const overlapX = Math.min(a.r - b.l, b.r - a.l)
+        const overlapY = Math.min(a.b - b.t, b.b - a.t)
+        if (overlapX < overlapY) {
+          const pushLeft = a.l + w / 2 < b.l + (b.r - b.l) / 2
+          x = pushLeft ? b.l - w - pad : b.r + pad
+        } else {
+          const pushUp = a.t + h / 2 < b.t + (b.b - b.t) / 2
+          y = pushUp ? b.t - h - pad : b.b + pad
+        }
+        x = snap(Math.max(0, Math.min(x, vw - w)))
+        y = snap(Math.max(minY, Math.min(y, vh - h)))
+        hit = true
+        break
+      }
+      if (!hit) break
+    }
+    p.x = x
+    p.y = y
+    placed.push({ l: x, t: y, r: x + w, b: y + h })
+  }
+
+  return next
+}
+
 interface CockpitContextValue {
   panels: PanelMap
   prefs: CockpitPrefs
@@ -223,7 +314,7 @@ const DEFAULT_PANELS = (): PanelMap => ({
 export function CockpitProvider({ children }: { children: ReactNode }) {
   const loaded = useRef(loadState())
   const [panels, setPanels] = useState<PanelMap>(() =>
-    loaded.current?.panels ?? DEFAULT_PANELS(),
+    normalizeNoOverlapLayout(loaded.current?.panels ?? DEFAULT_PANELS()),
   )
   const [prefs, setPrefs] = useState<CockpitPrefs>(() =>
     loaded.current?.prefs ? { ...PREFS_DEFAULT, ...loaded.current.prefs } : PREFS_DEFAULT,
@@ -249,7 +340,7 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
     const device = detectDevicePreset()
     const preset = firstRunPreset(device)
     if (!Object.keys(preset.panelPatches).length && !Object.keys(preset.prefs).length) return
-    setPanels((prev) => ({ ...prev, ...preset.panelPatches }))
+    setPanels((prev) => normalizeNoOverlapLayout({ ...prev, ...preset.panelPatches }))
     setPrefs((prev) => ({ ...prev, ...preset.prefs }))
   }, [])
   const nextZ = useRef(
@@ -339,7 +430,8 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
       setPanels((prev) => {
         const cur = prev[id] ?? DEFAULT_PANELS()[id]
         if (!cur) return prev
-        const next = { ...prev, [id]: { ...cur, ...patch } }
+        const merged = { ...prev, [id]: { ...cur, ...patch } }
+        const next = normalizeNoOverlapLayout(merged)
         persist(next, prefs)
         return next
       })
@@ -409,7 +501,7 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
   )
 
   const resetLayout = useCallback(() => {
-    const fresh = DEFAULT_PANELS()
+    const fresh = normalizeNoOverlapLayout(DEFAULT_PANELS())
     setPanels(fresh)
     persist(fresh, prefs)
   }, [persist, prefs])
@@ -431,7 +523,7 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
       const raw = localStorage.getItem(COCKPIT_STORAGE_KEY + '_scene_backup')
       if (!raw) return
       const o = JSON.parse(raw) as StoredState
-      if (o?.panels) setPanels(o.panels)
+      if (o?.panels) setPanels(normalizeNoOverlapLayout(o.panels))
       if (o?.prefs) setPrefs({ ...PREFS_DEFAULT, ...o.prefs })
     } catch {
       /* ignore */
@@ -509,7 +601,7 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
           const o = JSON.parse(String(reader.result)) as Partial<StoredState>
           if (!o.panels && !o.prefs) return
           setPanels((prev) => {
-            const np = o.panels ?? prev
+            const np = normalizeNoOverlapLayout(o.panels ?? prev)
             setPrefs((pr) => {
               const npr = { ...PREFS_DEFAULT, ...pr, ...o.prefs } as CockpitPrefs
               saveState(np, npr)
