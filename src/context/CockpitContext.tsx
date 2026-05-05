@@ -210,10 +210,33 @@ function normalizeNoOverlapLayout(panels: PanelMap): PanelMap {
   const dockedIds = Object.keys(next).filter((id) => next[id]?.docked)
   const dockObstacles: Array<{ l: number; t: number; r: number; b: number }> = []
 
+  // Pass 1: rebalance dock lanes so each side only keeps as many panels
+  // as can fit vertically; overflow is moved to the opposite side.
+  ;(['left', 'right'] as const).forEach((side) => {
+    const opposite: typeof side = side === 'left' ? 'right' : 'left'
+    const lane = dockedIds
+      .filter((id) => (next[id].dockSide ?? 'left') === side)
+      .sort((a, b) => (next[a].y === next[b].y ? a.localeCompare(b) : next[a].y - next[b].y))
+    if (!lane.length) return
+    const { minY, maxY, step } = computeDockMetrics(vh, lane.length)
+    const slotCount = Math.max(1, Math.floor((maxY - minY) / step) + 1)
+    if (lane.length > slotCount) {
+      const overflow = lane.slice(slotCount)
+      for (const id of overflow) {
+        const p = next[id]
+        if (!p) continue
+        p.dockSide = opposite
+      }
+    }
+  })
+
+  // Pass 2: lay out each dock lane with its (possibly updated) members,
+  // and record them as obstacles for floating panels.
   for (const side of ['left', 'right'] as const) {
     const lane = dockedIds
       .filter((id) => (next[id].dockSide ?? 'left') === side)
       .sort((a, b) => (next[a].y === next[b].y ? a.localeCompare(b) : next[a].y - next[b].y))
+    if (!lane.length) continue
     const { minY, maxY, step, height: dockRowH } = computeDockMetrics(vh, lane.length)
     const slotCount = Math.max(1, Math.floor((maxY - minY) / step) + 1)
     lane.forEach((id, idx) => {

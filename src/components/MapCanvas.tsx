@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import maplibregl from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { useMapContext } from '../context/MapContext'
@@ -18,6 +18,7 @@ export default function MapCanvas() {
   const mapRef = useRef<maplibregl.Map | null>(null)
   const roRef = useRef<ResizeObserver | null>(null)
   const skipLayerSyncRef = useRef(true)
+  const [staticFallbackVisible, setStaticFallbackVisible] = useState(true)
   const { setMap } = useMapContext()
   const {
     state,
@@ -56,27 +57,22 @@ export default function MapCanvas() {
     const container = containerRef.current
     if (!container) return
 
-    container.replaceChildren()
+    let cancelled = false
+    let hardResetting = false
+    let renderedOnce = false
+    let map: maplibregl.Map | null = null
 
-    const initialStyle =
-      MAP_STYLES[activeLayerRef.current] ?? FALLBACK_MAP_STYLE
+    // Render blank maps are usually tied to WebGL/context or sizing churn.
+    // Strategy: show a static OSM image until we get a real `render` from MapLibre.
+    setStaticFallbackVisible(true)
 
-    const map = new maplibregl.Map({
-      container,
-      style: initialStyle,
-      center: [-105.7821, 39.5501],
-      zoom: 10,
-      attributionControl: { compact: true },
-      renderWorldCopies: false,
-    })
-
-    mapRef.current = map
-    skipLayerSyncRef.current = true
+    const STATIC_CENTER = { lng: -105.7821, lat: 39.5501 }
 
     let lastRw = 0
     let lastRh = 0
     const resize = () => {
       try {
+        if (!map) return
         const r = container.getBoundingClientRect()
         const rw = Math.round(r.width)
         const rh = Math.round(r.height)
@@ -88,6 +84,152 @@ export default function MapCanvas() {
       } catch {
         /* ignore */
       }
+    }
+
+    const hardReset = () => {
+      if (cancelled || hardResetting) return
+      hardResetting = true
+
+      // Clean up previous map instance to force a fresh WebGL context.
+      try {
+        map?.remove()
+      } catch {
+        /* ignore */
+      }
+      mapRef.current = null
+      setMap(null)
+
+      // Re-init on next frame to avoid re-entrancy issues.
+      requestAnimationFrame(() => {
+        if (cancelled) return
+        hardResetting = false
+        initMap()
+      })
+    }
+
+    const initMap = () => {
+      if (cancelled) return
+
+      container.replaceChildren()
+      renderedOnce = false
+      setStaticFallbackVisible(true)
+
+      const initialStyle =
+        MAP_STYLES[activeLayerRef.current] ?? FALLBACK_MAP_STYLE
+
+      map = new maplibregl.Map({
+        container,
+        style: initialStyle,
+        center: [STATIC_CENTER.lng, STATIC_CENTER.lat],
+        zoom: 10,
+        attributionControl: { compact: true },
+        renderWorldCopies: false,
+      })
+
+      mapRef.current = map
+      skipLayerSyncRef.current = true
+
+      let renderTimer: number | null = window.setTimeout(() => {
+        // If we never got a render, keep the static fallback visible and
+        // try OSM raster fallback to improve chances of recovery.
+        setStaticFallbackVisible(true)
+        try {
+          map?.setStyle(FALLBACK_MAP_STYLE)
+        } catch {
+          /* ignore */
+        }
+      }, 5000)
+
+      const clearRenderTimer = () => {
+        if (renderTimer != null) {
+          window.clearTimeout(renderTimer)
+          renderTimer = null
+        }
+      }
+
+      const onRender = () => {
+        if (cancelled || !map || renderedOnce) return
+        renderedOnce = true
+        clearRenderTimer()
+        setStaticFallbackVisible(false)
+        try {
+          // Ensure canvas dimensions are correct after first actual draw.
+          requestAnimationFrame(resize)
+        } catch {
+          /* ignore */
+        }
+        // Only need the first render.
+        try {
+          map.off('render', onRender)
+        } catch {
+          /* ignore */
+        }
+      }
+
+      const onError = (e: unknown) => {
+        console.warn('[MapCanvas] tile/style error — falling back to OSM', e)
+        setStaticFallbackVisible(true)
+        try {
+          map?.setStyle(FALLBACK_MAP_STYLE)
+        } catch {
+          /* ignore */
+        }
+      }
+
+      const onLoad = () => {
+        setMap(map)
+        requestAnimationFrame(() => {
+          resize()
+          requestAnimationFrame(resize)
+        })
+      }
+
+      map.once('load', onLoad)
+      map.on('error', onError)
+      map.on('render', onRender)
+
+      // Some browsers (notably mobile) can hard-break WebGL; force recovery.
+      ;(map as any).on?.('webglcontextlost', () => {
+        setStaticFallbackVisible(true)
+        hardReset()
+      })
+
+      map.on('click', (e) => {
+        if (!map) return
+        const now = Date.now()
+        // Stability guard: prevent accidental double-drops from rapid taps/clicks.
+        if (now - lastDropAtRef.current < 220) return
+        lastDropAtRef.current = now
+
+        // Ignore placement while map camera is moving (drag/pan/kinetic movement).
+        if (map.isMoving()) return
+        if (waypointDockedRef.current) return
+        const nextIdx = waypointCountRef.current + 1
+        const type = pendingTypeRef.current
+        if (type === 'default') return
+        const manualLabel = nextWaypointLabelRef.current.trim().slice(0, 64)
+        const autoBase =
+          type === 'finish'
+            ? 'FINISH'
+            : type === 'rest'
+              ? 'REST'
+              : type.toUpperCase()
+        try {
+          addWaypoint({
+            id: `wp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+            lng: e.lngLat.lng,
+            lat: e.lngLat.lat,
+            label: manualLabel || `${autoBase}-${nextIdx}`,
+            type,
+            createdAt: Date.now(),
+          })
+        } catch (err) {
+          console.error('[MapCanvas] waypoint add failed', err)
+          return
+        }
+        if (!keepArmedRef.current) setPendingType('default')
+        if (clearLabelAfterDropRef.current && manualLabel) setNextWaypointLabel('')
+      })
     }
 
     roRef.current = new ResizeObserver(() => {
@@ -103,71 +245,27 @@ export default function MapCanvas() {
     vv?.addEventListener('scroll', onVisualViewportChange)
     window.addEventListener('orientationchange', onVisualViewportChange)
 
-    const onLoad = () => {
-      setMap(map)
-      requestAnimationFrame(() => {
-        resize()
-        requestAnimationFrame(resize)
-      })
-    }
-
-    const onError = (e: unknown) => {
-      console.warn('[MapCanvas] tile/style error — falling back to OSM', e)
-      try {
-        map.setStyle(FALLBACK_MAP_STYLE)
-      } catch {
-        /* ignore */
-      }
-    }
-
-    map.once('load', onLoad)
-    map.on('error', onError)
-    map.on('click', (e) => {
-      const now = Date.now()
-      // Stability guard: prevent accidental double-drops from rapid taps/clicks.
-      if (now - lastDropAtRef.current < 220) return
-      lastDropAtRef.current = now
-
-      // Ignore placement while map camera is moving (drag/pan/kinetic movement).
-      if (map.isMoving()) return
-      if (waypointDockedRef.current) return
-      const nextIdx = waypointCountRef.current + 1
-      const type = pendingTypeRef.current
-      if (type === 'default') return
-      const manualLabel = nextWaypointLabelRef.current.trim().slice(0, 64)
-      const autoBase =
-        type === 'finish'
-          ? 'FINISH'
-          : type === 'rest'
-            ? 'REST'
-            : type.toUpperCase()
-      try {
-        addWaypoint({
-          id: `wp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-          lng: e.lngLat.lng,
-          lat: e.lngLat.lat,
-          label: manualLabel || `${autoBase}-${nextIdx}`,
-          type,
-          createdAt: Date.now(),
-        })
-      } catch (err) {
-        console.error('[MapCanvas] waypoint add failed', err)
-        return
-      }
-      if (!keepArmedRef.current) setPendingType('default')
-      if (clearLabelAfterDropRef.current && manualLabel) setNextWaypointLabel('')
-    })
+    initMap()
 
     return () => {
-      map.off('error', onError)
       vv?.removeEventListener('resize', onVisualViewportChange)
       vv?.removeEventListener('scroll', onVisualViewportChange)
       window.removeEventListener('orientationchange', onVisualViewportChange)
       roRef.current?.disconnect()
       roRef.current = null
-      setMap(null)
+      cancelled = true
+      try {
+        setMap(null)
+      } catch {
+        /* ignore */
+      }
       mapRef.current = null
-      map.remove()
+      try {
+        map?.remove()
+      } catch {
+        /* ignore */
+      }
+      map = null
     }
   }, [setMap, addWaypoint, setPendingType, setNextWaypointLabel])
 
@@ -195,7 +293,6 @@ export default function MapCanvas() {
 
   return (
     <div
-      ref={containerRef}
       style={{
         position: 'fixed',
         inset: 0,
@@ -207,6 +304,33 @@ export default function MapCanvas() {
         ...mapScreenFilter(prefs.screen_hue, prefs),
         transition: 'filter 180ms var(--cockpit-ease, ease)',
       }}
-    />
+    >
+      <div
+        ref={containerRef}
+        style={{
+          position: 'absolute',
+          inset: 0,
+          width: '100%',
+          height: '100%',
+        }}
+      />
+      <img
+        alt="OpenStreetMap fallback"
+        src="https://staticmap.openstreetmap.de/staticmap.php?center=39.5501,-105.7821&zoom=10&size=1024x640&markers=39.5501,-105.7821,red-pushpin"
+        loading="lazy"
+        referrerPolicy="no-referrer-when-downgrade"
+        style={{
+          position: 'absolute',
+          inset: 0,
+          width: '100%',
+          height: '100%',
+          objectFit: 'cover',
+          display: staticFallbackVisible ? 'block' : 'none',
+          border: 0,
+          background: '#0b0b10',
+          pointerEvents: 'none',
+        }}
+      />
+    </div>
   )
 }
