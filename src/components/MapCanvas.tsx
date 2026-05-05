@@ -17,6 +17,7 @@ export default function MapCanvas() {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<maplibregl.Map | null>(null)
   const roRef = useRef<ResizeObserver | null>(null)
+  const resizeRafRef = useRef<number | null>(null)
   const skipLayerSyncRef = useRef(true)
   const [staticFallbackVisible, setStaticFallbackVisible] = useState(true)
   const { setMap, setStatus } = useMapContext()
@@ -62,6 +63,10 @@ export default function MapCanvas() {
     let readyOnce = false
     let fallbackLocked = false
     let map: maplibregl.Map | null = null
+    const isAppleWebKit =
+      typeof navigator !== 'undefined' &&
+      /AppleWebKit/i.test(navigator.userAgent || '') &&
+      /iPhone|iPad|iPod|Macintosh/i.test(navigator.userAgent || '')
 
     // Render blank maps are usually tied to WebGL/context or sizing churn.
     // Strategy: show static OSM until MapLibre reaches `idle` with tiles drawn.
@@ -86,6 +91,14 @@ export default function MapCanvas() {
       } catch {
         /* ignore */
       }
+    }
+
+    const scheduleResize = () => {
+      if (resizeRafRef.current != null) return
+      resizeRafRef.current = requestAnimationFrame(() => {
+        resizeRafRef.current = null
+        resize()
+      })
     }
 
     const hardReset = () => {
@@ -141,6 +154,9 @@ export default function MapCanvas() {
         zoom: 10,
         attributionControl: { compact: true },
         renderWorldCopies: false,
+        // Safari/WebKit can reject contexts under performance caveats.
+        failIfMajorPerformanceCaveat: false,
+        antialias: false,
       })
 
       mapRef.current = map
@@ -166,7 +182,7 @@ export default function MapCanvas() {
         }
       }
 
-      const onIdle = () => {
+      const markReady = () => {
         if (cancelled || !map || readyOnce) return
         readyOnce = true
         fallbackLocked = false
@@ -175,7 +191,7 @@ export default function MapCanvas() {
         setStatus('ready')
         try {
           // Ensure canvas dimensions are correct after first actual draw.
-          requestAnimationFrame(resize)
+          scheduleResize()
         } catch {
           /* ignore */
         }
@@ -185,6 +201,21 @@ export default function MapCanvas() {
         } catch {
           /* ignore */
         }
+        try {
+          map.off('data', onData)
+        } catch {
+          /* ignore */
+        }
+      }
+
+      const onIdle = () => {
+        markReady()
+      }
+
+      const onData = () => {
+        // WebKit sometimes delays/skips `idle`; data/render means the map is live.
+        if (!map) return
+        if (map.isStyleLoaded()) markReady()
       }
 
       const onError = (e: unknown) => {
@@ -207,15 +238,21 @@ export default function MapCanvas() {
 
       const onLoad = () => {
         setMap(map)
-        requestAnimationFrame(() => {
-          resize()
-          requestAnimationFrame(resize)
-        })
+        scheduleResize()
+        scheduleResize()
+        // Safari fallback: do not wait exclusively for `idle`.
+        window.setTimeout(() => {
+          if (cancelled) return
+          if (map && map.isStyleLoaded()) {
+            markReady()
+          }
+        }, isAppleWebKit ? 220 : 320)
       }
 
       map.once('load', onLoad)
       map.on('error', onError)
       map.on('idle', onIdle)
+      map.on('data', onData)
 
       // Some browsers (notably mobile) can hard-break WebGL; force recovery.
       ;(map as any).on?.('webglcontextlost', () => {
@@ -263,13 +300,13 @@ export default function MapCanvas() {
     }
 
     roRef.current = new ResizeObserver(() => {
-      requestAnimationFrame(resize)
+      scheduleResize()
     })
     roRef.current.observe(container)
 
     const vv = window.visualViewport
     const onVisualViewportChange = () => {
-      requestAnimationFrame(resize)
+      scheduleResize()
     }
     vv?.addEventListener('resize', onVisualViewportChange)
     vv?.addEventListener('scroll', onVisualViewportChange)
@@ -283,6 +320,10 @@ export default function MapCanvas() {
       window.removeEventListener('orientationchange', onVisualViewportChange)
       roRef.current?.disconnect()
       roRef.current = null
+      if (resizeRafRef.current != null) {
+        cancelAnimationFrame(resizeRafRef.current)
+        resizeRafRef.current = null
+      }
       cancelled = true
       try {
         setMap(null)
@@ -374,8 +415,7 @@ export default function MapCanvas() {
             alignItems: 'center',
             justifyContent: 'center',
             transition: 'opacity 220ms ease, visibility 220ms ease',
-            background:
-              'radial-gradient(circle at 50% 45%, rgba(28,42,52,0.9), rgba(8,14,18,0.96) 62%, rgba(5,9,12,0.98) 100%)',
+            background: 'transparent',
             pointerEvents: 'none',
             zIndex: 2,
             color: '#b9d4dd',
@@ -388,10 +428,10 @@ export default function MapCanvas() {
         >
           <div
             style={{
-              padding: '10px 14px',
+              padding: '8px 10px',
               borderRadius: 10,
               border: '1px solid rgba(148,193,207,0.35)',
-              background: 'rgba(8,14,18,0.54)',
+              background: 'rgba(8,14,18,0.28)',
               backdropFilter: 'blur(2px)',
             }}
           >
