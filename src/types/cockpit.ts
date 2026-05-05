@@ -19,6 +19,8 @@ export interface CockpitPrefs {
   glass_intensity: number
   hud_color: HudColorTheme
   panel_opacity: number
+  /** Minimum panel separation in pixels; 0 allows edge-connect without overlap. */
+  panel_gap_px: number
   animations_enabled: boolean
   layout_version: string
   /** Tactical environment hue (filters HUD chrome only; map unfiltered) */

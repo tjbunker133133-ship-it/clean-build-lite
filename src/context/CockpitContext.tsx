@@ -27,6 +27,7 @@ const PREFS_DEFAULT: CockpitPrefs = {
   glass_intensity: 0.4,
   hud_color: 'white',
   panel_opacity: 0.45,
+  panel_gap_px: 0,
   animations_enabled: true,
   layout_version: 'nightforce_v3',
   screen_hue: 'low_light',
@@ -53,6 +54,12 @@ const DOCKED_PANEL_MAX_HEIGHT_PX = 92
 
 function snap(n: number): number {
   return Math.round(n / SNAP_PX) * SNAP_PX
+}
+
+function nearlyEqual(a: number | null | undefined, b: number | null | undefined, epsilon = 0.5): boolean {
+  if (a == null && b == null) return true
+  if (a == null || b == null) return false
+  return Math.abs(a - b) <= epsilon
 }
 
 function themeToAccent(theme: HudColorTheme): string {
@@ -199,12 +206,17 @@ function computeDockMetrics(vh: number, count: number) {
   return { minY, maxY, step, height }
 }
 
-function normalizeNoOverlapLayout(panels: PanelMap): PanelMap {
+function panelGapPx(prefs?: Partial<CockpitPrefs>): number {
+  const raw = prefs?.panel_gap_px ?? 0
+  return Math.max(0, Math.min(24, Math.round(raw)))
+}
+
+function normalizeNoOverlapLayout(panels: PanelMap, gapPx = 0): PanelMap {
   const next: PanelMap = Object.fromEntries(
     Object.entries(panels).map(([id, p]) => [id, { ...p }]),
   )
   const { vw, vh } = cockpitViewport()
-  const pad = 14
+  const pad = gapPx
   const topMinY = 36
 
   const dockedIds = Object.keys(next).filter((id) => next[id]?.docked)
@@ -283,8 +295,9 @@ function normalizeNoOverlapLayout(panels: PanelMap): PanelMap {
           const pushUp = a.t + h / 2 < b.t + (b.b - b.t) / 2
           y = pushUp ? b.t - h - pad : b.b + pad
         }
-        x = snap(Math.max(0, Math.min(x, vw - w)))
-        y = snap(Math.max(topMinY, Math.min(y, vh - h)))
+        // Preserve exact post-collision edge contact; avoid snap drift into overlaps.
+        x = Math.max(0, Math.min(x, vw - w))
+        y = Math.max(topMinY, Math.min(y, vh - h))
         a.l = x
         a.t = y
         a.r = x + w
@@ -372,7 +385,10 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
     ...(loaded.current?.panels ?? {}),
   })
   const [panels, setPanels] = useState<PanelMap>(() =>
-    normalizeNoOverlapLayout(seededPanelsRef.current),
+    normalizeNoOverlapLayout(
+      seededPanelsRef.current,
+      panelGapPx(loaded.current?.prefs ?? PREFS_DEFAULT),
+    ),
   )
   const [prefs, setPrefs] = useState<CockpitPrefs>(() =>
     loaded.current?.prefs ? { ...PREFS_DEFAULT, ...loaded.current.prefs } : PREFS_DEFAULT,
@@ -398,7 +414,12 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
     const device = detectDevicePreset()
     const preset = firstRunPreset(device)
     if (!Object.keys(preset.panelPatches).length && !Object.keys(preset.prefs).length) return
-    setPanels((prev) => normalizeNoOverlapLayout({ ...prev, ...preset.panelPatches }))
+    setPanels((prev) =>
+      normalizeNoOverlapLayout(
+        { ...prev, ...preset.panelPatches },
+        panelGapPx({ ...prefs, ...preset.prefs }),
+      ),
+    )
     setPrefs((prev) => ({ ...prev, ...preset.prefs }))
   }, [])
   const nextZ = useRef(
@@ -501,17 +522,17 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
           } as CockpitPanelRect)
         const nextPanel = { ...cur, ...patch }
         const unchanged =
-          cur.x === nextPanel.x &&
-          cur.y === nextPanel.y &&
-          cur.w === nextPanel.w &&
-          cur.h === nextPanel.h &&
+          nearlyEqual(cur.x, nextPanel.x) &&
+          nearlyEqual(cur.y, nextPanel.y) &&
+          nearlyEqual(cur.w, nextPanel.w) &&
+          nearlyEqual(cur.h, nextPanel.h) &&
           cur.z === nextPanel.z &&
           cur.minimized === nextPanel.minimized &&
           (cur.docked ?? false) === (nextPanel.docked ?? false) &&
           (cur.dockSide ?? 'left') === (nextPanel.dockSide ?? 'left')
         if (unchanged) return prev
         const merged = { ...prev, [id]: nextPanel }
-        const next = normalizeNoOverlapLayout(merged)
+        const next = normalizeNoOverlapLayout(merged, panelGapPx(prefs))
         persist(next, prefs)
         return next
       })
@@ -524,7 +545,7 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
     (id: string, x: number, y: number, width: number, height: number) => {
       x = snap(x)
       y = snap(y)
-      const pad = 14
+      const pad = panelGapPx(prefs)
       const selfH = Math.max(46, height || 200)
       const { vw, vh } = cockpitViewport()
 
@@ -575,8 +596,9 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
             const pushUp = a.t + selfH / 2 < b.t + oh / 2
             y = pushUp ? b.t - selfH - pad : b.b + pad
           }
-          x = snap(Math.max(0, Math.min(x, vw - width)))
-          y = snap(Math.max(36, Math.min(y, vh - selfH)))
+          // Preserve exact non-overlap after collision push.
+          x = Math.max(0, Math.min(x, vw - width))
+          y = Math.max(36, Math.min(y, vh - selfH))
           a.l = x
           a.t = y
           a.r = x + width
@@ -590,7 +612,7 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
   )
 
   const resetLayout = useCallback(() => {
-    const fresh = normalizeNoOverlapLayout(DEFAULT_PANELS())
+    const fresh = normalizeNoOverlapLayout(DEFAULT_PANELS(), panelGapPx(prefs))
     setPanels(fresh)
     persist(fresh, prefs)
   }, [persist, prefs])
@@ -614,10 +636,13 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
       const o = JSON.parse(raw) as StoredState
       if (o?.panels) {
         setPanels(
-          normalizeNoOverlapLayout({
-            ...DEFAULT_PANELS(),
-            ...o.panels,
-          }),
+          normalizeNoOverlapLayout(
+            {
+              ...DEFAULT_PANELS(),
+              ...o.panels,
+            },
+            panelGapPx(o.prefs ?? prefs),
+          ),
         )
       }
       if (o?.prefs) setPrefs({ ...PREFS_DEFAULT, ...o.prefs })
@@ -697,10 +722,13 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
           const o = JSON.parse(String(reader.result)) as Partial<StoredState>
           if (!o.panels && !o.prefs) return
           setPanels((prev) => {
-            const np = normalizeNoOverlapLayout({
-              ...DEFAULT_PANELS(),
-              ...(o.panels ?? prev),
-            })
+            const np = normalizeNoOverlapLayout(
+              {
+                ...DEFAULT_PANELS(),
+                ...(o.panels ?? prev),
+              },
+              panelGapPx(o.prefs ?? prefs),
+            )
             setPrefs((pr) => {
               const npr = { ...PREFS_DEFAULT, ...pr, ...o.prefs } as CockpitPrefs
               saveState(np, npr)

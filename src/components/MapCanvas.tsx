@@ -59,11 +59,12 @@ export default function MapCanvas() {
 
     let cancelled = false
     let hardResetting = false
-    let renderedOnce = false
+    let readyOnce = false
+    let fallbackLocked = false
     let map: maplibregl.Map | null = null
 
     // Render blank maps are usually tied to WebGL/context or sizing churn.
-    // Strategy: show a static OSM image until we get a real `render` from MapLibre.
+    // Strategy: show static OSM until MapLibre reaches `idle` with tiles drawn.
     setStaticFallbackVisible(true)
     setStatus('initial')
 
@@ -126,7 +127,7 @@ export default function MapCanvas() {
       }
 
       container.replaceChildren()
-      renderedOnce = false
+      readyOnce = false
       setStaticFallbackVisible(true)
       setStatus('initial')
 
@@ -146,9 +147,11 @@ export default function MapCanvas() {
       skipLayerSyncRef.current = true
 
       let renderTimer: number | null = window.setTimeout(() => {
-        // If we never got a render, keep the static fallback visible and
+        // If we never got an idle frame, keep the static fallback visible and
         // try OSM raster fallback to improve chances of recovery.
+        fallbackLocked = true
         setStaticFallbackVisible(true)
+        setStatus('fallback')
         try {
           map?.setStyle(FALLBACK_MAP_STYLE)
         } catch {
@@ -163,9 +166,10 @@ export default function MapCanvas() {
         }
       }
 
-      const onRender = () => {
-        if (cancelled || !map || renderedOnce) return
-        renderedOnce = true
+      const onIdle = () => {
+        if (cancelled || !map || readyOnce) return
+        readyOnce = true
+        fallbackLocked = false
         clearRenderTimer()
         setStaticFallbackVisible(false)
         setStatus('ready')
@@ -175,16 +179,23 @@ export default function MapCanvas() {
         } catch {
           /* ignore */
         }
-        // Only need the first render.
+        // Only need the first successful idle.
         try {
-          map.off('render', onRender)
+          map.off('idle', onIdle)
         } catch {
           /* ignore */
         }
       }
 
       const onError = (e: unknown) => {
-        console.warn('[MapCanvas] tile/style error — falling back to OSM', e)
+        // Avoid visible flicker from transient tile/style events after map is already usable.
+        // Only force fallback when startup has not reached a ready map yet.
+        if (readyOnce || fallbackLocked) {
+          console.warn('[MapCanvas] non-fatal map error', e)
+          return
+        }
+        console.warn('[MapCanvas] startup map error — falling back to OSM', e)
+        fallbackLocked = true
         setStaticFallbackVisible(true)
         setStatus('fallback')
         try {
@@ -204,7 +215,7 @@ export default function MapCanvas() {
 
       map.once('load', onLoad)
       map.on('error', onError)
-      map.on('render', onRender)
+      map.on('idle', onIdle)
 
       // Some browsers (notably mobile) can hard-break WebGL; force recovery.
       ;(map as any).on?.('webglcontextlost', () => {
@@ -300,16 +311,44 @@ export default function MapCanvas() {
     }
 
     const style = MAP_STYLES[activeLayer] ?? FALLBACK_MAP_STYLE
+    let cancelled = false
+    let styleFallbackTimer: number | null = null
 
     try {
+      // Do not flash fallback immediately on style switches.
+      // Only show fallback if style change stalls.
+      setStatus('initial')
+      styleFallbackTimer = window.setTimeout(() => {
+        if (cancelled) return
+        setStaticFallbackVisible(true)
+      }, 1400)
       map.setStyle(style)
       map.once('load', () => {
+        if (cancelled) return
         map.resize()
+      })
+      map.once('idle', () => {
+        if (cancelled) return
+        if (styleFallbackTimer != null) {
+          window.clearTimeout(styleFallbackTimer)
+          styleFallbackTimer = null
+        }
+        setStaticFallbackVisible(false)
+        setStatus('ready')
       })
     } catch (e) {
       console.warn('[MapCanvas] setStyle failed', e)
+      setStaticFallbackVisible(true)
+      setStatus('fallback')
     }
-  }, [activeLayer])
+
+    return () => {
+      cancelled = true
+      if (styleFallbackTimer != null) {
+        window.clearTimeout(styleFallbackTimer)
+      }
+    }
+  }, [activeLayer, setStatus])
 
   return (
     <div
@@ -326,29 +365,48 @@ export default function MapCanvas() {
       }}
     >
       <div
+        aria-hidden
+        style={{
+          position: 'absolute',
+          inset: 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          opacity: staticFallbackVisible ? 1 : 0,
+          visibility: staticFallbackVisible ? 'visible' : 'hidden',
+          transition: 'opacity 220ms ease, visibility 220ms ease',
+          background:
+            'radial-gradient(circle at 50% 45%, rgba(28,42,52,0.9), rgba(8,14,18,0.96) 62%, rgba(5,9,12,0.98) 100%)',
+          pointerEvents: 'none',
+          zIndex: 2,
+          color: '#b9d4dd',
+          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+          letterSpacing: '0.08em',
+          textTransform: 'uppercase',
+          fontSize: 11,
+          textShadow: '0 0 10px rgba(0,0,0,0.55)',
+        }}
+      >
+        <div
+          style={{
+            padding: '10px 14px',
+            borderRadius: 10,
+            border: '1px solid rgba(148,193,207,0.35)',
+            background: 'rgba(8,14,18,0.54)',
+            backdropFilter: 'blur(2px)',
+          }}
+        >
+          Map fallback active
+        </div>
+      </div>
+      <div
         ref={containerRef}
         style={{
           position: 'absolute',
           inset: 0,
           width: '100%',
           height: '100%',
-        }}
-      />
-      <img
-        alt="OpenStreetMap fallback"
-        src="https://staticmap.openstreetmap.de/staticmap.php?center=39.5501,-105.7821&zoom=10&size=1024x640&markers=39.5501,-105.7821,red-pushpin"
-        loading="lazy"
-        referrerPolicy="no-referrer-when-downgrade"
-        style={{
-          position: 'absolute',
-          inset: 0,
-          width: '100%',
-          height: '100%',
-          objectFit: 'cover',
-          display: staticFallbackVisible ? 'block' : 'none',
-          border: 0,
-          background: '#0b0b10',
-          pointerEvents: 'none',
+          zIndex: 1,
         }}
       />
     </div>

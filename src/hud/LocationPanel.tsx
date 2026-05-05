@@ -46,6 +46,18 @@ export default function LocationPanel() {
   }
 
   const hasFix = gps.lat != null && gps.lng != null
+  const gpsStatusText =
+    gps.status === 'locked'
+      ? 'GPS LOCKED'
+      : gps.status === 'searching'
+        ? 'GPS SEARCHING'
+        : gps.status === 'denied'
+          ? 'GPS DENIED'
+          : gps.status === 'unsupported'
+            ? 'GPS UNSUPPORTED'
+            : gps.status === 'error'
+              ? 'GPS ERROR'
+              : 'GPS IDLE'
 
   return (
     <HudPanel
@@ -73,11 +85,14 @@ export default function LocationPanel() {
               <div>LAT {gps.lat!.toFixed(6)}</div>
               <div>LNG {gps.lng!.toFixed(6)}</div>
               <div style={{ fontSize: 10, color: 'var(--cockpit-panel-subtle)' }}>
-                ACC {gps.accuracy != null ? `${Math.round(gps.accuracy)} m` : '—'}
+                {gpsStatusText} · ACC {gps.accuracy != null ? `${Math.round(gps.accuracy)} m` : '—'}
               </div>
             </>
           ) : (
-            <div style={{ color: 'var(--cockpit-panel-subtle)' }}>Awaiting GPS fix...</div>
+            <div style={{ color: 'var(--cockpit-panel-subtle)' }}>
+              {gpsStatusText}
+              {gps.error ? ` · ${gps.error}` : ' · Awaiting GPS fix...'}
+            </div>
           )}
         </div>
 
