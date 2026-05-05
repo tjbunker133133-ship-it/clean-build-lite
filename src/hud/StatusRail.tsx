@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useGPS } from '../hooks/useGPS'
 import { useAppContext } from '../context/AppContext'
+import { requestGeolocationPermission } from '../lib/devicePermissions'
 import {
   HALF_CORRIDOR_FEET,
   corridorSeverity,
@@ -20,6 +21,7 @@ export default function StatusRail() {
   const [weatherAgeMin, setWeatherAgeMin] = useState<number | null>(null)
   const [showCorridorBanner, setShowCorridorBanner] = useState(false)
   const [corridorArmed, setCorridorArmed] = useState(false)
+  const [requestingGeo, setRequestingGeo] = useState(false)
   const routeChangeAtRef = useRef<number>(Date.now())
   const lastRouteSigRef = useRef<string>('')
 
@@ -58,8 +60,20 @@ export default function StatusRail() {
     return () => clearInterval(id)
   }, [])
 
-  const gpsText = useMemo(() => (gps.lat != null && gps.lng != null ? 'GPS LOCK' : 'GPS SEARCH'), [gps.lat, gps.lng])
-  const battPct = battery ? `${Math.round(battery.level * 100)}%` : '--'
+  const gpsText = useMemo(() => {
+    if (gps.lat != null && gps.lng != null) return 'GPS LOCK'
+    if (gps.status === 'denied') return 'GPS DENIED'
+    if (gps.status === 'unsupported') return 'GPS UNSUPPORTED'
+    if (gps.status === 'error') return 'GPS ERR'
+    return 'GPS SEARCH'
+  }, [gps.lat, gps.lng, gps.status])
+  const battPct = useMemo(() => {
+    if (battery) return `${Math.round(battery.level * 100)}%`
+    const isiOS =
+      typeof navigator !== 'undefined' &&
+      /iPhone|iPad|iPod/i.test(navigator.userAgent || '')
+    return isiOS ? 'N/A' : '--'
+  }, [battery])
   const wxAge = weatherAgeMin == null ? '--' : `${weatherAgeMin}m`
   const runtimeGuards = typeof window !== 'undefined' && !!(window as any).__hudRuntimeGuards
   const buildStampRaw =
@@ -106,6 +120,16 @@ export default function StatusRail() {
       setCorridorArmed(true)
     }
   }, [corridor, corridorArmed])
+
+  const promptLocation = async () => {
+    if (requestingGeo) return
+    setRequestingGeo(true)
+    try {
+      await requestGeolocationPermission()
+    } finally {
+      setRequestingGeo(false)
+    }
+  }
 
   useEffect(() => {
     if (!corridor) {
@@ -180,6 +204,27 @@ export default function StatusRail() {
           color: '#b8c1b9',
         }}
       >
+        {gps.status !== 'locked' && (
+          <button
+            type="button"
+            onClick={() => void promptLocation()}
+            disabled={requestingGeo}
+            style={{
+              pointerEvents: 'auto',
+              minHeight: 26,
+              borderRadius: 999,
+              border: '1px solid rgba(125,255,138,0.45)',
+              background: 'rgba(125,255,138,0.16)',
+              color: '#d8f6de',
+              padding: '0 10px',
+              fontSize: 10,
+              letterSpacing: '0.08em',
+              cursor: requestingGeo ? 'wait' : 'pointer',
+            }}
+          >
+            {requestingGeo ? 'PROMPTING GPS…' : 'PROMPT GPS'}
+          </button>
+        )}
         <span>{gpsText}</span>
         <span>BAT {battPct}</span>
         <span>NET {online ? 'ON' : 'OFF'}</span>
