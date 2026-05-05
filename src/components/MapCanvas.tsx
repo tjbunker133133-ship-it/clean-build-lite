@@ -19,7 +19,7 @@ export default function MapCanvas() {
   const roRef = useRef<ResizeObserver | null>(null)
   const skipLayerSyncRef = useRef(true)
   const [staticFallbackVisible, setStaticFallbackVisible] = useState(true)
-  const { setMap } = useMapContext()
+  const { setMap, setStatus } = useMapContext()
   const {
     state,
     addWaypoint,
@@ -65,6 +65,7 @@ export default function MapCanvas() {
     // Render blank maps are usually tied to WebGL/context or sizing churn.
     // Strategy: show a static OSM image until we get a real `render` from MapLibre.
     setStaticFallbackVisible(true)
+    setStatus('initial')
 
     const STATIC_CENTER = { lng: -105.7821, lat: 39.5501 }
 
@@ -98,6 +99,7 @@ export default function MapCanvas() {
       }
       mapRef.current = null
       setMap(null)
+      setStatus('fallback')
 
       // Re-init on next frame to avoid re-entrancy issues.
       requestAnimationFrame(() => {
@@ -110,9 +112,23 @@ export default function MapCanvas() {
     const initMap = () => {
       if (cancelled) return
 
+      // Some devices/browsers do not support MapLibre/WebGL reliably. In that case we
+      // keep the static fallback visible and mark status so HUD can show MAP FALLBACK.
+      const isSupported =
+        typeof (maplibregl as any).supported === 'function'
+          ? (maplibregl as any).supported()
+          : true
+      if (!isSupported) {
+        console.warn('[MapCanvas] MapLibre not supported on this device — using static map only')
+        setStaticFallbackVisible(true)
+        setStatus('unsupported')
+        return
+      }
+
       container.replaceChildren()
       renderedOnce = false
       setStaticFallbackVisible(true)
+      setStatus('initial')
 
       const initialStyle =
         MAP_STYLES[activeLayerRef.current] ?? FALLBACK_MAP_STYLE
@@ -152,6 +168,7 @@ export default function MapCanvas() {
         renderedOnce = true
         clearRenderTimer()
         setStaticFallbackVisible(false)
+        setStatus('ready')
         try {
           // Ensure canvas dimensions are correct after first actual draw.
           requestAnimationFrame(resize)
@@ -169,6 +186,7 @@ export default function MapCanvas() {
       const onError = (e: unknown) => {
         console.warn('[MapCanvas] tile/style error — falling back to OSM', e)
         setStaticFallbackVisible(true)
+        setStatus('fallback')
         try {
           map?.setStyle(FALLBACK_MAP_STYLE)
         } catch {
@@ -191,6 +209,7 @@ export default function MapCanvas() {
       // Some browsers (notably mobile) can hard-break WebGL; force recovery.
       ;(map as any).on?.('webglcontextlost', () => {
         setStaticFallbackVisible(true)
+        setStatus('fallback')
         hardReset()
       })
 
@@ -259,6 +278,7 @@ export default function MapCanvas() {
       } catch {
         /* ignore */
       }
+      setStatus('initial')
       mapRef.current = null
       try {
         map?.remove()

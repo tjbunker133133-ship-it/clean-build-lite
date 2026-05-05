@@ -7,12 +7,14 @@ import {
   corridorZoneLabel,
   distancePointToRouteFeet,
 } from '../lib/corridor'
+import { useMapContext } from '../context/MapContext'
 
 type BatteryManagerLike = { level: number } | null
 
 export default function StatusRail() {
   const gps = useGPS()
   const { state } = useAppContext()
+  const { status: mapStatus } = useMapContext()
   const [battery, setBattery] = useState<BatteryManagerLike>(null)
   const [online, setOnline] = useState(navigator.onLine)
   const [weatherAgeMin, setWeatherAgeMin] = useState<number | null>(null)
@@ -67,6 +69,14 @@ export default function StatusRail() {
   const buildStamp = buildStampRaw
     ? buildStampRaw.replace('T', ' ').slice(0, 16)
     : 'unknown'
+  const mapText =
+    mapStatus === 'ready'
+      ? 'MAP OK'
+      : mapStatus === 'unsupported'
+        ? 'MAP UNSUPPORTED · STATIC ONLY'
+        : mapStatus === 'fallback'
+          ? 'MAP FALLBACK'
+          : 'MAP BOOT'
   const corridor = useMemo(() => {
     if (gps.lat == null || gps.lng == null || state.waypoints.length < 2) return null
     const route = state.waypoints.map((w) => ({ lat: w.lat, lng: w.lng }))
@@ -176,6 +186,7 @@ export default function StatusRail() {
         <span>WX {wxAge}</span>
         <span>SYS {runtimeGuards ? 'GUARDS ON' : 'GUARDS OFF'}</span>
         <span>BUILD {buildStamp}</span>
+        <span>{mapText}</span>
         <span>
           CORRIDOR {corridor
             ? corridorArmed
