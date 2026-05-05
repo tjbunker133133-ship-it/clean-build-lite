@@ -22,9 +22,25 @@ const DOCK_PEEK_STRIP_PX = 74
 const DOCK_UNDOCK_SWIPE_PX = 18
 const EDGE_DOCK_ZONE_PX = 22
 const DOCKED_PANEL_STACK_PX = 8
-const DOCKED_PANEL_HEIGHT_PX = 92
+const DOCKED_PANEL_MIN_HEIGHT_PX = 64
+const DOCKED_PANEL_MAX_HEIGHT_PX = 92
 const PANEL_SNAP_THRESHOLD_PX = 10
 const DOCK_RELOCK_GUARD_PX = 42
+
+function computeDockMetrics(vh: number, count: number) {
+  const minY = 36
+  const safeCount = Math.max(1, count)
+  const available = Math.max(140, vh - minY - 4)
+  const stackTotal = Math.max(0, safeCount - 1) * DOCKED_PANEL_STACK_PX
+  const perPanel = Math.floor((available - stackTotal) / safeCount)
+  const height = Math.max(
+    DOCKED_PANEL_MIN_HEIGHT_PX,
+    Math.min(DOCKED_PANEL_MAX_HEIGHT_PX, perPanel),
+  )
+  const step = height + DOCKED_PANEL_STACK_PX
+  const maxY = Math.max(minY, vh - height - 4)
+  return { minY, maxY, step, height }
+}
 
 function dockBadge(panelId: string, title: string): { icon: string; abbr: string } {
   const id = panelId.toLowerCase()
@@ -209,11 +225,7 @@ export default function CockpitHudPanel({
 
   const getDockedY = useCallback(
     (side: 'left' | 'right', desiredY: number) => {
-      const minY = 36
       const { vh } = viewportSize()
-      const maxY = vh - DOCKED_PANEL_HEIGHT_PX - 4
-      const step = DOCKED_PANEL_HEIGHT_PX + DOCKED_PANEL_STACK_PX
-      const slotCount = Math.max(1, Math.floor((maxY - minY) / step) + 1)
 
       // Magnetic lane stacking: assign each docked panel to a unique slot.
       // This keeps the dock rail clean and prevents overlap even after reloads.
@@ -226,6 +238,8 @@ export default function CockpitHudPanel({
       }
 
       lane.sort((a, b) => (a.y === b.y ? a.id.localeCompare(b.id) : a.y - b.y))
+      const { minY, maxY, step } = computeDockMetrics(vh, lane.length)
+      const slotCount = Math.max(1, Math.floor((maxY - minY) / step) + 1)
 
       const usedSlots = new Set<number>()
       let selfSlot = 0
@@ -660,7 +674,15 @@ export default function CockpitHudPanel({
         ? '#d66179'
         : '#9ea7a0'
   const dockReveal = glow ? DOCK_PEEK_STRIP_PX : DOCK_VISIBLE_STRIP_PX
-  const dockedHeight = DOCKED_PANEL_HEIGHT_PX
+  const sideDockCount = Math.max(
+    1,
+    Object.entries(panels).filter(
+      ([id, panel]) =>
+        (id === panelId ? docked : panel?.docked) &&
+        (id === panelId ? dockSide : (panel?.dockSide ?? 'left')) === dockSide,
+    ).length,
+  )
+  const dockedHeight = computeDockMetrics(viewportSize().vh, sideDockCount).height
 
   const onDockPointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
     if (!docked) return

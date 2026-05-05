@@ -47,7 +47,8 @@ interface StoredState {
 type DevicePreset = 'iphone' | 'android' | 'tablet' | 'desktop'
 const DOCK_EDGE_INSET_PX = 8
 const DOCKED_PANEL_STACK_PX = 8
-const DOCKED_PANEL_HEIGHT_PX = 92
+const DOCKED_PANEL_MIN_HEIGHT_PX = 64
+const DOCKED_PANEL_MAX_HEIGHT_PX = 92
 
 function snap(n: number): number {
   return Math.round(n / SNAP_PX) * SNAP_PX
@@ -180,6 +181,21 @@ function panelHeightGuess(pid: string, p: CockpitPanelRect): number {
   return Math.max(44, p.h ?? (p.minimized ? 44 : (defaults[pid] ?? 220)))
 }
 
+function computeDockMetrics(vh: number, count: number) {
+  const minY = 36
+  const safeCount = Math.max(1, count)
+  const available = Math.max(140, vh - minY - 4)
+  const stackTotal = Math.max(0, safeCount - 1) * DOCKED_PANEL_STACK_PX
+  const perPanel = Math.floor((available - stackTotal) / safeCount)
+  const height = Math.max(
+    DOCKED_PANEL_MIN_HEIGHT_PX,
+    Math.min(DOCKED_PANEL_MAX_HEIGHT_PX, perPanel),
+  )
+  const step = height + DOCKED_PANEL_STACK_PX
+  const maxY = Math.max(minY, vh - height - 4)
+  return { minY, maxY, step }
+}
+
 function normalizeNoOverlapLayout(panels: PanelMap): PanelMap {
   const next: PanelMap = Object.fromEntries(
     Object.entries(panels).map(([id, p]) => [id, { ...p }]),
@@ -194,8 +210,7 @@ function normalizeNoOverlapLayout(panels: PanelMap): PanelMap {
     const lane = dockedIds
       .filter((id) => (next[id].dockSide ?? 'left') === side)
       .sort((a, b) => (next[a].y === next[b].y ? a.localeCompare(b) : next[a].y - next[b].y))
-    const step = DOCKED_PANEL_HEIGHT_PX + DOCKED_PANEL_STACK_PX
-    const maxY = vh - DOCKED_PANEL_HEIGHT_PX - 4
+    const { minY, maxY, step } = computeDockMetrics(vh, lane.length)
     const slotCount = Math.max(1, Math.floor((maxY - minY) / step) + 1)
     lane.forEach((id, idx) => {
       const slot = Math.min(slotCount - 1, idx)
