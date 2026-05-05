@@ -4048,32 +4048,46 @@ window.addEventListener('keydown',function(e){
   if(e.key==='Delete'||e.key==='Backspace'){if(document.activeElement.tagName!=='INPUT')deleteSelected();}
 });
 
-loadMissionClock();
-loadPrefs();
-void loadAuthSession();
-loadRoute();
-renderEmergencyContactsUI();
-loadLayout();
-ensureMapPanelVisible();
-initVoiceDirectoryPanel();
-window.hudVoiceSystem=new HUDVoiceSystem();
-window.hudVoiceSystem.init();
-syncVoicePillIdle();
-setupPanels();
-initTacticalSuite();
-if(document.getElementById('mapboxToken').value.trim().indexOf('pk.')!==0&&HARDCODED_MAPBOX_TOKEN){
-  document.getElementById('mapboxToken').value=HARDCODED_MAPBOX_TOKEN;
+function safeBootStep(label,fn){
+  try{
+    fn();
+  }catch(err){
+    console.error('[BOOT]',label,err);
+  }
 }
-initMap(false);
 
-refreshPreflight();
+safeBootStep('token bootstrap',function(){
+  if(document.getElementById('mapboxToken').value.trim().indexOf('pk.')!==0&&HARDCODED_MAPBOX_TOKEN){
+    document.getElementById('mapboxToken').value=HARDCODED_MAPBOX_TOKEN;
+  }
+});
+
+// Map must initialize early so unrelated module failures do not block it.
+safeBootStep('early map init',function(){ initMap(false); });
+
+safeBootStep('mission clock',loadMissionClock);
+safeBootStep('prefs load',loadPrefs);
+safeBootStep('auth session',function(){ void loadAuthSession(); });
+safeBootStep('route load',loadRoute);
+safeBootStep('contacts ui',renderEmergencyContactsUI);
+safeBootStep('layout load',loadLayout);
+safeBootStep('map panel visibility',ensureMapPanelVisible);
+safeBootStep('voice directory panel',initVoiceDirectoryPanel);
+safeBootStep('voice system init',function(){
+  window.hudVoiceSystem=new HUDVoiceSystem();
+  window.hudVoiceSystem.init();
+  syncVoicePillIdle();
+});
+safeBootStep('panel setup',setupPanels);
+safeBootStep('tactical suite',initTacticalSuite);
+safeBootStep('preflight',refreshPreflight);
 window.addEventListener('orientationchange',function(){refreshPreflight();});
 
-schedulePoll();
-fetchGPS();
+safeBootStep('schedule gps poll',schedulePoll);
+safeBootStep('initial gps fetch',fetchGPS);
 setInterval(saveRouteNow,30000);
 setInterval(function(){sendHeartbeat();},HEARTBEAT_INTERVAL_MS);
-sendHeartbeat();
+safeBootStep('initial heartbeat',sendHeartbeat);
 window.addEventListener('online',function(){
   setTimeout(function(){sendHeartbeat();},1000);
 });
