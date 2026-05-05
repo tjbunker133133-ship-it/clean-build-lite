@@ -62,6 +62,9 @@ export default function MapCanvas() {
     let readyOnce = false
     let fallbackLocked = false
     let map: maplibregl.Map | null = null
+    let lastTouchAt = 0
+    let touchMoved = false
+    let touchStart: { x: number; y: number } | null = null
     const isAppleWebKit =
       typeof navigator !== 'undefined' &&
       /AppleWebKit/i.test(navigator.userAgent || '') &&
@@ -304,8 +307,28 @@ export default function MapCanvas() {
         if (clearLabelAfterDropRef.current && manualLabel) setNextWaypointLabel('')
       }
 
-      map.on('click', placeWaypoint as any)
-      map.on('touchend', placeWaypoint as any)
+      map.on('click', (e: any) => {
+        // iOS emits synthetic click shortly after touchend; suppress duplicate drops.
+        if (Date.now() - lastTouchAt < 550) return
+        placeWaypoint(e)
+      })
+      map.on('touchstart', (e: any) => {
+        const p = e?.points?.[0]
+        touchStart = p ? { x: p.x, y: p.y } : null
+        touchMoved = false
+      })
+      map.on('touchmove', (e: any) => {
+        const p = e?.points?.[0]
+        if (!p || !touchStart) return
+        if (Math.hypot(p.x - touchStart.x, p.y - touchStart.y) > 10) {
+          touchMoved = true
+        }
+      })
+      map.on('touchend', (e: any) => {
+        lastTouchAt = Date.now()
+        if (touchMoved) return
+        placeWaypoint(e)
+      })
     }
 
     roRef.current = new ResizeObserver(() => {

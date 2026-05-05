@@ -26,13 +26,15 @@ const DOCKED_PANEL_STACK_PX = 8
 const DOCKED_PANEL_MIN_HEIGHT_PX = 76
 const DOCKED_PANEL_MAX_HEIGHT_PX = 92
 const DOCKED_PANEL_WIDTH_PX = 280
+const DOCK_TOP_OFFSET_PX = 48
+const DOCK_BOTTOM_GUTTER_PX = 12
 const PANEL_SNAP_THRESHOLD_PX = 10
 const DOCK_RELOCK_GUARD_PX = 42
 
 function computeDockMetrics(vh: number, count: number) {
-  const minY = 36
+  const minY = DOCK_TOP_OFFSET_PX
   const safeCount = Math.max(1, count)
-  const available = Math.max(140, vh - minY - 4)
+  const available = Math.max(140, vh - minY - DOCK_BOTTOM_GUTTER_PX)
   const stackTotal = Math.max(0, safeCount - 1) * DOCKED_PANEL_STACK_PX
   const perPanel = Math.floor((available - stackTotal) / safeCount)
   const height = Math.max(
@@ -40,7 +42,7 @@ function computeDockMetrics(vh: number, count: number) {
     Math.min(DOCKED_PANEL_MAX_HEIGHT_PX, perPanel),
   )
   const step = height + DOCKED_PANEL_STACK_PX
-  const maxY = Math.max(minY, vh - height - 4)
+  const maxY = Math.max(minY, vh - height - DOCK_BOTTOM_GUTTER_PX)
   return { minY, maxY, step, height }
 }
 
@@ -124,6 +126,8 @@ export default function CockpitHudPanel({
   const dockGesture = useRef({ active: false, x: 0, y: 0, moved: false })
   const dragStartScreen = useRef({ x: 0, y: 0 })
   const undockedAt = useRef<{ x: number; y: number } | null>(null)
+  const rafMoveRef = useRef<number | null>(null)
+  const pendingPointerRef = useRef<PointerEvent | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const posRef = useRef(pos)
   const sizeRef = useRef(size)
@@ -131,9 +135,13 @@ export default function CockpitHudPanel({
   const pendingSizeRaf = useRef<number | null>(null)
   const lastSizePatchRef = useRef<{ w: number; h: number } | null>(null)
   const lastClampPatchRef = useRef<{ x: number; y: number; docked: boolean; dockSide?: 'left' | 'right' } | null>(null)
+  const dockPreviewRef = useRef<'left' | 'right' | null>(null)
+  const snapGuideRef = useRef<{ x: number | null; y: number | null }>({ x: null, y: null })
 
   posRef.current = pos
   sizeRef.current = size
+  dockPreviewRef.current = dockPreview
+  snapGuideRef.current = snapGuide
 
   const wantsReducedMotion =
     typeof window !== 'undefined' &&
@@ -433,7 +441,21 @@ export default function CockpitHudPanel({
     if (dragMode === 'none') return
     setMapInteractionBlocked(true)
 
-    const onMove = (e: PointerEvent) => {
+    const setDockPreviewIfChanged = (nextDockPreview: 'left' | 'right' | null) => {
+      if (dockPreviewRef.current === nextDockPreview) return
+      dockPreviewRef.current = nextDockPreview
+      setDockPreview(nextDockPreview)
+    }
+
+    const setSnapGuideIfChanged = (nextGuide: { x: number | null; y: number | null }) => {
+      const prev = snapGuideRef.current
+      if (prev.x === nextGuide.x && prev.y === nextGuide.y) return
+      snapGuideRef.current = nextGuide
+      setSnapGuide(nextGuide)
+    }
+
+    const processMove = (e: PointerEvent) => {
+      if (isCoarsePointer && e.cancelable) e.preventDefault()
       const mode = dragMode
       if (mode === 'move' || mode === 'pending') {
         if (mode === 'pending') {
@@ -462,7 +484,7 @@ export default function CockpitHudPanel({
         let nextDockPreview: 'left' | 'right' | null = null
         if (nx <= edgeDockZone) nextDockPreview = 'left'
         else if (nx + pw >= vw - edgeDockZone) nextDockPreview = 'right'
-        setDockPreview(nextDockPreview)
+        setDockPreviewIfChanged(nextDockPreview)
 
         let guideX: number | null = null
         let guideY: number | null = null
@@ -498,7 +520,7 @@ export default function CockpitHudPanel({
         const runtimeResolved = avoidRuntimeOverlap(nx, ny, pw, ph)
         nx = runtimeResolved.x
         ny = runtimeResolved.y
-        setSnapGuide({ x: guideX, y: guideY })
+        setSnapGuideIfChanged({ x: guideX, y: guideY })
         if (Math.abs(posRef.current.x - nx) > 0.5 || Math.abs(posRef.current.y - ny) > 0.5) {
           const next = { x: nx, y: ny }
           posRef.current = next
@@ -538,18 +560,29 @@ export default function CockpitHudPanel({
       }
     }
 
+    const onMove = (e: PointerEvent) => {
+      pendingPointerRef.current = e
+      if (rafMoveRef.current != null) return
+      rafMoveRef.current = requestAnimationFrame(() => {
+        rafMoveRef.current = null
+        const latest = pendingPointerRef.current
+        if (!latest) return
+        processMove(latest)
+      })
+    }
+
     const onUp = () => {
       if (dragMode === 'pending') {
         setDragMode('none')
         setGlow(false)
-        setDockPreview(null)
-        setSnapGuide({ x: null, y: null })
+        setDockPreviewIfChanged(null)
+        setSnapGuideIfChanged({ x: null, y: null })
         setMapInteractionBlocked(false)
         return
       }
       setDragMode('none')
       setGlow(false)
-      setSnapGuide({ x: null, y: null })
+      setSnapGuideIfChanged({ x: null, y: null })
       commitPosition()
       setMapInteractionBlocked(false)
     }
@@ -557,17 +590,16 @@ export default function CockpitHudPanel({
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
     window.addEventListener('pointercancel', onUp)
-    document.addEventListener('pointermove', onMove)
-    document.addEventListener('pointerup', onUp)
-    document.addEventListener('pointercancel', onUp)
     return () => {
       setMapInteractionBlocked(false)
+      if (rafMoveRef.current != null) {
+        cancelAnimationFrame(rafMoveRef.current)
+        rafMoveRef.current = null
+      }
+      pendingPointerRef.current = null
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
       window.removeEventListener('pointercancel', onUp)
-      document.removeEventListener('pointermove', onMove)
-      document.removeEventListener('pointerup', onUp)
-      document.removeEventListener('pointercancel', onUp)
     }
   }, [
     commitPosition,
@@ -936,8 +968,8 @@ export default function CockpitHudPanel({
                   color: accent,
                   cursor: 'pointer',
                   borderRadius: 4,
-                  minHeight: 28,
-                  minWidth: 28,
+                  minHeight: isCoarsePointer ? 44 : 32,
+                  minWidth: isCoarsePointer ? 44 : 32,
                   lineHeight: 1,
                   fontSize: 12,
                   fontWeight: 700,
@@ -957,7 +989,15 @@ export default function CockpitHudPanel({
         )}
       </div>
       {!minimized && !docked && (
-        <div style={{ padding: 10, maxHeight: fullscreen ? '70vh' : undefined, overflow: 'auto' }}>
+        <div
+          style={{
+            padding: 10,
+            maxHeight: fullscreen ? '70vh' : undefined,
+            overflow: 'auto',
+            WebkitOverflowScrolling: 'touch',
+            overscrollBehavior: 'contain',
+          }}
+        >
           {children}
         </div>
       )}

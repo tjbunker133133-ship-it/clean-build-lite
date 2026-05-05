@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import HudPanel from './HudPanel'
 import { useGPS } from '../hooks/useGPS'
 import {
@@ -308,6 +308,18 @@ export default function PreflightPanel() {
     }
   }
 
+  const permissionButtonStyle: CSSProperties = {
+    minHeight: 38,
+    borderRadius: 8,
+    border: '1px solid rgba(199,206,198,0.35)',
+    background: 'rgba(199,206,198,0.12)',
+    color: '#e2e8e2',
+    cursor: 'pointer',
+    fontSize: 10,
+    letterSpacing: '0.06em',
+    fontWeight: 700,
+  }
+
   return (
     <HudPanel panelId="preflight" title="Preflight Test" initialPos={{ x: 16, y: 180 }} initialWidth={320}>
       <div style={{ display: 'grid', gap: 8, fontSize: 11 }}>
@@ -379,6 +391,62 @@ export default function PreflightPanel() {
         >
           {requestingPerms ? 'REQUESTING PERMISSIONS…' : 'REQUEST ALL DEVICE PERMISSIONS'}
         </button>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+          <button
+            type="button"
+            data-no-drag
+            style={permissionButtonStyle}
+            onClick={async () => {
+              const s = await requestGeolocationPermission()
+              setGeoPerm(s === 'unsupported' ? 'unknown' : s)
+            }}
+          >
+            PROMPT LOCATION
+          </button>
+          <button
+            type="button"
+            data-no-drag
+            style={permissionButtonStyle}
+            onClick={async () => {
+              const s = await requestMicrophonePermission()
+              setMicPerm(s === 'unsupported' ? 'unknown' : s)
+            }}
+          >
+            PROMPT MIC
+          </button>
+          <button
+            type="button"
+            data-no-drag
+            style={permissionButtonStyle}
+            onClick={async () => setCameraPerm(await requestCameraPermission())}
+          >
+            PROMPT CAMERA
+          </button>
+          <button
+            type="button"
+            data-no-drag
+            style={permissionButtonStyle}
+            onClick={async () => setNotifPerm(await requestNotificationPermission())}
+          >
+            PROMPT NOTIFY
+          </button>
+          <button
+            type="button"
+            data-no-drag
+            style={permissionButtonStyle}
+            onClick={async () => setOrientationPerm(await requestOrientationPermission())}
+          >
+            PROMPT ORIENT
+          </button>
+          <button
+            type="button"
+            data-no-drag
+            style={permissionButtonStyle}
+            onClick={async () => setMotionPerm(await requestMotionPermission())}
+          >
+            PROMPT MOTION
+          </button>
+        </div>
         {lastRecheckAt != null && (
           <div style={{ fontSize: 10, color: '#9ea7a0' }}>
             Last recheck: {new Date(lastRecheckAt).toLocaleTimeString()}

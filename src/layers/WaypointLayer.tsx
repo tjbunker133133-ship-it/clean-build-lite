@@ -65,8 +65,16 @@ export default function WaypointLayer() {
       waypoints.forEach((wp) => {
         if (!wp) return
 
+        const hit = document.createElement('div')
         const el = document.createElement('div')
         const v = markerVisual(wp.type)
+        hit.style.width = '44px'
+        hit.style.height = '44px'
+        hit.style.display = 'flex'
+        hit.style.alignItems = 'center'
+        hit.style.justifyContent = 'center'
+        hit.style.touchAction = 'manipulation'
+        hit.style.cursor = 'pointer'
         el.style.width = lowPowerMode ? '22px' : '26px'
         el.style.height = lowPowerMode ? '22px' : '26px'
         el.style.borderRadius = '999px'
@@ -82,6 +90,7 @@ export default function WaypointLayer() {
         el.style.fontSize = lowPowerMode ? '11px' : '13px'
         el.style.userSelect = 'none'
         el.textContent = v.symbol
+        hit.appendChild(el)
 
         if (overlaysReady && showMapLabels) {
           const label = document.createElement('div')
@@ -99,10 +108,10 @@ export default function WaypointLayer() {
           label.style.boxShadow = lowPowerMode ? 'none' : '0 1px 4px rgba(0,0,0,0.45)'
           label.style.whiteSpace = 'nowrap'
           label.innerText = wp.label ?? ''
-          el.appendChild(label)
+          hit.appendChild(label)
         }
 
-        const marker = new maplibregl.Marker({ element: el }).setLngLat([wp.lng, wp.lat]).addTo(map)
+        const marker = new maplibregl.Marker({ element: hit }).setLngLat([wp.lng, wp.lat]).addTo(map)
         markersRef.current[wp.id] = marker
       })
 

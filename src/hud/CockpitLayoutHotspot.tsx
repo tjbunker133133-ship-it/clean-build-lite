@@ -6,13 +6,24 @@ import { useCockpit } from '../context/CockpitContext'
  */
 export default function CockpitLayoutHotspot() {
   const { resetLayout } = useCockpit()
+  const coarse =
+    typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
+  const runReset = () => {
+    if (!coarse || window.confirm('Reset panel layout?')) {
+      resetLayout()
+    }
+  }
 
   return (
     <button
       type="button"
       title="Double-click to reset panel layout (also Ctrl+Shift+0)"
       aria-label="Reset cockpit layout"
-      onDoubleClick={() => resetLayout()}
+      onDoubleClick={runReset}
+      onPointerUp={() => {
+        if (!coarse) return
+        runReset()
+      }}
       style={{
         position: 'fixed',
         left: 8,
