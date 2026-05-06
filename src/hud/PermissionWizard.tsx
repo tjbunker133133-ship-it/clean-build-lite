@@ -482,20 +482,14 @@ export default function PermissionWizard({
           <button
             type="button"
             onClick={onClose}
-            disabled={!allRequested}
             style={{
               ...btnBase,
-              borderColor: allRequested ? 'rgba(125,255,138,0.55)' : 'rgba(120,120,120,0.3)',
-              color: allRequested ? '#d8ffe0' : '#7a827a',
+              borderColor: 'rgba(125,255,138,0.55)',
+              color: '#d8ffe0',
             }}
           >
             ENTER HUD
           </button>
-          {!allRequested && (
-            <div style={{ fontSize: 10, color: '#ffd166' }}>
-              Complete or skip each step so every line shows GRANTED, DENIED, or N/A — then ENTER HUD unlocks.
-            </div>
-          )}
         </>
       )}
 
@@ -507,13 +501,12 @@ export default function PermissionWizard({
           <button
             type="button"
             onClick={goNext}
-            disabled={!canAdvanceFrom(stepId)}
             style={{
               ...btnBase,
               flex: 1,
               minHeight: 36,
-              borderColor: canAdvanceFrom(stepId) ? 'rgba(125,255,138,0.45)' : 'rgba(80,80,80,0.4)',
-              color: canAdvanceFrom(stepId) ? '#e4fcea' : '#6b736b',
+              borderColor: 'rgba(125,255,138,0.45)',
+              color: '#e4fcea',
             }}
           >
             NEXT

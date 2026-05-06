@@ -72,7 +72,6 @@ export default function PermissionPromptOverlay() {
   }, [])
 
   useEffect(() => {
-    const seen = localStorage.getItem(KEY) === '1'
     const wizardCompleted = localStorage.getItem(WIZARD_COMPLETED_KEY) === 'true'
     const persistedGpsGranted = localStorage.getItem(GPS_PERMISSION_KEY) === 'granted'
     void getPermissionSnapshot().then((s) => {
@@ -83,8 +82,8 @@ export default function PermissionPromptOverlay() {
         localStorage.setItem(GPS_PERMISSION_KEY, s.geolocation)
       }
       const gpsGranted = s.geolocation === 'granted' || persistedGpsGranted
-      const shouldShowWizard = !wizardCompleted || !gpsGranted
-      if (!seen && shouldShowWizard) {
+      const shouldShowWizard = !wizardCompleted
+      if (shouldShowWizard) {
         setVisible(true)
       }
     })

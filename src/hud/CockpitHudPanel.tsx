@@ -143,6 +143,8 @@ export default function CockpitHudPanel({
   const [dragMode, setDragMode] = useState<DragMode>('none')
 
   const drag = useRef({ dx: 0, dy: 0 })
+  const dragTelemetryRef = useRef({ t: 0, x: 0, y: 0, velocity: 0 })
+  const dockIntentRef = useRef<{ side: 'left' | 'right' | null; since: number }>({ side: null, since: 0 })
   const dockGesture = useRef({ active: false, x: 0, y: 0, moved: false })
   const dragStartScreen = useRef({ x: 0, y: 0 })
   const undockedAt = useRef<{ x: number; y: number } | null>(null)
@@ -175,19 +177,33 @@ export default function CockpitHudPanel({
   const isIOSWebKit =
     typeof window !== 'undefined' &&
     /iPhone|iPad|iPod/i.test(navigator.userAgent || '')
+  const isMobile =
+    typeof window !== 'undefined' &&
+    (window.matchMedia('(pointer: coarse)').matches || window.innerWidth <= 768)
   const isCoarsePointer =
     typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
   const dragThreshold = isIOSWebKit ? 14 : isCoarsePointer ? 12 : DRAG_THRESHOLD_PX
-  const edgeDockZone = isIOSWebKit ? 44 : isCoarsePointer ? 40 : EDGE_DOCK_ZONE_PX
+  const edgeDockZone = isMobile
+    ? Math.max(10, Math.round(EDGE_DOCK_ZONE_PX * 0.6))
+    : isIOSWebKit
+      ? 44
+      : isCoarsePointer
+        ? 40
+        : EDGE_DOCK_ZONE_PX
   const panelSnapThreshold = isIOSWebKit ? 14 : isCoarsePointer ? 12 : PANEL_SNAP_THRESHOLD_PX
   const dockRelockGuard = isIOSWebKit ? 96 : isCoarsePointer ? 64 : DOCK_RELOCK_GUARD_PX
   const dockUndockSwipe = isIOSWebKit ? 12 : DOCK_UNDOCK_SWIPE_PX
+  const minWidthEffective = isMobile ? Math.max(120, minWidth - 20) : minWidth
+  const minHeightEffective = isMobile ? Math.max(96, minHeight - 16) : minHeight
+  const mobileFocusBoost = isMobile && dragMode !== 'none' ? 1000 : 0
 
   const avoidRuntimeOverlap = useCallback(
     (x: number, y: number, w: number, h: number) => {
       let nx = x
       let ny = y
-      const pad = Math.max(PANEL_KISS_GAP_PX, Math.max(0, Math.min(24, Math.round(prefs.panel_gap_px ?? 0))))
+      const pad = isMobile
+        ? Math.max(0, Math.min(4, Math.round(prefs.panel_gap_px ?? 0)))
+        : Math.max(PANEL_KISS_GAP_PX, Math.max(0, Math.min(24, Math.round(prefs.panel_gap_px ?? 0))))
       const { vw, vh } = viewportSize()
       const panelHeight = (id: string, p: typeof panels[string]) => {
         if (!p) return 120
@@ -203,7 +219,7 @@ export default function CockpitHudPanel({
         }
         return p.h ?? (p.minimized ? (isCoarsePointer ? 46 : 44) : 180)
       }
-      for (let iter = 0; iter < 36; iter++) {
+      for (let iter = 0; iter < (isMobile ? 12 : 36); iter++) {
         const a = { l: nx, t: ny, r: nx + w, b: ny + h }
         let collided = false
         for (const [id, panel] of Object.entries(panels)) {
@@ -234,7 +250,7 @@ export default function CockpitHudPanel({
       }
       return { x: nx, y: ny }
     },
-    [panelId, panels, isCoarsePointer, prefs.panel_gap_px],
+    [panelId, panels, isCoarsePointer, isMobile, prefs.panel_gap_px],
   )
 
   useEffect(() => {
@@ -312,11 +328,17 @@ export default function CockpitHudPanel({
 
     const nw = DEFAULT_FLOATING_PANEL_SIZE.w
     const { vw, vh } = viewportSize()
-    const nwFinal = isCoarsePointer
-      ? Math.max(minWidth, Math.min(nw, Math.max(minWidth, vw - 16)))
-      : nw
+    const mobileTargetW = Math.round(vw * 0.44)
+    const nwFinal = isMobile
+      ? Math.max(minWidth, Math.min(mobileTargetW, Math.max(minWidth, vw - 20)))
+      : isCoarsePointer
+        ? Math.max(minWidth, Math.min(nw, Math.max(minWidth, vw - 16)))
+        : nw
     const nh = DEFAULT_FLOATING_PANEL_SIZE.h
-    const nhFinal = Math.max(minHeight, Math.min(nh, Math.max(minHeight, vh - 48)))
+    const mobileMaxH = Math.max(minHeightEffective, vh - 96)
+    const nhFinal = isMobile
+      ? Math.max(minHeightEffective, Math.min(Math.round(vh * 0.5), mobileMaxH))
+      : Math.max(minHeightEffective, Math.min(nh, Math.max(minHeightEffective, vh - 48)))
     let nx = posRef.current.x
     let ny = posRef.current.y
     if (dockSide === 'right') {
@@ -342,7 +364,7 @@ export default function CockpitHudPanel({
       w: nwFinal,
       h: nhFinal,
     })
-  }, [isFloating, hasInitializedFloatingSize, dockSide, panelId, safeUpdatePanel, isCoarsePointer, minHeight, minWidth])
+  }, [isFloating, hasInitializedFloatingSize, dockSide, panelId, safeUpdatePanel, isCoarsePointer, isMobile, minHeightEffective, minWidthEffective])
 
   const transition =
     prefs.animations_enabled && !wantsReducedMotion
@@ -464,7 +486,15 @@ export default function CockpitHudPanel({
     const shouldDockLeft = movedAwayFromUndock && (dockPreview === 'left' || sx <= edgeDockZone)
     const shouldDockRight =
       movedAwayFromUndock && (dockPreview === 'right' || sx + s.w >= vw - edgeDockZone)
-    const shouldDock = shouldDockLeft || shouldDockRight
+    let shouldDock = shouldDockLeft || shouldDockRight
+    if (isMobile && shouldDock) {
+      const side: 'left' | 'right' = shouldDockRight ? 'right' : 'left'
+      const now = performance.now()
+      const intent = dockIntentRef.current
+      const heldLongEnough = intent.side === side && intent.since > 0 && now - intent.since >= 120
+      const slowEnough = dragTelemetryRef.current.velocity <= 0.08
+      shouldDock = heldLongEnough || slowEnough
+    }
     const nextDockSide: 'left' | 'right' = shouldDockRight ? 'right' : 'left'
     if (shouldDock) {
       const dockW = DOCKED_PANEL_WIDTH_PX
@@ -513,6 +543,7 @@ export default function CockpitHudPanel({
   }, [
     dockPreview,
     dockSide,
+    isMobile,
     minimized,
     panelId,
     resolveCollisions,
@@ -562,6 +593,10 @@ export default function CockpitHudPanel({
         }
         let nx = e.clientX - drag.current.dx
         let ny = e.clientY - drag.current.dy
+        if (isMobile) {
+          nx = posRef.current.x + (nx - posRef.current.x) * 0.9
+          ny = posRef.current.y + (ny - posRef.current.y) * 0.9
+        }
         const { vw, vh } = viewportSize()
         const s = sizeRef.current
         const pw = s.w
@@ -575,9 +610,29 @@ export default function CockpitHudPanel({
         const maxX = vw - pw
         nx = Math.max(minX, Math.min(nx, maxX))
         ny = Math.max(36, Math.min(ny, vh - ph))
+        if (isMobile) {
+          const now = performance.now()
+          const last = dragTelemetryRef.current
+          if (last.t > 0) {
+            const dt = Math.max(1, now - last.t)
+            const dist = Math.hypot(nx - last.x, ny - last.y)
+            dragTelemetryRef.current.velocity = dist / dt
+          }
+          dragTelemetryRef.current.t = now
+          dragTelemetryRef.current.x = nx
+          dragTelemetryRef.current.y = ny
+        }
         let nextDockPreview: 'left' | 'right' | null = null
         if (nx <= edgeDockZone) nextDockPreview = 'left'
         else if (nx + pw >= vw - edgeDockZone) nextDockPreview = 'right'
+        if (isMobile) {
+          const intent = dockIntentRef.current
+          if (nextDockPreview == null) {
+            dockIntentRef.current = { side: null, since: 0 }
+          } else if (intent.side !== nextDockPreview) {
+            dockIntentRef.current = { side: nextDockPreview, since: performance.now() }
+          }
+        }
         setDockPreviewIfChanged(nextDockPreview)
 
         const guideX: number | null = null
@@ -591,8 +646,14 @@ export default function CockpitHudPanel({
       } else if (mode === 'resize') {
         const rect = rootRef.current?.getBoundingClientRect()
         if (!rect) return
-        let nw = Math.max(minWidth, e.clientX - rect.left)
-        let nh = Math.max(minHeight, e.clientY - rect.top)
+        let nw = Math.max(minWidthEffective, e.clientX - rect.left)
+        let nh = Math.max(minHeightEffective, e.clientY - rect.top)
+        if (isMobile) {
+          nw = sizeRef.current.w + (nw - sizeRef.current.w) * 0.88
+          nh = (sizeRef.current.h ?? minHeightEffective) + (nh - (sizeRef.current.h ?? minHeightEffective)) * 0.88
+          nw = Math.round(nw)
+          nh = Math.round(nh)
+        }
         const { vw, vh } = viewportSize()
         const p = posRef.current
         if (p.x + nw > vw - 4) {
@@ -606,8 +667,8 @@ export default function CockpitHudPanel({
           window.setTimeout(() => setResizeBump(false), 180)
         }
         // Keep resized dimensions aligned to snap grid and away from overlap.
-        nw = Math.max(minWidth, snapCoord(nw))
-        nh = Math.max(minHeight, snapCoord(nh))
+        nw = Math.max(minWidthEffective, snapCoord(nw))
+        nh = Math.max(minHeightEffective, snapCoord(nh))
         const resolved = avoidRuntimeOverlap(p.x, p.y, nw, nh)
         if (Math.abs(resolved.x - p.x) > 0.5 || Math.abs(resolved.y - p.y) > 0.5) {
           const nextPos = { x: resolved.x, y: resolved.y }
@@ -637,6 +698,8 @@ export default function CockpitHudPanel({
       if (dragMode === 'pending') {
         setDragMode('none')
         setGlow(false)
+        dockIntentRef.current = { side: null, since: 0 }
+        dragTelemetryRef.current = { t: 0, x: 0, y: 0, velocity: 0 }
         setDockPreviewIfChanged(null)
         setSnapGuideIfChanged({ x: null, y: null })
         setMapInteractionBlocked(false)
@@ -644,6 +707,8 @@ export default function CockpitHudPanel({
       }
       setDragMode('none')
       setGlow(false)
+      dockIntentRef.current = { side: null, since: 0 }
+      dragTelemetryRef.current = { t: 0, x: 0, y: 0, velocity: 0 }
       setSnapGuideIfChanged({ x: null, y: null })
       commitPosition()
       setMapInteractionBlocked(false)
@@ -672,8 +737,42 @@ export default function CockpitHudPanel({
     dragThreshold,
     edgeDockZone,
     isCoarsePointer,
+    isMobile,
     setMapInteractionBlocked,
   ])
+
+  useEffect(() => {
+    if (!isMobile || docked) return
+    const onResize = () => {
+      const { vw, vh } = viewportSize()
+      const maxW = Math.max(minWidthEffective, vw - 8)
+      const maxH = Math.max(minHeightEffective, vh - 40)
+      const nw = Math.min(sizeRef.current.w, maxW)
+      const nh = Math.min(Math.max(minHeightEffective, sizeRef.current.h ?? minHeightEffective), maxH)
+      const nx = Math.max(0, Math.min(posRef.current.x, vw - nw))
+      const ny = Math.max(36, Math.min(posRef.current.y, vh - nh))
+      const sizeChanged = Math.abs(nw - sizeRef.current.w) >= 0.5 || Math.abs(nh - (sizeRef.current.h ?? nh)) >= 0.5
+      const posChanged = Math.abs(nx - posRef.current.x) >= 0.5 || Math.abs(ny - posRef.current.y) >= 0.5
+      if (!sizeChanged && !posChanged) return
+      if (sizeChanged) {
+        const nextSize = { w: nw, h: nh }
+        sizeRef.current = nextSize
+        setSize(nextSize)
+      }
+      if (posChanged) {
+        const next = { x: nx, y: ny }
+        posRef.current = next
+        setPos(next)
+      }
+      safeUpdatePanel(panelId, { x: nx, y: ny, w: nw, h: nh, docked: false })
+    }
+    window.addEventListener('resize', onResize)
+    window.addEventListener('orientationchange', onResize)
+    return () => {
+      window.removeEventListener('resize', onResize)
+      window.removeEventListener('orientationchange', onResize)
+    }
+  }, [isMobile, docked, minHeightEffective, minWidthEffective, panelId, safeUpdatePanel])
 
   const onHeaderPointerDown = (e: React.PointerEvent) => {
     if ((e.target as HTMLElement).closest('[data-no-drag]')) return
@@ -683,13 +782,18 @@ export default function CockpitHudPanel({
       pendingFloatingDefaultSizeRef.current = true
       const nw = DEFAULT_FLOATING_PANEL_SIZE.w
       const { vw, vh } = viewportSize()
-      const nwFinal = isCoarsePointer
-        ? Math.max(minWidth, Math.min(nw, Math.max(minWidth, vw - 16)))
-        : nw
-      const baseX =
+      const mobileTargetW = Math.round(vw * 0.44)
+      const nwFinal = isMobile
+        ? Math.max(minWidth, Math.min(mobileTargetW, Math.max(minWidth, vw - 20)))
+        : isCoarsePointer
+          ? Math.max(minWidth, Math.min(nw, Math.max(minWidth, vw - 16)))
+          : nw
+      const spawnInset = isMobile ? 12 : 0
+      const baseXRaw =
         dockSide === 'right'
-          ? Math.max(0, vw - nwFinal - DOCK_EDGE_INSET_PX)
-          : DOCK_EDGE_INSET_PX
+          ? Math.max(0, vw - nwFinal - DOCK_EDGE_INSET_PX - spawnInset)
+          : DOCK_EDGE_INSET_PX + spawnInset
+      const baseX = Math.max(0, Math.min(baseXRaw, vw - nwFinal))
       const baseY = Math.max(36, Math.min(posRef.current.y, vh - Math.max(minHeight, sizeRef.current.h ?? minHeight)))
       setDocked(false)
       setMinimized(false)
@@ -936,7 +1040,7 @@ export default function CockpitHudPanel({
           : minimized
             ? (isCoarsePointer ? 46 : 44)
             : undefined,
-        zIndex: layout?.z ?? 400,
+        zIndex: (layout?.z ?? 400) + mobileFocusBoost,
         pointerEvents: 'auto',
         background: panelBg,
         color: panelTextColor,
@@ -945,7 +1049,7 @@ export default function CockpitHudPanel({
         borderRadius: isCoarsePointer ? 10 : 8,
         boxShadow: glow
           ? `0 0 0 2px ${panelEdgeGlow}, 0 0 44px ${panelHaloGlow}, 0 8px 28px rgba(0,0,0,0.5)`
-          : `0 6px 20px rgba(0,0,0,0.5), 0 0 0 1.5px ${panelEdgeGlow}, 0 0 32px ${panelHaloGlow}`,
+          : `0 6px 20px rgba(0,0,0,0.5), 0 0 0 ${isMobile && mobileFocusBoost > 0 ? '2px' : '1.5px'} ${panelEdgeGlow}, 0 0 32px ${panelHaloGlow}`,
         outline:
           dragMode !== 'none' && dockPreview
             ? `2px dashed ${accent}99`
@@ -1087,7 +1191,8 @@ export default function CockpitHudPanel({
       {!minimized && !docked && (
         <div
           style={{
-            padding: 10,
+            padding: isMobile ? 8 : 10,
+            fontSize: isMobile ? '0.95em' : undefined,
             maxHeight: fullscreen ? '70vh' : undefined,
             overflow: 'auto',
             WebkitOverflowScrolling: 'touch',
@@ -1163,8 +1268,8 @@ export default function CockpitHudPanel({
             position: 'absolute',
             right: 0,
             bottom: 0,
-            width: isCoarsePointer ? 56 : 46,
-            height: isCoarsePointer ? 56 : 46,
+            width: isMobile ? 64 : isCoarsePointer ? 56 : 46,
+            height: isMobile ? 64 : isCoarsePointer ? 56 : 46,
             cursor: 'nwse-resize',
             touchAction: 'none',
             background: `linear-gradient(135deg, transparent 52%, ${accent}38 52%)`,
