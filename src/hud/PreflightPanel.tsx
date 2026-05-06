@@ -11,6 +11,8 @@ import {
   type PermissionStateLike,
 } from '../lib/devicePermissions'
 import { COCKPIT_STORAGE_KEY } from '../types/cockpit'
+import { resetAppState } from '../utils/resetApp'
+import { forceUpdateApp } from '../utils/forceUpdate'
 
 type CheckState = 'pass' | 'warn' | 'fail'
 type ManualCheckKey =
@@ -165,6 +167,7 @@ export default function PreflightPanel() {
   }, [])
 
   const endpoint = useMemo(() => readRapidEndpoint(), [])
+  const buildId = useMemo(() => ((import.meta as any).env?.VITE_GIT_COMMIT as string | undefined) ?? 'unknown', [])
   const speechSupported = !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)
   const deviceTuneMeta = useMemo(() => {
     try {
@@ -367,6 +370,10 @@ export default function PreflightPanel() {
     fontWeight: 700,
   }
 
+  useEffect(() => {
+    console.log('[BUILD]', buildId)
+  }, [buildId])
+
   return (
     <HudPanel panelId="preflight" title="Preflight Test" initialPos={{ x: 16, y: 180 }} initialWidth={320}>
       <div style={{ display: 'grid', gap: 8, fontSize: 11 }}>
@@ -545,6 +552,9 @@ export default function PreflightPanel() {
             Tune version: <strong style={{ color: '#d6ddd6' }}>{deviceTuneMeta?.version ?? 'not applied'}</strong>
           </div>
           <div>
+            Build: <strong style={{ color: '#d6ddd6' }}>{buildId}</strong>
+          </div>
+          <div>
             Last optimized:{' '}
             <strong style={{ color: '#d6ddd6' }}>
               {deviceTuneMeta?.ts ? new Date(deviceTuneMeta.ts).toLocaleString() : 'not recorded'}
@@ -608,6 +618,52 @@ export default function PreflightPanel() {
               {row.label}
             </label>
           ))}
+        </div>
+        <div
+          style={{
+            marginTop: 6,
+            paddingTop: 10,
+            borderTop: '1px solid rgba(199,206,198,0.16)',
+            display: 'grid',
+            gap: 6,
+          }}
+        >
+          <button
+            type="button"
+            data-no-drag
+            onClick={() => void forceUpdateApp()}
+            style={{
+              minHeight: 36,
+              borderRadius: 8,
+              border: '1px solid rgba(125,209,255,0.45)',
+              background: 'rgba(125,209,255,0.12)',
+              color: '#d8eefc',
+              cursor: 'pointer',
+              fontSize: 10,
+              letterSpacing: '0.08em',
+              fontWeight: 700,
+            }}
+          >
+            FORCE UPDATE APP
+          </button>
+          <button
+            type="button"
+            data-no-drag
+            onClick={() => void resetAppState()}
+            style={{
+              minHeight: 36,
+              borderRadius: 8,
+              border: '1px solid rgba(255,107,135,0.4)',
+              background: 'rgba(255,107,135,0.12)',
+              color: '#ffd5dd',
+              cursor: 'pointer',
+              fontSize: 10,
+              letterSpacing: '0.08em',
+              fontWeight: 700,
+            }}
+          >
+            RESET APP / FIX ISSUES
+          </button>
         </div>
       </div>
     </HudPanel>

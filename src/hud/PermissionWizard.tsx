@@ -52,6 +52,7 @@ type Props = {
   busy: boolean
   setBusy: (v: boolean) => void
   onClose: () => void
+  onResetApp: () => void
 }
 
 const btnBase: React.CSSProperties = {
@@ -105,6 +106,7 @@ export default function PermissionWizard({
   busy,
   setBusy,
   onClose,
+  onResetApp,
 }: Props) {
   const steps = useMemo(() => {
     const s: WizardStepId[] = ['intro', 'location', 'microphone', 'camera', 'notifications']
@@ -548,6 +550,24 @@ export default function PermissionWizard({
             )}
           </div>
         )}
+        <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
+          <button
+            type="button"
+            onClick={onResetApp}
+            style={{
+              border: 'none',
+              background: 'transparent',
+              color: '#a8b4ac',
+              fontSize: 10,
+              letterSpacing: '0.06em',
+              textDecoration: 'underline',
+              cursor: 'pointer',
+              padding: 0,
+            }}
+          >
+            Reset App
+          </button>
+        </div>
       </div>
     </div>
   )

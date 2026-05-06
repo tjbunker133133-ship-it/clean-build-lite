@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useGPS } from '../hooks/useGPS'
 import { getPermissionSnapshot, type PermissionStateLike } from '../lib/devicePermissions'
 import PermissionWizard from './PermissionWizard'
+import { resetAppState } from '../utils/resetApp'
 
 const KEY = 'hud_permission_overlay_seen_v1'
 const APPLE_GPS_STUCK_MS = 10_000
@@ -188,6 +189,7 @@ export default function PermissionPromptOverlay() {
         busy={busy}
         setBusy={setBusy}
         onClose={close}
+        onResetApp={() => void resetAppState()}
       />
     </div>
   )

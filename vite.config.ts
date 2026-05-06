@@ -5,6 +5,7 @@ import { VitePWA } from 'vite-plugin-pwa'
 export default defineConfig({
   define: {
     'import.meta.env.VITE_BUILD_STAMP': JSON.stringify(new Date().toISOString()),
+    __BUILD_ID__: JSON.stringify(new Date().toISOString()),
   },
   plugins: [
     react(),
@@ -34,6 +35,7 @@ export default defineConfig({
         cleanupOutdatedCaches: true,
         skipWaiting: true,
         clientsClaim: true,
+        importScripts: ['/sw-message-handler.js'],
       },
     }),
   ],
