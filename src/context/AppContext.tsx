@@ -7,9 +7,11 @@ import React, {
   type ReactNode
 } from 'react'
 import type { AppState, AppAction, Waypoint, LayerType, WaypointType } from '../types'
+import { tier1Debug } from '../lib/tier1DebugLog'
 
 const DEAD_MAN_DURATION = 300
 const APP_STORAGE_KEY = 'tactical_hud_app_state_v1'
+const VALID_LAYERS = ['streets', 'topo', 'outdoor', 'satellite'] as const
 
 const initialState: AppState = {
   waypoints: [],
@@ -27,16 +29,29 @@ const initialState: AppState = {
 
 function appReducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
-    case 'ADD_WAYPOINT':
+    case 'ADD_WAYPOINT': {
+      const wp = action.payload
+      tier1Debug('waypoint', 'add', { id: wp.id, lat: wp.lat, lng: wp.lng, type: wp.type })
       return {
         ...state,
-        waypoints: [...state.waypoints, action.payload],
+        waypoints: [...state.waypoints, wp],
       }
-    case 'SET_WAYPOINTS':
+    }
+    case 'SET_WAYPOINTS': {
+      const next = action.payload
+      tier1Debug('waypoint', 'set-all', { count: next.length })
+      const sel =
+        next.length === 0
+          ? null
+          : state.selectedWaypointId != null && next.some((w) => w.id === state.selectedWaypointId)
+            ? state.selectedWaypointId
+            : null
       return {
         ...state,
-        waypoints: action.payload,
+        waypoints: next,
+        selectedWaypointId: sel,
       }
+    }
     case 'UPDATE_WAYPOINT':
       return {
         ...state,
@@ -45,6 +60,7 @@ function appReducer(state: AppState, action: AppAction): AppState {
         ),
       }
     case 'REMOVE_WAYPOINT':
+      tier1Debug('waypoint', 'remove', { id: action.payload })
       return {
         ...state,
         waypoints: state.waypoints.filter((w) => w.id !== action.payload),
@@ -56,6 +72,8 @@ function appReducer(state: AppState, action: AppAction): AppState {
     case 'SELECT_WAYPOINT':
       return { ...state, selectedWaypointId: action.payload }
     case 'SET_LAYER':
+      if (!isLayerType(action.payload)) return state
+      if (state.activeLayer === action.payload) return state
       return { ...state, activeLayer: action.payload }
     case 'SET_PENDING_TYPE':
       return { ...state, pendingWaypointType: action.payload }
@@ -105,7 +123,7 @@ function isWaypointType(value: unknown): value is WaypointType {
 }
 
 function isLayerType(value: unknown): value is LayerType {
-  return value === 'streets' || value === 'satellite' || value === 'topo' || value === 'outdoor'
+  return typeof value === 'string' && (VALID_LAYERS as readonly string[]).includes(value)
 }
 
 function sanitizeWaypoint(raw: unknown): Waypoint | null {
@@ -169,6 +187,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
     dispatch({ type: 'SET_WAYPOINTS', payload: wps })
   }, [])
 
+  useEffect(() => {
+    const w = window as Window & {
+      __FORCE_CLEAR_ROUTE__?: () => void
+      __DEBUG_CLEAR_ROUTE__?: () => void
+    }
+    const clearAll = () => {
+      tier1Debug('waypoint', 'clear-route-global')
+      setWaypoints([])
+    }
+    w.__FORCE_CLEAR_ROUTE__ = clearAll
+    w.__DEBUG_CLEAR_ROUTE__ = clearAll
+    return () => {
+      delete w.__FORCE_CLEAR_ROUTE__
+      delete w.__DEBUG_CLEAR_ROUTE__
+    }
+  }, [setWaypoints])
+
   const updateWaypoint = useCallback((id: string, patch: Partial<Waypoint>) => {
     dispatch({ type: 'UPDATE_WAYPOINT', payload: { id, patch } })
   }, [])
@@ -182,6 +217,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const setLayer = useCallback((layer: LayerType) => {
+    console.log('[SET LAYER DISPATCH]', layer, Date.now())
     dispatch({ type: 'SET_LAYER', payload: layer })
   }, [])
 

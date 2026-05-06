@@ -163,7 +163,7 @@ export default function VoicePanel() {
     // Navigation
     if (cmd === 'center') {
       if (!map || gps.lat == null || gps.lng == null) return report('GPS center unavailable.', false)
-      map.easeTo({ center: [gps.lng, gps.lat], duration: 700, essential: true })
+      map.easeTo({ center: [gps.lng, gps.lat], duration: 480, essential: true })
       return report('Centered on your GPS.')
     }
     if (cmd === 'zoom in') {
@@ -182,7 +182,7 @@ export default function VoicePanel() {
       const step = 0.04
       const dLat = cmd === 'north' ? step : cmd === 'south' ? -step : 0
       const dLng = cmd === 'east' ? step : cmd === 'west' ? -step : 0
-      map.easeTo({ center: [c.lng + dLng, c.lat + dLat], duration: 300 })
+      map.easeTo({ center: [c.lng + dLng, c.lat + dLat], duration: 220, essential: true })
       return report(`Panning ${cmd}.`)
     }
 
@@ -205,7 +205,12 @@ export default function VoicePanel() {
     }
     if (cmd === 'recenter') {
       if (!map || !attachedPin) return report('No attached pin.', false)
-      map.easeTo({ center: [attachedPin.lng, attachedPin.lat], zoom: Math.max(14, map.getZoom()), duration: 750 })
+      map.easeTo({
+        center: [attachedPin.lng, attachedPin.lat],
+        zoom: Math.max(14, map.getZoom()),
+        duration: 520,
+        essential: true,
+      })
       return report(`Recentered to ${attachedPin.label}.`)
     }
     if (cmd === 'distance') {
@@ -226,7 +231,7 @@ export default function VoicePanel() {
     }
     if (cmd === 'calibrate') {
       if (!map) return report('Compass unavailable.', false)
-      map.easeTo({ bearing: 0, duration: 400 })
+      map.easeTo({ bearing: 0, duration: 280, essential: true })
       return report('Compass calibrated.')
     }
 
@@ -286,7 +291,16 @@ export default function VoicePanel() {
     // Status
     if (cmd === 'status') {
       const total = totalRouteDistance(state.waypoints.map((w) => ({ lat: w.lat, lng: w.lng })))
-      const gpsState = gps.lat != null ? 'GPS locked' : 'GPS searching'
+      const gpsState =
+        gps.locationState === 'granted' && gps.lat != null
+          ? 'GPS on'
+          : gps.locationState === 'idle'
+            ? 'Location off'
+            : gps.locationState === 'requesting'
+              ? 'GPS requesting'
+              : gps.locationState === 'denied'
+                ? 'GPS denied'
+                : 'GPS unavailable'
       return report(`${gpsState}. ${state.waypoints.length} pins. Route ${formatDistance(total.miles)}.`)
     }
     if (cmd === 'time') return report(`Current time ${new Date().toLocaleTimeString()}.`)

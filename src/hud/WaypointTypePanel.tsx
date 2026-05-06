@@ -3,6 +3,17 @@ import HudPanel from './HudPanel'
 import { useAppContext } from '../context/AppContext'
 import type { WaypointType } from '../types'
 import { formatDistance, haversineDistance, totalRouteDistance } from '../lib/haversine'
+import { tier1Debug } from '../lib/tier1DebugLog'
+
+/** Water / Camp / Rest / End only — CLEAR ROUTE is a separate command button (not a waypoint type). */
+type RouteTypeTile = { id: WaypointType; label: string; icon: string; color: string }
+
+const ROUTE_TYPE_TILES: RouteTypeTile[] = [
+  { id: 'water', label: 'Water', icon: '💧', color: '#38bdf8' },
+  { id: 'camp', label: 'Camp', icon: '⛺', color: '#34d399' },
+  { id: 'rest', label: 'Rest Stop', icon: '☕', color: '#fbbf24' },
+  { id: 'finish', label: 'End Flag', icon: '🏁', color: '#f472b6' },
+]
 
 export default function WaypointTypePanel() {
   const {
@@ -34,12 +45,42 @@ export default function WaypointTypePanel() {
   const legCount = Math.max(0, waypoints.length - 1)
   const armedType = selectedType === 'default' ? 'DISARMED' : selectedType.toUpperCase()
 
-  const types: { key: WaypointType; label: string; color: string; icon: string }[] = [
-    { key: 'water', label: 'Water', color: '#38bdf8', icon: '💧' },
-    { key: 'camp', label: 'Camp', color: '#34d399', icon: '⛺' },
-    { key: 'rest', label: 'Rest Stop', color: '#fbbf24', icon: '☕' },
-    { key: 'finish', label: 'End Flag', color: '#f472b6', icon: '🏁' },
-  ]
+  function handleRouteTypeClick(item: RouteTypeTile) {
+    setPendingType(item.id)
+  }
+
+  const clearRouteDockedBtn = (
+    <button
+      type="button"
+      data-no-drag
+      data-testid="waypoint-clear-route-docked"
+      className="waypoint-clear"
+      title="Clear entire route"
+      aria-label="Clear entire route"
+      disabled={waypoints.length === 0}
+        onClick={(e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        tier1Debug('waypoint', 'clear-route-click')
+        ;(window as Window & { __FORCE_CLEAR_ROUTE__?: () => void }).__FORCE_CLEAR_ROUTE__?.()
+      }}
+      style={{
+        minHeight: 28,
+        padding: '4px 8px',
+        borderRadius: 6,
+        fontSize: 10,
+        fontWeight: 800,
+        letterSpacing: '0.08em',
+        lineHeight: 1.2,
+        minWidth: 72,
+        background: '#ef4444',
+        color: '#fff',
+        border: '2px solid #fbbf24',
+      }}
+    >
+      CLR
+    </button>
+  )
 
   return (
     <HudPanel
@@ -48,9 +89,13 @@ export default function WaypointTypePanel() {
       initialPos={{ x: 20, y: 420 }}
       initialWidth={360}
       minHeight={72}
+      dockedHeaderTrailing={clearRouteDockedBtn}
     >
       <div style={{ marginBottom: 8, fontSize: 11, color: '#9fb0c7' }}>
         Arm a waypoint type below. Placement is blocked while this panel is docked.
+      </div>
+      <div style={{ marginBottom: 8, fontSize: 10, color: '#94a3b8', lineHeight: 1.35 }}>
+        <strong style={{ color: '#fca5a5' }}>CLEAR ROUTE</strong> (red/yellow) removes all pins — not a waypoint type.
       </div>
       <div
         style={{
@@ -87,21 +132,22 @@ export default function WaypointTypePanel() {
           flexWrap: 'wrap',
           gap: 8,
           marginBottom: 10,
+          alignItems: 'center',
         }}
       >
-        {types.map((t) => {
-          const active = selectedType === t.key
+        {ROUTE_TYPE_TILES.map((item) => {
+          const active = selectedType === item.id
 
           return (
             <button
-              key={t.key}
+              key={item.id}
               type="button"
               data-no-drag
-              onClick={() => setPendingType(t.key)}
+              onClick={() => handleRouteTypeClick(item)}
               style={{
                 padding: '9px 12px',
                 borderRadius: 10,
-                border: active ? `1px solid ${t.color}` : '1px solid #31363f',
+                border: active ? `1px solid ${item.color}` : '1px solid #31363f',
                 cursor: 'pointer',
                 fontSize: 12,
                 fontWeight: 600,
@@ -111,18 +157,44 @@ export default function WaypointTypePanel() {
                 alignItems: 'center',
                 gap: 8,
                 background: active
-                  ? `linear-gradient(180deg, ${t.color}22, ${t.color}12)`
+                  ? `linear-gradient(180deg, ${item.color}22, ${item.color}12)`
                   : 'linear-gradient(180deg, #1f232a, #161a20)',
-                color: active ? t.color : '#d5dde7',
-                boxShadow: active ? `0 0 14px ${t.color}55, inset 0 0 0 1px ${t.color}22` : 'inset 0 0 0 1px #00000022',
+                color: active ? item.color : '#d5dde7',
+                boxShadow: active ? `0 0 14px ${item.color}55, inset 0 0 0 1px ${item.color}22` : 'inset 0 0 0 1px #00000022',
                 transition: 'all .16s ease',
               }}
             >
-              <span style={{ fontSize: 14, lineHeight: 1 }}>{t.icon}</span>
-              <span>{t.label}</span>
+              <span style={{ fontSize: 14, lineHeight: 1 }}>{item.icon}</span>
+              <span>{item.label}</span>
             </button>
           )
         })}
+
+        <div
+          style={{ marginTop: 10, width: '100%', flexBasis: '100%' }}
+          data-no-drag
+        >
+          <button
+            type="button"
+            id="__FORCE_CLEAR_ROUTE__"
+            data-no-drag
+            style={{
+              width: '100%',
+              padding: '12px',
+              background: 'red',
+              color: 'white',
+              fontWeight: 'bold',
+              border: '2px solid yellow',
+              zIndex: 9999,
+            }}
+            onClick={() => {
+              ;(window as Window & { __FORCE_CLEAR_ROUTE__?: () => void }).__FORCE_CLEAR_ROUTE__?.()
+            }}
+          >
+            🧹 CLEAR ROUTE
+          </button>
+        </div>
+
         <button
           type="button"
           data-no-drag

@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useMapContext } from '../context/MapContext'
 import HudPanel from './HudPanel'
-import { useGPS } from '../hooks/useGPS'
-import { fetchElevationMeters } from '../lib/elevation'
+import { usePanelData } from '../context/PanelDataContext'
 
 function distMi(
   lat1: number,
@@ -29,12 +28,11 @@ function bandForFt(ft: number): Band {
 }
 
 /**
- * Sticky tactical elevation readout — MapLibre terrain if available, else smooth mock.
- * COCKPIT_UX v2: ft + trend + grade + color band.
+ * Elevation from Open-Elevation (via PanelDataContext); trend/grade still sample map center motion.
  */
 export default function ElevationReadout() {
   const { map } = useMapContext()
-  const gps = useGPS()
+  const panel = usePanelData()
   const [main, setMain] = useState('— ft')
   const [trend, setTrend] = useState('—')
   const [grade, setGrade] = useState('grade —')
@@ -46,36 +44,50 @@ export default function ElevationReadout() {
   } | null>(null)
 
   useEffect(() => {
-    if (!map) return
-
-    const sample = async () => {
-      const c = map.getCenter()
-      const q = map as { queryTerrainElevation?: (ll: { lng: number; lat: number }) => number | null }
-      let m: number | null = null
-      try {
-        m = q.queryTerrainElevation?.(c) ?? null
-      } catch {
-        m = null
-      }
-      if ((m == null || Number.isNaN(m)) && gps.lat != null && gps.lng != null) {
-        m = await fetchElevationMeters(gps.lat, gps.lng)
-      }
-      if (m == null || Number.isNaN(m)) {
-        m =
-          1200 +
-          Math.sin(c.lat * 0.12) * 400 +
-          Math.cos(c.lng * 0.1) * 300 +
-          (c.lat + c.lng) * 3
-      }
-      const ft = m * 3.28084
+    if (panel.panelsLocationBlocked) {
+      setMain('— ft')
+      setBand('na')
+      setTrend('—')
+      setGrade('grade —')
+      prev.current = null
+      return
+    }
+    if (panel.elevationLoading && panel.elevationMeters == null) {
+      setMain('…')
+      setBand('na')
+      return
+    }
+    if (panel.elevationMeters != null) {
+      const ft = panel.elevationMeters * 3.28084
       const rounded = Math.round(ft)
       setMain(`${rounded.toLocaleString('en-US')} ft`)
       setBand(bandForFt(ft))
+      return
+    }
+    setMain('— ft')
+    setBand('na')
+  }, [panel.elevationMeters, panel.elevationLoading, panel.panelsLocationBlocked])
+
+  useEffect(() => {
+    if (!map) return
+
+    const sample = () => {
+      const c = map.getCenter()
+      const baseFt =
+        panel.elevationMeters != null
+          ? Math.round(panel.elevationMeters * 3.28084)
+          : Math.round(
+              (1200 +
+                Math.sin(c.lat * 0.12) * 400 +
+                Math.cos(c.lng * 0.1) * 300 +
+                (c.lat + c.lng) * 3) *
+                3.28084,
+            )
 
       const p = prev.current
       if (p) {
         const dMi = distMi(p.lat, p.lng, c.lat, c.lng)
-        const dFt = rounded - p.ft
+        const dFt = baseFt - p.ft
         if (dMi > 0.02) {
           const arrow = dFt >= 0 ? '▲' : '▼'
           setTrend(
@@ -94,7 +106,7 @@ export default function ElevationReadout() {
         setTrend('—')
         setGrade('grade —')
       }
-      prev.current = { ft: rounded, lat: c.lat, lng: c.lng }
+      prev.current = { ft: baseFt, lat: c.lat, lng: c.lng }
     }
 
     map.on('moveend', sample)
@@ -104,7 +116,7 @@ export default function ElevationReadout() {
       map.off('moveend', sample)
       map.off('idle', sample)
     }
-  }, [map, gps.lat, gps.lng])
+  }, [map, panel.elevationMeters])
 
   const color =
     band === 'low'
@@ -124,6 +136,19 @@ export default function ElevationReadout() {
       minHeight={84}
       accent={color}
     >
+      {panel.panelsLocationBlocked && (
+        <div
+          style={{
+            fontSize: 10,
+            color: '#f0b4bf',
+            textAlign: 'center',
+            marginBottom: 6,
+            lineHeight: 1.35,
+          }}
+        >
+          Enable location to use weather and elevation features
+        </div>
+      )}
       <div
         role="status"
         aria-live="polite"
@@ -148,6 +173,9 @@ export default function ElevationReadout() {
         <div style={{ fontSize: 10, opacity: 0.95, whiteSpace: 'nowrap' }}>
           {trend} · {grade}
         </div>
+        {panel.elevationError && !panel.panelsLocationBlocked && (
+          <div style={{ fontSize: 9, opacity: 0.85, color: '#e7c29a' }}>{panel.elevationError}</div>
+        )}
       </div>
     </HudPanel>
   )

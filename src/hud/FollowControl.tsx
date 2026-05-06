@@ -1,25 +1,44 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useMapContext } from '../context/MapContext'
 import { useGPS } from '../hooks/useGPS'
+
+// ⚠️ LOCKED SYSTEM — Behavior Freeze Active
+// Any change to interaction, layout, display modes, or layers requires explicit approval.
 
 export default function FollowControl() {
   const { map } = useMapContext()
   const gps = useGPS()
 
   const [follow, setFollow] = useState(false)
+  const lastEaseRef = useRef<{ lat: number; lng: number } | null>(null)
 
+  // 🔒 CONTRACT: Panel interaction system is locked.
+  // - Drag must not jump or offset from cursor
+  // - Dock gap must remain 0 (flush stacking)
+  // - Left/right dock must remain symmetrical
+  // - Undock must always clear minimized
+  // Do NOT modify without explicit approval
   // 🔁 Follow behavior (safe external control)
   useEffect(() => {
     if (!follow) return
 
     if (!map) return
-    if (gps.lat === null || gps.lng === null) return
+    if (gps.locationState !== 'granted' || gps.lat === null || gps.lng === null) return
+    const last = lastEaseRef.current
+    if (last && last.lat === gps.lat && last.lng === gps.lng) {
+      if (import.meta.env.DEV) {
+        console.warn('[GUARD] Prevented duplicate map.easeTo in FollowControl')
+      }
+      return
+    }
+    lastEaseRef.current = { lat: gps.lat, lng: gps.lng }
 
     map.easeTo({
       center: [gps.lng, gps.lat],
-      duration: 600,
+      duration: 420,
+      essential: true,
     })
-  }, [gps, follow, map])
+  }, [follow, map, gps.locationState, gps.lat, gps.lng])
 
   return (
     <div

@@ -1,23 +1,25 @@
-const EARTH_RADIUS_MILES = 3958.8
+const EARTH_RADIUS_METERS = 6371e3
+const METERS_PER_MILE = 1609.344
+
+/** Great-circle distance in meters (WGS84 sphere). */
+export function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const toRad = (d: number) => (d * Math.PI) / 180
+  const dLat = toRad(lat2 - lat1)
+  const dLng = toRad(lng2 - lng1)
+  const la1 = toRad(lat1)
+  const la2 = toRad(lat2)
+  const x =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(la1) * Math.cos(la2) * Math.sin(dLng / 2) ** 2
+  return 2 * EARTH_RADIUS_METERS * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x))
+}
 
 export function haversineDistance(
   lat1: number, lng1: number,
   lat2: number, lng2: number
 ): { miles: number; feet: number } {
-  const toRad = (deg: number) => (deg * Math.PI) / 180
-
-  const dLat = toRad(lat2 - lat1)
-  const dLng = toRad(lng2 - lng1)
-
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(toRad(lat1)) *
-      Math.cos(toRad(lat2)) *
-      Math.sin(dLng / 2) *
-      Math.sin(dLng / 2)
-
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
-  const miles = EARTH_RADIUS_MILES * c
+  const meters = haversineMeters(lat1, lng1, lat2, lng2)
+  const miles = meters / METERS_PER_MILE
   const feet = miles * 5280
 
   return { miles, feet }

@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import HudPanel from './HudPanel'
-import { useGPS } from '../hooks/useGPS'
+import { useGPS, requestLocation } from '../hooks/useGPS'
 import {
   requestCameraPermission,
   getPermissionSnapshot,
-  requestGeolocationPermission,
   requestMicrophonePermission,
   requestMotionPermission,
   requestNotificationPermission,
@@ -183,7 +182,8 @@ export default function PreflightPanel() {
   }, [recheckTick])
 
   const checks: CheckRow[] = useMemo(() => {
-    const gpsLock = gps.lat != null && gps.lng != null
+    const gpsLock =
+      gps.locationState === 'granted' && gps.lat != null && gps.lng != null
     return [
       {
         label: 'Network',
@@ -263,7 +263,23 @@ export default function PreflightPanel() {
         critical: true,
       },
     ]
-  }, [endpoint, geoPerm, gps.lat, gps.lng, isStandalone, micPerm, notifPerm, motionPerm, orientationPerm, cameraPerm, online, savedContactsCount, speechSupported, recheckTick])
+  }, [
+    endpoint,
+    geoPerm,
+    gps.lat,
+    gps.lng,
+    gps.locationState,
+    isStandalone,
+    micPerm,
+    notifPerm,
+    motionPerm,
+    orientationPerm,
+    cameraPerm,
+    online,
+    savedContactsCount,
+    speechSupported,
+    recheckTick,
+  ])
 
   const checksWeight = checks.reduce((sum, c) => sum + (c.weight ?? 1), 0)
   const checksScore = checks.reduce(
@@ -284,7 +300,8 @@ export default function PreflightPanel() {
   )
   const score = Math.round(((checksScore + manualScore) / (checksWeight + manualWeight)) * 100)
   const band = readinessBand(score)
-  const gpsLock = gps.lat != null && gps.lng != null
+  const gpsLock =
+    gps.locationState === 'granted' && gps.lat != null && gps.lng != null
   const hardGates = [
     { label: 'Rescue endpoint configured', pass: !!endpoint },
     { label: 'Emergency contact loaded', pass: savedContactsCount > 0 },
@@ -306,13 +323,14 @@ export default function PreflightPanel() {
     setRequestingPerms(true)
     try {
       // Run sequentially from the same user gesture for better iOS Safari reliability.
-      const geo = await requestGeolocationPermission()
+      await requestLocation()
+      const snapGeo = await getPermissionSnapshot()
+      setGeoPerm(snapGeo.geolocation === 'unsupported' ? 'unknown' : snapGeo.geolocation)
       const mic = await requestMicrophonePermission()
       const camera = await requestCameraPermission()
       const notif = await requestNotificationPermission()
       const orientation = await requestOrientationPermission()
       const motion = await requestMotionPermission()
-      setGeoPerm(geo === 'unsupported' ? 'unknown' : geo)
       setMicPerm(mic === 'unsupported' ? 'unknown' : mic)
       setCameraPerm(camera)
       setNotifPerm(notif)
@@ -428,8 +446,9 @@ export default function PreflightPanel() {
             disabled={requestingPerms}
             onClick={() =>
               void requestOne(async () => {
-                const s = await requestGeolocationPermission()
-                setGeoPerm(s === 'unsupported' ? 'unknown' : s)
+                await requestLocation()
+                const s = await getPermissionSnapshot()
+                setGeoPerm(s.geolocation === 'unsupported' ? 'unknown' : s.geolocation)
               })
             }
           >

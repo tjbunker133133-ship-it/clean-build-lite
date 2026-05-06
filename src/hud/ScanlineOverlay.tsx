@@ -3,17 +3,7 @@ import React from 'react'
 export default function ScanlineOverlay() {
   return (
     <>
-      {/* Vignette */}
-      <div
-        style={{
-          position: 'absolute',
-          inset: 0,
-          zIndex: 1,
-          pointerEvents: 'none',
-          background:
-            'radial-gradient(ellipse at center, transparent 60%, rgba(0,0,0,0.45) 100%)',
-        }}
-      />
+      {/* Edge vignette removed — was a full-viewport radial-gradient here (darkened map edges on every mode). */}
       {/* Corner brackets */}
       <div
         style={{

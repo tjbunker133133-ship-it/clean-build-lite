@@ -1,5 +1,6 @@
 import HudPanel from './HudPanel'
 import { useAppContext } from '../context/AppContext'
+import { useMapContext } from '../context/MapContext'
 import type { LayerType } from '../types'
 
 const LAYERS: { id: LayerType; label: string }[] = [
@@ -12,6 +13,8 @@ const LAYERS: { id: LayerType; label: string }[] = [
 export default function LayerPanel() {
   const { state, setLayer } = useAppContext()
   const { activeLayer } = state
+  const { status: mapStatus } = useMapContext()
+  const mapBusy = mapStatus === 'initial'
 
   return (
     <HudPanel
@@ -22,20 +25,31 @@ export default function LayerPanel() {
       minHeight={200}
     >
       <div
+        role="group"
+        aria-label="Basemap preset"
+        aria-busy={mapBusy}
         style={{
           display: 'flex',
           flexDirection: 'column',
           gap: 6,
+          opacity: mapBusy ? 0.92 : 1,
+          transition: 'opacity 160ms ease',
         }}
       >
         {LAYERS.map((layer) => {
           const active = activeLayer === layer.id
+          const title =
+            active && mapBusy
+              ? `${layer.label} — loading map…`
+              : `${layer.label} basemap`
 
           return (
             <button
               key={layer.id}
               type="button"
               data-no-drag
+              aria-pressed={active}
+              title={title}
               onClick={() => setLayer(layer.id)}
               style={{
                 padding: '8px 10px',

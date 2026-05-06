@@ -344,3 +344,49 @@ Unified stack: **`src/tier3-intelligence.html`** (Tier 1 + Tier 2 + Tier 3). Sta
 
 - Hash-verified drift protection: Tier 1 and Tier 2 file hashes recorded above; re-hash after intentional edits.
 
+## STABLE PANEL + MAP BASELINE (2026-05-05) — DO NOT REGRESS
+
+This baseline is the current known-good interaction model for cockpit panel UX.
+Any PR touching panel layout/drag/resize/dock/map-visibility must preserve all items below.
+
+### Non-Regression Truths
+
+1. Map stability:
+   - `MapCanvas` must remain mounted during panel interactions.
+   - Panel drag/resize/dock actions must not trigger map unmount/remount.
+   - No persistent dark vignette/ring overlay on normal map view.
+
+2. Dock geometry:
+   - Docked panel width is fixed and canonical at `280px`.
+   - Top dock offset is `48px`; bottom dock gutter is `12px`.
+   - Left and right dock rails must align evenly (no per-panel protrusion drift).
+
+3. Dock behavior:
+   - User-selected dock side is preserved; no automatic left/right migration.
+   - Docked panels stack cleanly with no visual overlap.
+   - Dock lane overflow compresses/scrolls behaviorally without cross-side reassignment.
+
+4. Floating behavior:
+   - Floating panels must not overlap other panels (floating or docked).
+   - Collision resolution uses near-edge "kiss" alignment with minimal gap.
+   - Panels remain bounded to viewport and retain minimum usable size.
+
+5. Interaction safety:
+   - During active panel drag/resize, map interactions are blocked by HUD shield.
+   - Pointer move updates are RAF-throttled to avoid event storms.
+   - UI state updates for drag previews/guides must be change-guarded (no redundant setState loops).
+
+6. Theme/display controls:
+   - `bright_day` map brightness sliders must visibly affect map brightness.
+   - `red_tactical` chrome remains red (no cyan/green regression).
+   - Display sliders remain accessible/visible and operational in all modes.
+
+### Verification Gate (required before merge for panel/map UX changes)
+
+- Run `npm run verify` and ensure all checks pass.
+- Manual smoke test on localhost:
+  1) Repeated drag/dock/undock/resize across both rails (no overlap, no jitter loops)
+  2) Bright Day mode + slider adjustment (no ring artifact, stable brightness)
+  3) Right and left dock reveal alignment parity
+  4) No `Maximum update depth exceeded` warnings during interaction churn
+

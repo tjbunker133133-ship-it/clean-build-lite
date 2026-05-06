@@ -1,40 +1,18 @@
-import { useCallback, useEffect, useState } from 'react'
 import HudPanel from './HudPanel'
+import { usePanelData } from '../context/PanelDataContext'
 import { useGPS } from '../hooks/useGPS'
-import { fetchWeather, type WeatherResult } from '../lib/weather'
 
 export default function WeatherPanel() {
   const gps = useGPS()
-  const [weather, setWeather] = useState<WeatherResult | null>(null)
-  const [loading, setLoading] = useState(false)
+  const {
+    userLocation,
+    weather,
+    weatherLoading,
+    panelsLocationBlocked,
+    refreshPanelData,
+  } = usePanelData()
 
-  const refresh = useCallback(async () => {
-    setLoading(true)
-    const result = await fetchWeather(gps.lat, gps.lng)
-    setWeather(result)
-    setLoading(false)
-  }, [gps.lat, gps.lng])
-
-  useEffect(() => {
-    if (gps.lat == null || gps.lng == null) return
-    void refresh()
-  }, [gps.lat, gps.lng, refresh])
-
-  useEffect(() => {
-    const id = window.setInterval(() => {
-      void refresh()
-    }, 120000)
-    return () => clearInterval(id)
-  }, [refresh])
-
-  useEffect(() => {
-    const onRefresh = () => {
-      void refresh()
-    }
-    window.addEventListener('hud:weather-refresh', onRefresh)
-    return () => window.removeEventListener('hud:weather-refresh', onRefresh)
-  }, [refresh])
-
+  const coordsReady = userLocation != null && !panelsLocationBlocked
   const hasData = !!weather && !('error' in weather)
 
   return (
@@ -46,6 +24,11 @@ export default function WeatherPanel() {
       minHeight={170}
     >
       <div style={{ display: 'grid', gap: 8 }}>
+        {panelsLocationBlocked && (
+          <p style={{ margin: 0, fontSize: 12, color: '#f0b4bf', lineHeight: 1.45 }}>
+            Enable location to use weather and elevation features
+          </p>
+        )}
         <div
           style={{
             border: '1px solid rgba(199,206,198,0.28)',
@@ -66,7 +49,13 @@ export default function WeatherPanel() {
             {hasData ? `${weather.temperature}${weather.unit}` : '--'}
           </div>
           <div style={{ fontSize: 12, color: 'var(--cockpit-panel-subtle)' }}>
-            {loading ? 'Updating weather...' : hasData ? weather.condition : 'Waiting for location...'}
+            {weatherLoading
+              ? 'Updating weather...'
+              : hasData
+                ? weather.condition
+                : coordsReady
+                  ? 'Loading…'
+                  : 'Waiting for location...'}
           </div>
           <div style={{ fontSize: 11, color: 'var(--cockpit-panel-subtle)', marginTop: 3 }}>
             {hasData ? weather.location : 'Location: --'}
@@ -83,14 +72,21 @@ export default function WeatherPanel() {
         <button
           type="button"
           data-no-drag
-          onClick={() => void refresh()}
+          disabled={!coordsReady}
+          onClick={() => {
+            console.log('[WEATHER REQUEST]', {
+              lat: gps.lat,
+              lng: gps.lng,
+            })
+            void refreshPanelData()
+          }}
           style={{
             minHeight: 36,
             borderRadius: 8,
             border: '1px solid rgba(199,206,198,0.35)',
-            background: 'rgba(199,206,198,0.14)',
-            color: '#d6ddd6',
-            cursor: 'pointer',
+            background: coordsReady ? 'rgba(199,206,198,0.14)' : 'rgba(199,206,198,0.06)',
+            color: coordsReady ? '#d6ddd6' : 'rgba(214,221,214,0.45)',
+            cursor: coordsReady ? 'pointer' : 'not-allowed',
             fontSize: 11,
             letterSpacing: '0.08em',
           }}

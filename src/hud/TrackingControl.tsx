@@ -7,12 +7,12 @@ export default function TrackingControl() {
 
   const handleRecenter = () => {
     if (!map) return
-    if (gps.lat === null || gps.lng === null) return
+    if (gps.locationState !== 'granted' || gps.lat === null || gps.lng === null) return
 
-    map.easeTo({
+    map.flyTo({
       center: [gps.lng, gps.lat],
       zoom: 15,
-      duration: 800,
+      essential: true,
     })
   }
 

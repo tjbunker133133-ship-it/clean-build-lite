@@ -1,31 +1,40 @@
 import { useEffect, useState } from 'react'
 import HudPanel from './HudPanel'
+import { usePanelData } from '../context/PanelDataContext'
 
-function formatClock(now: Date): string {
-  return now.toLocaleTimeString([], {
+function formatClock(now: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat('en-US', {
     hour: 'numeric',
     minute: '2-digit',
     second: '2-digit',
     hour12: true,
-  })
+    timeZone,
+  }).format(now)
 }
 
-function formatDate(now: Date): string {
-  return now.toLocaleDateString([], {
+function formatDate(now: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat('en-US', {
     weekday: 'short',
     month: 'short',
     day: 'numeric',
     year: 'numeric',
-  })
+    timeZone,
+  }).format(now)
 }
 
 export default function ClockPanel() {
-  const [time, setTime] = useState(new Date())
+  const { locationTimeZone, panelsLocationBlocked } = usePanelData()
+  const fallbackTz =
+    typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC' : 'UTC'
+  const activeTz = locationTimeZone ?? fallbackTz
+  const [, setTick] = useState(0)
 
   useEffect(() => {
-    const t = setInterval(() => setTime(new Date()), 1000)
-    return () => clearInterval(t)
+    const t = window.setInterval(() => setTick((n) => n + 1), 1000)
+    return () => window.clearInterval(t)
   }, [])
+
+  const now = new Date()
 
   return (
     <HudPanel
@@ -35,6 +44,19 @@ export default function ClockPanel() {
       initialWidth={220}
       minHeight={82}
     >
+      {panelsLocationBlocked && (
+        <div
+          style={{
+            fontSize: 10,
+            color: '#f0b4bf',
+            textAlign: 'center',
+            marginBottom: 6,
+            lineHeight: 1.35,
+          }}
+        >
+          Enable location to use weather and elevation features
+        </div>
+      )}
       <div
         style={{
           fontFamily: 'var(--font-mono)',
@@ -47,7 +69,7 @@ export default function ClockPanel() {
           textShadow: '0 0 12px rgba(199,206,198,0.25)',
         }}
       >
-        {formatClock(time)}
+        {formatClock(now, activeTz)}
       </div>
       <div
         style={{
@@ -59,7 +81,7 @@ export default function ClockPanel() {
           textTransform: 'uppercase',
         }}
       >
-        {formatDate(time)}
+        {formatDate(now, activeTz)}
       </div>
       <div
         style={{
@@ -72,7 +94,7 @@ export default function ClockPanel() {
           marginTop: 2,
         }}
       >
-        Local Time
+        {locationTimeZone ? 'Location solar time' : 'Device timezone'}
       </div>
     </HudPanel>
   )

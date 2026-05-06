@@ -6,12 +6,26 @@ const expected = `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
+    />
+    <meta name="color-scheme" content="dark" />
     <meta name="theme-color" content="#0a0c0d" />
+    <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="TacticalHUD" />
+    <meta name="format-detection" content="telephone=no" />
     <link rel="apple-touch-icon" href="/hud-icon.svg" />
+    <!-- DNS + TLS warm-up: mapStyles.ts tiles, weather / elevation / nominatim -->
+    <link rel="dns-prefetch" href="https://tile.openstreetmap.org" />
+    <link rel="dns-prefetch" href="https://api.open-meteo.com" />
+    <link rel="dns-prefetch" href="https://nominatim.openstreetmap.org" />
+    <link rel="dns-prefetch" href="https://services.arcgisonline.com" />
+    <link rel="dns-prefetch" href="https://tile.opentopomap.org" />
+    <link rel="preconnect" href="https://tile.openstreetmap.org" crossorigin />
+    <link rel="preconnect" href="https://api.open-meteo.com" crossorigin />
     <title>Tactical HUD</title>
   </head>
   <body>

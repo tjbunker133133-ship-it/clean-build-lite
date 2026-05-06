@@ -2,6 +2,7 @@ import React, { Suspense, lazy } from 'react'
 import { AppProvider } from './context/AppContext'
 import { CockpitProvider } from './context/CockpitContext'
 import { MapProvider } from './context/MapContext'
+import { PanelDataProvider } from './context/PanelDataContext'
 import TopBar from './hud/TopBar'
 import LayerPanel from './hud/LayerPanel'
 import WaypointTypePanel from './hud/WaypointTypePanel'
@@ -12,6 +13,7 @@ import CockpitKeyboard from './hud/CockpitKeyboard'
 import CockpitEdgeZones from './hud/CockpitEdgeZones'
 import CockpitLayoutHotspot from './hud/CockpitLayoutHotspot'
 import CockpitHudShell from './hud/CockpitHudShell'
+import DisplayModeOverlay from './hud/DisplayModeOverlay'
 import ElevationReadout from './hud/ElevationReadout'
 import PermissionPromptOverlay from './hud/PermissionPromptOverlay'
 import SwUpdateBanner from './hud/SwUpdateBanner'
@@ -34,6 +36,7 @@ export default function App() {
   return (
     <AppProvider>
       <CockpitProvider>
+      <PanelDataProvider>
       <MapProvider>
         {/* Full-screen container */}
         <div
@@ -100,8 +103,10 @@ export default function App() {
               <CommandPalette />
             </Suspense>
           </CockpitHudShell>
+          <DisplayModeOverlay />
         </div>
       </MapProvider>
+      </PanelDataProvider>
       </CockpitProvider>
     </AppProvider>
   )

@@ -5,6 +5,9 @@ import { useAppContext } from '../context/AppContext'
 import type { WaypointType } from '../types'
 import { haversineDistance, formatDistance } from '../lib/haversine'
 
+/** Micro-shift so visual circle tip meets route vertex ([y negative] = nudge up). Tune: [0,-1] … [0,-3] or ±x for horizontal. */
+const WAYPOINT_PIN_OFFSET_PX: [number, number] = [0, -2]
+
 function markerVisual(type: WaypointType): { color: string; symbol: string } {
   if (type === 'water') return { color: '#38bdf8', symbol: '💧' }
   if (type === 'camp') return { color: '#34d399', symbol: '⛺' }
@@ -13,12 +16,25 @@ function markerVisual(type: WaypointType): { color: string; symbol: string } {
   return { color: '#f87171', symbol: '•' }
 }
 
+/** `?waypointMarker=default` or `localStorage.hud_waypoint_default_marker=1` → MapLibre built-in marker (diagnostics). */
+function useDefaultWaypointMarkerDebug(): boolean {
+  if (typeof window === 'undefined') return false
+  try {
+    if (window.location.search.includes('waypointMarker=default')) return true
+    if (window.localStorage.getItem('hud_waypoint_default_marker') === '1') return true
+  } catch {
+    /* ignore */
+  }
+  return false
+}
+
 export default function WaypointLayer() {
   const { map } = useMapContext()
   const { state, removeWaypoint, updateWaypoint } = useAppContext()
   const { waypoints, showMapLabels, showMapDistances } = state
 
   const markersRef = useRef<Record<string, maplibregl.Marker>>({})
+  const labelMarkersRef = useRef<Record<string, maplibregl.Marker>>({})
   const segmentMarkersRef = useRef<maplibregl.Marker[]>([])
   const rebuildRafRef = useRef<number | null>(null)
   const [overlaysReady, setOverlaysReady] = useState(false)
@@ -58,83 +74,90 @@ export default function WaypointLayer() {
       // clear old markers safely
       Object.values(markersRef.current).forEach((m) => m.remove())
       markersRef.current = {}
+      Object.values(labelMarkersRef.current).forEach((m) => m.remove())
+      labelMarkersRef.current = {}
       segmentMarkersRef.current.forEach((m) => m.remove())
       segmentMarkersRef.current = []
+
+      const debugDefaultMarker = useDefaultWaypointMarkerDebug()
 
       // rebuild markers
       waypoints.forEach((wp) => {
         if (!wp) return
 
-        const hit = document.createElement('div')
-        const el = document.createElement('div')
         const v = markerVisual(wp.type)
-        hit.style.width = '44px'
-        hit.style.height = '44px'
-        hit.style.display = 'flex'
-        hit.style.alignItems = 'center'
-        hit.style.justifyContent = 'center'
-        hit.style.touchAction = 'none'
-        hit.style.cursor = 'pointer'
-        el.style.width = lowPowerMode ? '22px' : '26px'
-        el.style.height = lowPowerMode ? '22px' : '26px'
-        el.style.borderRadius = '999px'
-        el.style.background = lowPowerMode
+
+        if (debugDefaultMarker) {
+          const marker = new maplibregl.Marker({
+            draggable: true,
+            color: v.color,
+            scale: 1,
+            anchor: 'bottom',
+            offset: WAYPOINT_PIN_OFFSET_PX,
+            pitchAlignment: 'map',
+            rotationAlignment: 'map',
+            subpixelPositioning: true,
+          })
+            .setLngLat([wp.lng, wp.lat])
+            .addTo(map)
+          marker.on('dragstart', () => {
+            map.dragPan.disable()
+          })
+          marker.on('dragend', () => {
+            map.dragPan.enable()
+            const pos = marker.getLngLat()
+            updateWaypoint(wp.id, { lng: pos.lng, lat: pos.lat })
+          })
+          marker.getElement().addEventListener('contextmenu', (ev) => {
+            ev.preventDefault()
+            ev.stopPropagation()
+            const ok = window.confirm(`Delete waypoint "${wp.label}"?`)
+            if (ok) removeWaypoint(wp.id)
+          })
+          markersRef.current[wp.id] = marker
+          if (overlaysReady && showMapLabels) {
+            const labelEl = document.createElement('div')
+            labelEl.className = 'waypoint-label-float'
+            if (!lowPowerMode) {
+              labelEl.style.boxShadow = '0 1px 4px rgba(0,0,0,0.45)'
+            }
+            labelEl.innerText = wp.label ?? ''
+            const labelMarker = new maplibregl.Marker({
+              element: labelEl,
+              anchor: 'top',
+              offset: [0, 4],
+              pitchAlignment: 'map',
+              rotationAlignment: 'map',
+            })
+              .setLngLat([wp.lng, wp.lat])
+              .addTo(map)
+            labelMarkersRef.current[wp.id] = labelMarker
+          }
+          return
+        }
+
+        const root = document.createElement('div')
+        root.className = 'marker'
+        root.dataset.lowPower = lowPowerMode ? '1' : '0'
+
+        const icon = document.createElement('div')
+        icon.className = 'marker-icon'
+        icon.style.background = lowPowerMode
           ? v.color
           : `radial-gradient(circle at 30% 25%, #ffffff, ${v.color})`
-        el.style.border = lowPowerMode ? '1px solid rgba(255,255,255,0.8)' : '2px solid rgba(255,255,255,0.9)'
-        el.style.boxShadow = lowPowerMode ? '0 1px 3px rgba(0,0,0,0.3)' : `0 0 16px ${v.color}66, 0 2px 8px rgba(0,0,0,0.45)`
-        el.style.cursor = 'pointer'
-        el.style.display = 'flex'
-        el.style.alignItems = 'center'
-        el.style.justifyContent = 'center'
-        el.style.fontSize = lowPowerMode ? '11px' : '13px'
-        el.style.userSelect = 'none'
-        el.textContent = v.symbol
-        hit.appendChild(el)
+        icon.style.border = lowPowerMode ? '1px solid rgba(255,255,255,0.8)' : '2px solid rgba(255,255,255,0.9)'
+        icon.style.boxShadow = lowPowerMode
+          ? '0 1px 3px rgba(0,0,0,0.3)'
+          : `0 0 16px ${v.color}66, 0 2px 8px rgba(0,0,0,0.45)`
+        icon.textContent = v.symbol
+        root.appendChild(icon)
 
         const deleteBadge = document.createElement('button')
         deleteBadge.type = 'button'
+        deleteBadge.className = 'marker-badge'
         deleteBadge.textContent = '×'
-        deleteBadge.style.position = 'absolute'
-        deleteBadge.style.top = '-4px'
-        deleteBadge.style.right = '-4px'
-        deleteBadge.style.width = '18px'
-        deleteBadge.style.height = '18px'
-        deleteBadge.style.borderRadius = '999px'
-        deleteBadge.style.border = '1px solid rgba(255,255,255,0.75)'
-        deleteBadge.style.background = 'rgba(150,35,52,0.9)'
-        deleteBadge.style.color = '#ffe8ee'
-        deleteBadge.style.fontSize = '12px'
-        deleteBadge.style.lineHeight = '1'
-        deleteBadge.style.padding = '0'
-        deleteBadge.style.display = 'grid'
-        deleteBadge.style.placeItems = 'center'
-        deleteBadge.style.cursor = 'pointer'
-        deleteBadge.style.boxShadow = '0 1px 6px rgba(0,0,0,0.45)'
-        deleteBadge.style.touchAction = 'manipulation'
-        deleteBadge.style.pointerEvents = 'auto'
         deleteBadge.setAttribute('aria-label', `Delete waypoint ${wp.label}`)
-        hit.style.position = 'relative'
-        hit.appendChild(deleteBadge)
-
-        if (overlaysReady && showMapLabels) {
-          const label = document.createElement('div')
-          label.style.position = 'absolute'
-          label.style.top = '30px'
-          label.style.left = '50%'
-          label.style.transform = 'translateX(-50%)'
-          label.style.fontSize = '11px'
-          label.style.letterSpacing = '0.02em'
-          label.style.color = '#ecf4ff'
-          label.style.background = 'linear-gradient(180deg, rgba(6,10,16,0.86), rgba(8,12,20,0.68))'
-          label.style.padding = '3px 8px'
-          label.style.borderRadius = '999px'
-          label.style.border = '1px solid #3a4250'
-          label.style.boxShadow = lowPowerMode ? 'none' : '0 1px 4px rgba(0,0,0,0.45)'
-          label.style.whiteSpace = 'nowrap'
-          label.innerText = wp.label ?? ''
-          hit.appendChild(label)
-        }
+        root.appendChild(deleteBadge)
 
         const askDelete = () => {
           const ok = window.confirm(`Delete waypoint "${wp.label}"?`)
@@ -150,17 +173,21 @@ export default function WaypointLayer() {
           ev.stopPropagation()
           askDelete()
         })
-        // Desktop and some Android browsers: right click / long-press context menu.
-        hit.addEventListener('contextmenu', (ev) => {
+        root.addEventListener('contextmenu', (ev) => {
           ev.preventDefault()
           ev.stopPropagation()
           askDelete()
         })
 
         const marker = new maplibregl.Marker({
-          element: hit,
+          element: root,
           draggable: true,
           clickTolerance: 4,
+          anchor: 'bottom',
+          offset: WAYPOINT_PIN_OFFSET_PX,
+          pitchAlignment: 'map',
+          rotationAlignment: 'map',
+          subpixelPositioning: true,
         })
           .setLngLat([wp.lng, wp.lat])
           .addTo(map)
@@ -173,6 +200,25 @@ export default function WaypointLayer() {
           updateWaypoint(wp.id, { lng: pos.lng, lat: pos.lat })
         })
         markersRef.current[wp.id] = marker
+
+        if (overlaysReady && showMapLabels) {
+          const labelEl = document.createElement('div')
+          labelEl.className = 'waypoint-label-float'
+          if (!lowPowerMode) {
+            labelEl.style.boxShadow = '0 1px 4px rgba(0,0,0,0.45)'
+          }
+          labelEl.innerText = wp.label ?? ''
+          const labelMarker = new maplibregl.Marker({
+            element: labelEl,
+            anchor: 'top',
+            offset: [0, 4],
+            pitchAlignment: 'map',
+            rotationAlignment: 'map',
+          })
+            .setLngLat([wp.lng, wp.lat])
+            .addTo(map)
+          labelMarkersRef.current[wp.id] = labelMarker
+        }
       })
 
       if (overlaysReady && showMapDistances && waypoints.length >= 2) {
@@ -199,7 +245,12 @@ export default function WaypointLayer() {
           segEl.style.whiteSpace = 'nowrap'
           segEl.textContent = text
 
-          const segMarker = new maplibregl.Marker({ element: segEl, anchor: 'center' })
+          const segMarker = new maplibregl.Marker({
+            element: segEl,
+            anchor: 'center',
+            pitchAlignment: 'map',
+            rotationAlignment: 'map',
+          })
             .setLngLat([midLng, midLat])
             .addTo(map)
           segmentMarkersRef.current.push(segMarker)
@@ -221,8 +272,10 @@ export default function WaypointLayer() {
         rebuildRafRef.current = null
       }
       Object.values(markersRef.current).forEach((m) => m.remove())
+      Object.values(labelMarkersRef.current).forEach((m) => m.remove())
       segmentMarkersRef.current.forEach((m) => m.remove())
       markersRef.current = {}
+      labelMarkersRef.current = {}
       segmentMarkersRef.current = []
     }
   }, [])

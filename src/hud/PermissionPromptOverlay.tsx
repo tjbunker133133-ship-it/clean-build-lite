@@ -5,6 +5,8 @@ import PermissionWizard from './PermissionWizard'
 
 const KEY = 'hud_permission_overlay_seen_v1'
 const APPLE_GPS_STUCK_MS = 10_000
+const WIZARD_COMPLETED_KEY = 'wizardCompleted'
+const GPS_PERMISSION_KEY = 'gpsPermission'
 
 function sensorApisAvailable() {
   const orient = typeof (DeviceOrientationEvent as any)?.requestPermission === 'function'
@@ -71,11 +73,18 @@ export default function PermissionPromptOverlay() {
 
   useEffect(() => {
     const seen = localStorage.getItem(KEY) === '1'
+    const wizardCompleted = localStorage.getItem(WIZARD_COMPLETED_KEY) === 'true'
+    const persistedGpsGranted = localStorage.getItem(GPS_PERMISSION_KEY) === 'granted'
     void getPermissionSnapshot().then((s) => {
       setGeo(s.geolocation)
       setMic(s.microphone)
       setNotif(s.notifications)
-      if (!seen && (s.geolocation !== 'granted' || s.microphone !== 'granted')) {
+      if (s.geolocation === 'granted' || s.geolocation === 'denied') {
+        localStorage.setItem(GPS_PERMISSION_KEY, s.geolocation)
+      }
+      const gpsGranted = s.geolocation === 'granted' || persistedGpsGranted
+      const shouldShowWizard = !wizardCompleted || !gpsGranted
+      if (!seen && shouldShowWizard) {
         setVisible(true)
       }
     })
@@ -127,6 +136,9 @@ export default function PermissionPromptOverlay() {
         setGeo(s.geolocation)
         setMic(s.microphone)
         setNotif(s.notifications)
+        if (s.geolocation === 'granted' || s.geolocation === 'denied') {
+          localStorage.setItem(GPS_PERMISSION_KEY, s.geolocation)
+        }
       })
     }
     window.addEventListener('hud:show-permissions', onShow)
@@ -135,6 +147,7 @@ export default function PermissionPromptOverlay() {
 
   const close = useCallback(() => {
     localStorage.setItem(KEY, '1')
+    localStorage.setItem(WIZARD_COMPLETED_KEY, 'true')
     setVisible(false)
   }, [])
 

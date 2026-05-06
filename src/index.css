@@ -26,6 +26,13 @@ html, body {
   -webkit-tap-highlight-color: transparent;
 }
 
+.hud-readout {
+  font-size: 11px;
+  color: #c7cec6;
+  letter-spacing: 0.06em;
+  margin-top: 6px;
+}
+
 /*
  * REGRESSION: Never use width/height !important on .maplibregl-map or .maplibregl-canvas.
  * MapLibre sets canvas backing-store size; overriding it causes a blank/green WebGL view.
@@ -41,6 +48,105 @@ html, body {
   display: block;
 }
 
+/*
+ * Waypoint pin: fixed 24×24 for MapLibre anchor: bottom only — never add translate(...) here (competes with MapLibre).
+ */
+.marker {
+  position: relative;
+  width: 24px;
+  height: 24px;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+  touch-action: none;
+  cursor: pointer;
+  image-rendering: pixelated;
+  will-change: transform;
+}
+
+.marker .marker-icon {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  user-select: none;
+}
+
+.marker .marker-badge {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  top: auto;
+  left: auto;
+  width: 8px;
+  height: 8px;
+  margin: 0;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.75);
+  background: rgba(150, 35, 52, 0.9);
+  color: #ffe8ee;
+  font-size: 6px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  touch-action: manipulation;
+  pointer-events: auto;
+  box-sizing: border-box;
+}
+
+/* CLEAR ROUTE command — must win over generic .cockpit-panel button rules */
+.cockpit-panel button.waypoint-clear,
+button.waypoint-clear {
+  background: #ef4444 !important;
+  color: #ffffff !important;
+  border: 2px solid #fbbf24 !important;
+  padding: 9px 12px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  min-height: 44px;
+  min-width: 140px;
+  cursor: pointer;
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-shrink: 0;
+  visibility: visible !important;
+  opacity: 1;
+}
+
+.cockpit-panel button.waypoint-clear:disabled,
+button.waypoint-clear:disabled {
+  opacity: 0.5 !important;
+  cursor: not-allowed;
+}
+
+.waypoint-label-float {
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: #ecf4ff;
+  background: linear-gradient(180deg, rgba(6, 10, 16, 0.86), rgba(8, 12, 20, 0.68));
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid #3a4250;
+  white-space: nowrap;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 :root {
   /* Nightforce v2 defaults — aligned with CockpitProvider PREFS_DEFAULT */
   --cockpit-glass-intensity: 0.4;
@@ -51,13 +157,57 @@ html, body {
   --cockpit-blur-max: 16px;
 }
 
+/* Display modes: tint map + HUD via full-screen overlay (pointer-events: none). Do not CSS-filter MapLibre canvas. */
+#display-mode-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  /* Above CockpitHudShell (100) so backdrop-filter affects entire viewport; clicks pass through */
+  z-index: 120;
+}
+
+#display-mode-overlay.mode-bright {
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: brightness(1.2) contrast(1.2);
+  -webkit-backdrop-filter: brightness(1.2) contrast(1.2);
+}
+
+#display-mode-overlay.mode-lowlight {
+  background: rgba(0, 0, 0, 0.35);
+  backdrop-filter: brightness(0.75) contrast(0.9) saturate(0.8);
+  -webkit-backdrop-filter: brightness(0.75) contrast(0.9) saturate(0.8);
+}
+
+#display-mode-overlay.mode-red {
+  background: rgba(255, 0, 0, 0.15);
+  backdrop-filter: grayscale(1) contrast(1.1);
+  -webkit-backdrop-filter: grayscale(1) contrast(1.1);
+  mix-blend-mode: multiply;
+}
+
+/* Red Ops: stronger panel chrome + control contrast (overlay math unchanged). Class on `html` from CockpitContext. */
+html.mode-red .cockpit-panel {
+  color: #f2f2f2;
+  text-shadow: 0 0 2px rgba(0, 0, 0, 0.8);
+}
+
+html.mode-red .cockpit-panel button:not(.waypoint-clear) {
+  color: #e0e0e0;
+  border-color: #cc0000;
+}
+
+.cockpit-panel {
+  background: rgba(20, 20, 20, 0.6);
+}
+
+/* Note: filter on the map subtree can slightly affect HTML marker compositing vs WebGL; precision work assumes default (no filter). */
 html.cockpit-high-contrast .maplibregl-map {
   filter: contrast(1.15) brightness(1.05);
 }
 
 html.platform-ios .cockpit-panel {
-  backdrop-filter: blur(10px) saturate(1.06);
-  -webkit-backdrop-filter: blur(10px) saturate(1.06);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   box-shadow: 0 6px 20px rgba(0,0,0,0.46), 0 0 0 1px rgba(199,206,198,0.26) !important;
 }
 
@@ -75,8 +225,8 @@ html.platform-ios .cockpit-panel button:hover {
 }
 
 html.platform-android .cockpit-panel {
-  backdrop-filter: blur(10px) saturate(1.06);
-  -webkit-backdrop-filter: blur(10px) saturate(1.06);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   box-shadow: 0 8px 28px rgba(0,0,0,0.58), 0 0 0 1px rgba(125,255,138,0.28) !important;
   max-width: min(94vw, 400px) !important;
 }

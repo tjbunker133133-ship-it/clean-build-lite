@@ -8,6 +8,8 @@ export type WeatherResult =
       location: string
       weatherCode: number
       updatedAt: number
+      /** IANA zone from Open-Meteo when `timezone=auto` (for location-based clock). */
+      timeZone?: string
     }
   | { error: string }
 
@@ -37,10 +39,11 @@ export function weatherDescription(code: number): string {
   return codes[code] ?? 'Unknown conditions'
 }
 
-async function reverseLocation(lat: number, lon: number): Promise<string> {
+async function reverseLocation(lat: number, lon: number, signal?: AbortSignal): Promise<string> {
   try {
     const r = await fetch(
       `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}&zoom=10&addressdetails=1`,
+      { signal },
     )
     if (!r.ok) return `${lat.toFixed(4)}, ${lon.toFixed(4)}`
     const data = await r.json()
@@ -55,18 +58,28 @@ async function reverseLocation(lat: number, lon: number): Promise<string> {
   }
 }
 
-export async function fetchWeather(lat: number | null, lon: number | null): Promise<WeatherResult> {
+export type FetchWeatherOptions = { signal?: AbortSignal }
+
+export async function fetchWeather(
+  lat: number | null,
+  lon: number | null,
+  opts?: FetchWeatherOptions,
+): Promise<WeatherResult> {
+  const { signal } = opts ?? {}
   if (lat == null || lon == null) return { error: 'No GPS fix available' }
   try {
     const [response, location] = await Promise.all([
       fetch(
         `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true&temperature_unit=fahrenheit&windspeed_unit=mph&timezone=auto`,
+        { signal },
       ),
-      reverseLocation(lat, lon),
+      reverseLocation(lat, lon, signal),
     ])
     if (!response.ok) return { error: `Weather service error (${response.status})` }
     const data = await response.json()
     if (!data?.current_weather) return { error: 'No weather data' }
+
+    const timeZone = typeof data.timezone === 'string' ? data.timezone : undefined
 
     const out = {
       temperature: Math.round(Number(data.current_weather.temperature ?? 0)),
@@ -77,6 +90,7 @@ export async function fetchWeather(lat: number | null, lon: number | null): Prom
       location,
       weatherCode: Number(data.current_weather.weathercode ?? -1),
       updatedAt: Date.now(),
+      ...(timeZone ? { timeZone } : {}),
     }
 
     try {
@@ -86,6 +100,9 @@ export async function fetchWeather(lat: number | null, lon: number | null): Prom
     }
     return out
   } catch (err) {
+    if (signal?.aborted || (err instanceof DOMException && err.name === 'AbortError')) {
+      throw err
+    }
     try {
       const cached = localStorage.getItem(WEATHER_CACHE_KEY)
       if (cached) {

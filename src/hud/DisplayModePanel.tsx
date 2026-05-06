@@ -3,22 +3,31 @@ import HudPanel from './HudPanel'
 import { useCockpit } from '../context/CockpitContext'
 import type { ScreenHueMode } from '../types/cockpit'
 
+// ⚠️ LOCKED SYSTEM — Behavior Freeze Active
+// Any change to interaction, layout, display modes, or layers requires explicit approval.
+
 const HUE_BUTTONS: { mode: ScreenHueMode; label: string; hint: string }[] = [
   { mode: 'low_light', label: 'LOW LIGHT', hint: 'near-black battery saver' },
   { mode: 'bright_day', label: 'BRIGHT DAY', hint: 'maximum daylight readability' },
-  { mode: 'red_tactical', label: 'RED OPS', hint: 'night vision red dominance' },
+  { mode: 'red_tactical', label: 'RED OPS', hint: 'night-adapted HUD; panels use brighter red text & borders' },
 ]
 
 export default function DisplayModePanel() {
   const { prefs, setScreenHue, setDisplayTuning } = useCockpit()
   const active = prefs.screen_hue
+  // 🔒 CONTRACT: Display mode calibration is locked.
+  // - Red Ops color + contrast must remain unchanged
+  // - Low Light minimum must remain readable
+  // - Slider range and scaling must remain as calibrated
+  // - Sliders override presets
+  // Do NOT modify brightness math or scaling
   const sliderStyle: CSSProperties = {
     width: '100%',
     accentColor: active === 'red_tactical' ? '#ff5c7a' : '#9fe4ad',
   }
   const resetCurrentMode = () => {
     if (active === 'low_light') {
-      setDisplayTuning({ low_hud_brightness: 0.9, low_map_brightness: 0.14 })
+      setDisplayTuning({ low_hud_brightness: 0.96, low_map_brightness: 0.2 })
       return
     }
     if (active === 'bright_day') {
@@ -31,8 +40,8 @@ export default function DisplayModePanel() {
   }
   const applyNightPreset = () => {
     setDisplayTuning({
-      low_hud_brightness: 0.92,
-      low_map_brightness: 0.3,
+      low_hud_brightness: 0.98,
+      low_map_brightness: 0.34,
       bright_hud_brightness: 1.32,
       bright_map_brightness: 1.18,
       red_hue_rotate: -50,

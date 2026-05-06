@@ -22,6 +22,12 @@ import {
 } from '../types/cockpit'
 import { cockpitViewport } from '../lib/viewport'
 
+declare global {
+  // TEMP render-phase detector
+  // eslint-disable-next-line no-var
+  var __COCKPIT_RENDER_IN_PROGRESS__: boolean | undefined
+}
+
 const PREFS_DEFAULT: CockpitPrefs = {
   /** 8 + intensity*20 ≈ 16px blur at 0.4 — COCKPIT_UX v2 */
   glass_intensity: 0.4,
@@ -31,8 +37,8 @@ const PREFS_DEFAULT: CockpitPrefs = {
   animations_enabled: true,
   layout_version: 'nightforce_v3',
   screen_hue: 'bright_day',
-  low_hud_brightness: 0.9,
-  low_map_brightness: 0.14,
+  low_hud_brightness: 0.96,
+  low_map_brightness: 0.2,
   bright_hud_brightness: 1.32,
   bright_map_brightness: 1.18,
   red_hue_rotate: -62,
@@ -48,10 +54,11 @@ interface StoredState {
   prefs: CockpitPrefs
 }
 
+const LAYOUT_VERSION = 2
 type DevicePreset = 'iphone' | 'android' | 'tablet' | 'desktop'
 const DEVICE_TUNE_VERSION = 'device_tune_v2'
 const DOCK_EDGE_INSET_PX = 8
-const DOCKED_PANEL_STACK_PX = 8
+const DOCKED_PANEL_STACK_PX = 0
 const DOCKED_PANEL_MIN_HEIGHT_PX = 76
 const DOCKED_PANEL_MAX_HEIGHT_PX = 92
 const DOCKED_PANEL_WIDTH_PX = 280
@@ -85,9 +92,14 @@ function loadState(): StoredState | null {
   try {
     const raw = localStorage.getItem(COCKPIT_STORAGE_KEY)
     if (!raw) return null
-    const o = JSON.parse(raw) as StoredState
-    if (!o || o.v !== 2 || !o.panels || !o.prefs) return null
-    return o
+    const o = JSON.parse(raw) as Partial<StoredState> | null
+    if (!o || o.v !== LAYOUT_VERSION) return null
+    const panels = o.panels && typeof o.panels === 'object' ? (o.panels as PanelMap) : {}
+    const prefs =
+      o.prefs && typeof o.prefs === 'object'
+        ? ({ ...PREFS_DEFAULT, ...(o.prefs as Partial<CockpitPrefs>) } as CockpitPrefs)
+        : PREFS_DEFAULT
+    return { v: LAYOUT_VERSION, panels, prefs }
   } catch {
     return null
   }
@@ -231,7 +243,7 @@ function deviceOptimizationPrefs(device: DevicePreset): Partial<CockpitPrefs> {
 
 function saveState(panels: PanelMap, prefs: CockpitPrefs) {
   try {
-    const body: StoredState = { v: 2, panels, prefs }
+    const body: StoredState = { v: LAYOUT_VERSION, panels, prefs }
     localStorage.setItem(COCKPIT_STORAGE_KEY, JSON.stringify(body))
   } catch {
     /* ignore */
@@ -273,9 +285,12 @@ function computeDockMetrics(vh: number, count: number) {
   return { minY, maxY, step, height }
 }
 
+/** Minimum visible gap between floating panels (kiss / snap — never overlap). */
+const PANEL_KISS_GAP_PX = 8
+
 function panelGapPx(prefs?: Partial<CockpitPrefs>): number {
   const raw = prefs?.panel_gap_px ?? 0
-  return Math.max(0, Math.min(24, Math.round(raw)))
+  return Math.max(PANEL_KISS_GAP_PX, Math.max(0, Math.min(24, Math.round(raw))))
 }
 
 function normalizeNoOverlapLayout(panels: PanelMap, gapPx = 0): PanelMap {
@@ -302,7 +317,7 @@ function normalizeNoOverlapLayout(panels: PanelMap, gapPx = 0): PanelMap {
       const slot = Math.min(slotCount - 1, idx)
       const p = next[id]
       p.w = DOCKED_PANEL_WIDTH_PX
-      p.y = snap(Math.max(minY, Math.min(minY + slot * step, maxY)))
+      p.y = Math.max(minY, Math.min(minY + slot * step, maxY))
       p.x =
         side === 'right'
           ? Math.max(0, vw - p.w - DOCK_EDGE_INSET_PX)
@@ -401,7 +416,7 @@ interface CockpitContextValue {
 const CockpitContext = createContext<CockpitContextValue | null>(null)
 
 const DEFAULT_PANELS = (): PanelMap => ({
-  layers: { x: 16, y: 60, w: 160, h: null, z: 400, minimized: false },
+  layers: { x: 16, y: 60, w: 160, h: null, z: 400, minimized: false, docked: true, dockSide: 'left' },
   waypoints: {
     x: 20,
     y: typeof window !== 'undefined' ? Math.max(80, window.innerHeight - 140) : 400,
@@ -409,6 +424,8 @@ const DEFAULT_PANELS = (): PanelMap => ({
     h: null,
     z: 401,
     minimized: false,
+    docked: true,
+    dockSide: 'left',
   },
   deadman: {
     x: 16,
@@ -417,20 +434,23 @@ const DEFAULT_PANELS = (): PanelMap => ({
     h: null,
     z: 402,
     minimized: false,
+    docked: true,
+    dockSide: 'left',
   },
-  coords: { x: 16, y: 280, w: 280, h: null, z: 403, minimized: false },
-  elevation: { x: 420, y: 60, w: 240, h: null, z: 404, minimized: false },
-  clock: { x: 760, y: 60, w: 260, h: null, z: 405, minimized: false },
-  display: { x: 1040, y: 60, w: 280, h: null, z: 406, minimized: false },
-  location: { x: 1220, y: 60, w: 300, h: null, z: 407, minimized: false },
-  voice: { x: 1220, y: 260, w: 340, h: null, z: 408, minimized: false },
-  weather: { x: 1220, y: 500, w: 300, h: null, z: 409, minimized: false },
-  presets: { x: 760, y: 200, w: 300, h: null, z: 410, minimized: false },
-  sos: { x: 1080, y: 420, w: 280, h: null, z: 411, minimized: false },
-  preflight: { x: 16, y: 180, w: 320, h: null, z: 412, minimized: false },
+  coords: { x: 16, y: 280, w: 280, h: null, z: 403, minimized: false, docked: true, dockSide: 'left' },
+  elevation: { x: 420, y: 60, w: 240, h: null, z: 404, minimized: false, docked: true, dockSide: 'left' },
+  clock: { x: 760, y: 60, w: 260, h: null, z: 405, minimized: false, docked: true, dockSide: 'left' },
+  display: { x: 1040, y: 60, w: 280, h: null, z: 406, minimized: false, docked: true, dockSide: 'left' },
+  location: { x: 1220, y: 60, w: 300, h: null, z: 407, minimized: false, docked: true, dockSide: 'right' },
+  voice: { x: 1220, y: 260, w: 340, h: null, z: 408, minimized: false, docked: true, dockSide: 'right' },
+  weather: { x: 1220, y: 500, w: 300, h: null, z: 409, minimized: false, docked: true, dockSide: 'right' },
+  presets: { x: 760, y: 200, w: 300, h: null, z: 410, minimized: false, docked: true, dockSide: 'left' },
+  sos: { x: 1080, y: 420, w: 280, h: null, z: 411, minimized: false, docked: true, dockSide: 'right' },
+  preflight: { x: 16, y: 180, w: 320, h: null, z: 412, minimized: false, docked: true, dockSide: 'left' },
 })
 
 export function CockpitProvider({ children }: { children: ReactNode }) {
+  globalThis.__COCKPIT_RENDER_IN_PROGRESS__ = true
   const devicePreset = detectDevicePreset()
   const loaded = useRef(loadState())
   const seededPanelsRef = useRef<PanelMap>({
@@ -586,6 +606,15 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
 
   const updatePanel = useCallback(
     (id: string, patch: Partial<CockpitPanelRect>) => {
+      if (
+        import.meta.env.DEV &&
+        globalThis.__COCKPIT_RENDER_IN_PROGRESS__ &&
+        typeof window !== 'undefined' &&
+        ((window as Window & { __HUD_LOOP_DEBUG__?: number }).__HUD_LOOP_DEBUG__ === 1 ||
+          (window as Window & { HUD_LOOP_DEBUG?: number }).HUD_LOOP_DEBUG === 1)
+      ) {
+        console.warn('[GUARD] updatePanel call occurred before render phase flag cleared')
+      }
       setPanels((prev) => {
         const cur =
           prev[id] ??
@@ -774,6 +803,8 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
   const setDisplayTuning = useCallback(
     (patch: Partial<CockpitPrefs>) => {
       setPrefs((p) => {
+        const changed = (Object.keys(patch) as Array<keyof CockpitPrefs>).some((key) => p[key] !== patch[key])
+        if (!changed) return p
         const next = { ...p, ...patch }
         persist(panels, next)
         return next
@@ -829,9 +860,15 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
   }, [])
 
   useEffect(() => {
+    globalThis.__COCKPIT_RENDER_IN_PROGRESS__ = false
+  })
+
+  useEffect(() => {
     document.documentElement.dataset.cockpitScreenHue = prefs.screen_hue
+    document.documentElement.classList.toggle('mode-red', prefs.screen_hue === 'red_tactical')
     return () => {
       delete document.documentElement.dataset.cockpitScreenHue
+      document.documentElement.classList.remove('mode-red')
     }
   }, [prefs.screen_hue])
 

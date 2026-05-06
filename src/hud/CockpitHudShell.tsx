@@ -1,14 +1,10 @@
-import React, { useMemo, type ReactNode } from 'react'
+import React, { type ReactNode } from 'react'
 import { useCockpit } from '../context/CockpitContext'
 import { screenHueFilter } from '../lib/cockpitScreenHue'
 
-/** Wraps all HUD layers except the map so screen hue filters tactical chrome only. */
+/** Wraps all HUD layers except the map. Display modes tint via `#display-mode-overlay` (no shell filter). */
 export default function CockpitHudShell({ children }: { children: ReactNode }) {
-  const { prefs, mapInteractionBlocked } = useCockpit()
-  const hue = useMemo(
-    () => screenHueFilter(prefs.screen_hue, prefs),
-    [prefs],
-  )
+  const { mapInteractionBlocked, prefs } = useCockpit()
   return (
     <div
       style={{
@@ -16,7 +12,7 @@ export default function CockpitHudShell({ children }: { children: ReactNode }) {
         inset: 0,
         zIndex: 100,
         pointerEvents: 'none',
-        ...hue,
+        ...screenHueFilter(prefs.screen_hue, prefs),
       }}
     >
       {mapInteractionBlocked && (

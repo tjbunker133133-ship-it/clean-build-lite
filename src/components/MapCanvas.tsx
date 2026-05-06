@@ -1,11 +1,138 @@
-import { useEffect, useRef, useState } from 'react'
-import maplibregl from 'maplibre-gl'
+import { useEffect, useRef, useState, type MutableRefObject } from 'react'
+import maplibregl, { type GeoJSONSource } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { useMapContext } from '../context/MapContext'
 import { useAppContext } from '../context/AppContext'
 import { useCockpit } from '../context/CockpitContext'
-import { FALLBACK_MAP_STYLE, MAP_STYLES } from '../lib/mapStyles'
-import { mapScreenFilter } from '../lib/cockpitScreenHue'
+import { useGPS } from '../hooks/useGPS'
+import type { LayerType } from '../types'
+import {
+  getStyleUrl,
+  type MapStyleKey,
+  logActiveLayerTileDebug,
+  mapStyleFingerprint,
+  maptilerTerrainRgbTileJson,
+  validatedEmergencyFallbackStyle,
+} from '../lib/mapStyles'
+import { tier1Debug } from '../lib/tier1DebugLog'
+
+const HUD_DEBUG_CLICK_SRC = 'hud-debug-click'
+const HUD_DEBUG_CLICK_LAYER = 'hud-debug-click-circle'
+const TERRAIN_SOURCE_ID = 'hud-maptiler-terrain-rgb'
+
+function createUserMarkerEl() {
+  const el = document.createElement('div')
+  el.style.width = '18px'
+  el.style.height = '18px'
+  el.style.position = 'relative'
+
+  const core = document.createElement('div')
+  core.style.width = '6px'
+  core.style.height = '6px'
+  core.style.borderRadius = '50%'
+  core.style.background = 'rgba(255,255,255,0.95)'
+  core.style.position = 'absolute'
+  core.style.top = '50%'
+  core.style.left = '50%'
+  core.style.transform = 'translate(-50%, -50%)'
+
+  const ring = document.createElement('div')
+  ring.style.width = '18px'
+  ring.style.height = '18px'
+  ring.style.borderRadius = '50%'
+  ring.style.border = '2px solid rgba(255,50,50,0.9)'
+  ring.style.boxShadow = '0 0 10px rgba(255,50,50,0.7)'
+
+  el.appendChild(ring)
+  el.appendChild(core)
+  return el
+}
+
+/** Placeholder icons when sprite entries fail (network / CORS / ad block). */
+function onStyleImageMissingFactory(map: maplibregl.Map) {
+  return (e: { id: string }) => {
+    if (map.hasImage(e.id)) return
+    console.warn('[MAP] Missing sprite image:', e.id)
+    try {
+      const size = 32
+      const canvas = document.createElement('canvas')
+      canvas.width = size
+      canvas.height = size
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return
+      ctx.clearRect(0, 0, size, size)
+      ctx.fillStyle = 'rgba(210, 72, 72, 0.9)'
+      ctx.beginPath()
+      ctx.arc(size / 2, size / 2, size / 4, 0, Math.PI * 2)
+      ctx.fill()
+      map.addImage(e.id, ctx.getImageData(0, 0, size, size))
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+function syncTopoTerrain(map: maplibregl.Map, layer: LayerType) {
+  if (layer === 'topo') {
+    try {
+      if (!map.getSource(TERRAIN_SOURCE_ID)) {
+        map.addSource(TERRAIN_SOURCE_ID, {
+          type: 'raster-dem',
+          url: maptilerTerrainRgbTileJson(),
+          tileSize: 256,
+        })
+      }
+      map.setTerrain({ source: TERRAIN_SOURCE_ID, exaggeration: 1.5 })
+    } catch (e) {
+      console.warn('[MapCanvas] topo terrain sync failed', e)
+    }
+  } else {
+    try {
+      map.setTerrain(null)
+      if (map.getSource(TERRAIN_SOURCE_ID)) map.removeSource(TERRAIN_SOURCE_ID)
+    } catch {
+      /* style churn */
+    }
+  }
+}
+
+/** Layer panel / state use keys only (`LayerType` ≡ `MapStyleKey`); URLs come from `getStyleUrl`. */
+function prepareBasemapSwitch(
+  map: maplibregl.Map,
+  styleKey: MapStyleKey,
+  currentStyleRef: MutableRefObject<string | null>,
+): { skip: true } | { skip: false; url: string } {
+  const nextStyle = getStyleUrl(styleKey)
+  // Never re-apply the same style URL while a load is in flight (`isStyleLoaded` is false).
+  if (currentStyleRef.current === nextStyle) {
+    return { skip: true }
+  }
+  currentStyleRef.current = nextStyle
+  return { skip: false, url: nextStyle }
+}
+
+function mapLibreErrorPayload(raw: unknown): unknown {
+  if (raw && typeof raw === 'object' && 'error' in raw) {
+    return (raw as { error: unknown }).error
+  }
+  return raw
+}
+
+/** When MapTiler style.json fails, allow explicit emergency raster (single OSM preset only). */
+function styleFailureWarrantsEmergencyFallback(raw: unknown): boolean {
+  const err = mapLibreErrorPayload(raw)
+  if (err == null) return false
+  if (typeof err === 'object' && err !== null && 'status' in err) {
+    const s = (err as { status: unknown }).status
+    if (s === 401 || s === 403) return true
+  }
+  const msg = String(err instanceof Error ? err.message : err).toLowerCase()
+  if (msg.includes('unauthorized') || msg.includes('forbidden')) return true
+  if (msg.includes('unable to load style')) return true
+  if (msg.includes('failed to parse style')) return true
+  if (msg.includes('style could not be loaded')) return true
+  return false
+}
 
 /**
  * Map rendering guardrails (see `src/.cursorrules` → MapLibre implementation):
@@ -21,14 +148,20 @@ export default function MapCanvas() {
   const startupResetAttemptsRef = useRef(0)
   const skipLayerSyncRef = useRef(true)
   const [staticFallbackVisible, setStaticFallbackVisible] = useState(true)
-  const { setMap, setStatus } = useMapContext()
+  const [debugClick, setDebugClick] = useState<{ lat: number; lng: number } | null>(null)
+  const [mapReady, setMapReady] = useState(false)
+  const setDebugClickRef = useRef(setDebugClick)
+  setDebugClickRef.current = setDebugClick
+  const { map: mapInstance, setMap, setStatus } = useMapContext()
+  const gps = useGPS()
+  const userMarkerRef = useRef<maplibregl.Marker | null>(null)
   const {
     state,
     addWaypoint,
     setPendingType,
     setNextWaypointLabel,
+    selectWaypoint,
   } = useAppContext()
-  const { prefs } = useCockpit()
   const {
     activeLayer,
     pendingWaypointType,
@@ -37,6 +170,11 @@ export default function MapCanvas() {
     keepWaypointToolArmed,
     clearLabelAfterDrop,
   } = state
+
+  const { panels } = useCockpit()
+  const waypointDropBlockedRef = useRef(false)
+  const wpLayout = panels.waypoints
+  waypointDropBlockedRef.current = wpLayout?.docked === true
 
   const activeLayerRef = useRef(activeLayer)
   activeLayerRef.current = activeLayer
@@ -52,6 +190,15 @@ export default function MapCanvas() {
   const clearLabelAfterDropRef = useRef(clearLabelAfterDrop)
   clearLabelAfterDropRef.current = clearLabelAfterDrop
   const [watchdogNotice, setWatchdogNotice] = useState(false)
+  const styleSwitchGenRef = useRef(0)
+  /** Last applied basemap style URL — duplicate `setStyle` guard. */
+  const currentStyleRef = useRef<string | null>(null)
+  const setStatusRef = useRef(setStatus)
+  setStatusRef.current = setStatus
+
+  useEffect(() => {
+    console.log('[MAP EFFECT] activeLayer changed:', activeLayer)
+  }, [activeLayer])
 
   // Create map once; swap style when base layer changes
   useEffect(() => {
@@ -63,6 +210,7 @@ export default function MapCanvas() {
     let readyOnce = false
     let fallbackLocked = false
     let map: maplibregl.Map | null = null
+    let styleImageMissingHandler: ((e: { id: string }) => void) | null = null
     let lastTouchDropAt = 0
     let lastUserInteractionAt = Date.now()
     let touchMoved = false
@@ -87,6 +235,12 @@ export default function MapCanvas() {
     setStatus('initial')
 
     const STATIC_CENTER = { lng: -105.7821, lat: 39.5501 }
+
+    /** Once per style (not `styledata`, which fires on every tile batch). */
+    const onStyleLoad = () => {
+      if (cancelled || !map) return
+      syncTopoTerrain(map, activeLayerRef.current)
+    }
 
     let lastRw = 0
     let lastRh = 0
@@ -157,8 +311,10 @@ export default function MapCanvas() {
       setStaticFallbackVisible(true)
       setStatus('initial')
 
-      const initialStyle =
-        MAP_STYLES[activeLayerRef.current] ?? FALLBACK_MAP_STYLE
+      const initLayer = activeLayerRef.current
+      const initialStyle = getStyleUrl(initLayer as MapStyleKey)
+      currentStyleRef.current = initialStyle
+      logActiveLayerTileDebug(initLayer)
 
       map = new maplibregl.Map({
         container,
@@ -172,6 +328,9 @@ export default function MapCanvas() {
       mapRef.current = map
       skipLayerSyncRef.current = true
       setWatchdogNotice(false)
+      map.on('style.load', onStyleLoad)
+      styleImageMissingHandler = onStyleImageMissingFactory(map)
+      map.on('styleimagemissing', styleImageMissingHandler)
 
       let renderTimer: number | null = window.setTimeout(() => {
         // Safari/WebKit can occasionally create a black map until a fresh context.
@@ -185,7 +344,11 @@ export default function MapCanvas() {
         setStaticFallbackVisible(true)
         setStatus('fallback')
         try {
-          map?.setStyle(FALLBACK_MAP_STYLE)
+          const emerg = validatedEmergencyFallbackStyle()
+          if (emerg) {
+            currentStyleRef.current = null
+            map?.setStyle(emerg, { diff: false })
+          } else console.error('[MapCanvas] Startup timeout: emergency basemap missing')
         } catch {
           /* ignore */
         }
@@ -241,12 +404,16 @@ export default function MapCanvas() {
           console.warn('[MapCanvas] non-fatal map error', e)
           return
         }
-        console.warn('[MapCanvas] startup map error — falling back to OSM', e)
+        console.warn('[MapCanvas] startup map error — emergency OSM raster only', e)
         fallbackLocked = true
         setStaticFallbackVisible(true)
         setStatus('fallback')
         try {
-          map?.setStyle(FALLBACK_MAP_STYLE)
+          const fb = validatedEmergencyFallbackStyle()
+          if (fb) {
+            currentStyleRef.current = null
+            map?.setStyle(fb, { diff: false })
+          } else console.error('[MapCanvas] startup error: emergency fallback missing')
         } catch {
           /* ignore */
         }
@@ -254,6 +421,7 @@ export default function MapCanvas() {
 
       const onLoad = () => {
         startupResetAttemptsRef.current = 0
+        setMapReady(true)
         setMap(map)
         scheduleResize()
         scheduleResize()
@@ -291,20 +459,16 @@ export default function MapCanvas() {
         hardReset()
       })
 
-      const placeWaypoint = (
-        e: { lngLat?: { lng: number; lat: number }; points?: Array<{ x: number; y: number }> } | null,
-        source: 'click' | 'touch',
-      ): boolean => {
+      const placeWaypoint = (e: any, source: 'click' | 'touch'): boolean => {
         if (!map) return false
-        let lngLat = e?.lngLat
-        if (!lngLat) {
-          const p = e?.points?.[0] ?? touchLast ?? touchStart
-          if (p) {
-            const unproj = map.unproject([p.x, p.y])
-            lngLat = { lng: unproj.lng, lat: unproj.lat }
-          }
+        // MapLibre native coordinates only (no unproject / client pixel math).
+        const ll = e?.lngLat ?? e?.latlng
+        if (!ll || typeof ll.lat !== 'number' || typeof ll.lng !== 'number') return false
+        const lat = ll.lat
+        const lng = ll.lng
+        if (waypointDropBlockedRef.current) {
+          return false
         }
-        if (!lngLat) return false
         const now = Date.now()
         // Stability guard: prevent accidental double-drops from rapid taps/clicks.
         if (now - lastDropAtRef.current < 220) return false
@@ -312,8 +476,6 @@ export default function MapCanvas() {
 
         // Ignore placement while camera is moving, except deliberate touch taps.
         if (source !== 'touch' && map.isMoving()) return false
-        // Allow iOS/mobile waypoint drops even when the panel is docked.
-        // Users may keep the tool rail docked while actively placing pins.
         const nextIdx = waypointCountRef.current + 1
         const type = pendingTypeRef.current
         const manualLabel = nextWaypointLabelRef.current.trim().slice(0, 64)
@@ -328,8 +490,8 @@ export default function MapCanvas() {
         try {
           addWaypoint({
             id: `wp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-            lng: lngLat.lng,
-            lat: lngLat.lat,
+            lng,
+            lat,
             label: manualLabel || `${autoBase}-${nextIdx}`,
             type,
             createdAt: Date.now(),
@@ -338,6 +500,7 @@ export default function MapCanvas() {
           console.error('[MapCanvas] waypoint add failed', err)
           return false
         }
+        setDebugClickRef.current({ lat, lng })
         if (!keepArmedRef.current) setPendingType('default')
         if (clearLabelAfterDropRef.current && manualLabel) setNextWaypointLabel('')
         return true
@@ -347,6 +510,7 @@ export default function MapCanvas() {
         lastUserInteractionAt = Date.now()
         // iOS emits synthetic click shortly after a successful touch drop.
         if (Date.now() - lastTouchDropAt < 550) return
+        selectWaypoint(null)
         tapDiag('click placement attempt')
         placeWaypoint(e, 'click')
       })
@@ -379,6 +543,7 @@ export default function MapCanvas() {
           return
         }
         if (touchMoved) return
+        selectWaypoint(null)
         const dropped = placeWaypoint(e, 'touch')
         if (dropped) lastTouchDropAt = Date.now()
         tapDiag(`touchend dropped=${String(dropped)}`)
@@ -401,6 +566,7 @@ export default function MapCanvas() {
     initMap()
 
     return () => {
+      setMapReady(false)
       vv?.removeEventListener('resize', onVisualViewportChange)
       vv?.removeEventListener('scroll', onVisualViewportChange)
       window.removeEventListener('orientationchange', onVisualViewportChange)
@@ -416,6 +582,19 @@ export default function MapCanvas() {
       }
       cancelled = true
       try {
+        if (map && styleImageMissingHandler) {
+          map.off('styleimagemissing', styleImageMissingHandler)
+        }
+      } catch {
+        /* ignore */
+      }
+      styleImageMissingHandler = null
+      try {
+        map?.off('style.load', onStyleLoad)
+      } catch {
+        /* ignore */
+      }
+      try {
         setMap(null)
       } catch {
         /* ignore */
@@ -429,70 +608,180 @@ export default function MapCanvas() {
       }
       map = null
     }
-  }, [setMap, addWaypoint, setPendingType, setNextWaypointLabel])
+  }, [setMap, addWaypoint, setPendingType, setNextWaypointLabel, selectWaypoint])
 
   // React to layer preset changes (streets / topo / outdoor / satellite)
   useEffect(() => {
-    const map = mapRef.current
-    if (!map) return
+    if (!mapRef.current) return
+    // Capture for nested handlers — ref may be cleared on unmount; handlers only run while effect is active.
+    const mapCtl: maplibregl.Map = mapRef.current
 
     if (skipLayerSyncRef.current) {
       skipLayerSyncRef.current = false
       return
     }
 
-    const style = MAP_STYLES[activeLayer] ?? FALLBACK_MAP_STYLE
+    const nextStyleUrl = getStyleUrl(activeLayer as MapStyleKey)
+    if (currentStyleRef.current === nextStyleUrl) {
+      tier1Debug('map-layer', 'skip-duplicate-style-url', {
+        layer: activeLayer,
+        fp: mapStyleFingerprint(nextStyleUrl),
+      })
+      return
+    }
+
+    const gen = ++styleSwitchGenRef.current
+    const prepared = prepareBasemapSwitch(mapCtl, activeLayer as MapStyleKey, currentStyleRef)
+    if (prepared.skip) {
+      tier1Debug('map-layer', 'validated-switch-skip-duplicate', {
+        layer: activeLayer,
+        fp: mapStyleFingerprint(getStyleUrl(activeLayer as MapStyleKey)),
+      })
+      return
+    }
+    const nextStyle = prepared.url
+    logActiveLayerTileDebug(activeLayer)
+    const fp = mapStyleFingerprint(nextStyle)
+    tier1Debug('map-layer', 'validated-switch', { layer: activeLayer, fp })
+    let urlForThisGen = nextStyle
+    let appliedFpForThisGen = fp
     let cancelled = false
     let styleFallbackTimer: number | null = null
+    let stallRecoverTimer: number | null = null
     let styleReady = false
+    let recoveredToRaster = false
 
-    const markStyleReady = () => {
-      if (cancelled || styleReady) return
+    function markStyleReady() {
+      if (cancelled || gen !== styleSwitchGenRef.current || styleReady) return
       styleReady = true
+      if (!recoveredToRaster) {
+        currentStyleRef.current = urlForThisGen
+      } else {
+        currentStyleRef.current = null
+      }
       if (styleFallbackTimer != null) {
         window.clearTimeout(styleFallbackTimer)
         styleFallbackTimer = null
       }
+      if (stallRecoverTimer != null) {
+        window.clearTimeout(stallRecoverTimer)
+        stallRecoverTimer = null
+      }
       setStaticFallbackVisible(false)
-      setStatus('ready')
+      setStatusRef.current('ready')
       try {
-        map.resize()
+        mapCtl.resize()
       } catch {
         // ignore resize errors
       }
       try {
-        map.off('data', onData)
+        mapCtl.off('data', onData)
+      } catch {
+        // ignore
+      }
+      try {
+        mapCtl.off('error', onStyleError)
       } catch {
         // ignore
       }
     }
 
-    const onData = () => {
-      if (!map) return
-      if (map.isStyleLoaded()) markStyleReady()
+    function onData() {
+      if (mapCtl.isStyleLoaded()) markStyleReady()
+    }
+
+    function onLoadOnce() {
+      if (cancelled || gen !== styleSwitchGenRef.current) return
+      markStyleReady()
+    }
+
+    function onIdleOnce() {
+      if (cancelled || gen !== styleSwitchGenRef.current) return
+      markStyleReady()
+    }
+
+    function applyEmergencyFallback(reason: string) {
+      if (cancelled || recoveredToRaster || gen !== styleSwitchGenRef.current) return
+      recoveredToRaster = true
+      console.warn(`[MapCanvas] ${reason} — emergency OSM raster only (MapTiler preset "${activeLayer}" failed)`)
+      const r = validatedEmergencyFallbackStyle()
+      if (!r) {
+        console.error('[MapCanvas] Emergency recovery: no validated style')
+        setStaticFallbackVisible(true)
+        setStatusRef.current('fallback')
+        return
+      }
+      appliedFpForThisGen = mapStyleFingerprint(r)
+      tier1Debug('map-layer', 'validated-switch', { layer: activeLayer, fp: appliedFpForThisGen, recovery: true })
+      try {
+        mapCtl.off('load', onLoadOnce)
+        mapCtl.off('idle', onIdleOnce)
+      } catch {
+        /* ignore */
+      }
+      try {
+        mapCtl.setStyle(r, { diff: false })
+        mapCtl.once('load', onLoadOnce)
+        mapCtl.once('idle', onIdleOnce)
+      } catch {
+        setStaticFallbackVisible(true)
+        setStatusRef.current('fallback')
+      }
+    }
+
+    function onStyleError(e: unknown) {
+      if (cancelled || gen !== styleSwitchGenRef.current) return
+      if (recoveredToRaster) return
+      if (!styleFailureWarrantsEmergencyFallback(e)) return
+      applyEmergencyFallback('MapTiler / style load error')
     }
 
     try {
       // Do not flash fallback immediately on style switches.
       // Only show fallback if style change stalls.
-      setStatus('initial')
+      setStatusRef.current('initial')
+      mapCtl.on('error', onStyleError)
       styleFallbackTimer = window.setTimeout(() => {
-        if (cancelled) return
+        if (cancelled || gen !== styleSwitchGenRef.current) return
         setStaticFallbackVisible(true)
       }, 1400)
-      map.setStyle(style)
-      map.once('load', () => {
-        if (cancelled) return
-        markStyleReady()
-      })
-      map.once('idle', () => {
-        markStyleReady()
-      })
-      map.on('data', onData)
+
+      stallRecoverTimer = window.setTimeout(() => {
+        if (cancelled || gen !== styleSwitchGenRef.current) return
+        if (styleReady) return
+        applyEmergencyFallback('Style load stalled (timeout)')
+      }, 12000)
+
+      mapCtl.setStyle(nextStyle, { diff: false })
+      mapCtl.once('load', onLoadOnce)
+      mapCtl.once('idle', onIdleOnce)
+      mapCtl.on('data', onData)
     } catch (e) {
       console.warn('[MapCanvas] setStyle failed', e)
-      setStaticFallbackVisible(true)
-      setStatus('fallback')
+      try {
+        mapCtl.off('error', onStyleError)
+      } catch {
+        /* ignore */
+      }
+      try {
+        const r = validatedEmergencyFallbackStyle()
+        if (!r) {
+          console.error('[MapCanvas] setStyle catch: emergency fallback missing')
+          setStaticFallbackVisible(true)
+          setStatusRef.current('fallback')
+        } else {
+          recoveredToRaster = true
+          appliedFpForThisGen = mapStyleFingerprint(r)
+          currentStyleRef.current = null
+          mapCtl.setStyle(r, { diff: false })
+          mapCtl.once('load', onLoadOnce)
+          mapCtl.once('idle', onIdleOnce)
+          mapCtl.on('data', onData)
+        }
+      } catch {
+        setStaticFallbackVisible(true)
+        setStatusRef.current('fallback')
+      }
     }
 
     return () => {
@@ -500,13 +789,136 @@ export default function MapCanvas() {
       if (styleFallbackTimer != null) {
         window.clearTimeout(styleFallbackTimer)
       }
+      if (stallRecoverTimer != null) {
+        window.clearTimeout(stallRecoverTimer)
+      }
       try {
-        map.off('data', onData)
+        mapCtl.off('load', onLoadOnce)
+      } catch {
+        /* ignore */
+      }
+      try {
+        mapCtl.off('idle', onIdleOnce)
+      } catch {
+        /* ignore */
+      }
+      try {
+        mapCtl.off('data', onData)
+      } catch {
+        // ignore
+      }
+      try {
+        mapCtl.off('error', onStyleError)
       } catch {
         // ignore
       }
     }
-  }, [activeLayer, setStatus])
+  }, [activeLayer])
+
+  // Debug: MapLibre circle at last native click/touch lngLat (set `hud_debug_waypoints=1`).
+  useEffect(() => {
+    const map = mapInstance
+    if (!map) return
+    const debugOverlayEnabled = () =>
+      (typeof localStorage !== 'undefined' && localStorage.getItem('hud_debug_waypoints') === '1') ||
+      (typeof window !== 'undefined' && window.location.search.includes('debug_click=1'))
+
+    const clear = () => {
+      try {
+        if (map.getLayer(HUD_DEBUG_CLICK_LAYER)) map.removeLayer(HUD_DEBUG_CLICK_LAYER)
+        if (map.getSource(HUD_DEBUG_CLICK_SRC)) map.removeSource(HUD_DEBUG_CLICK_SRC)
+      } catch {
+        /* ignore */
+      }
+    }
+
+    const apply = () => {
+      if (!map.isStyleLoaded()) return
+      if (!debugOverlayEnabled() || !debugClick) {
+        clear()
+        return
+      }
+      const fc: GeoJSON.FeatureCollection = {
+        type: 'FeatureCollection',
+        features: [
+          {
+            type: 'Feature',
+            properties: {},
+            geometry: {
+              type: 'Point',
+              coordinates: [debugClick.lng, debugClick.lat],
+            },
+          },
+        ],
+      }
+      try {
+        const existing = map.getSource(HUD_DEBUG_CLICK_SRC) as GeoJSONSource | undefined
+        if (existing) {
+          existing.setData(fc)
+          if (!map.getLayer(HUD_DEBUG_CLICK_LAYER)) {
+            map.addLayer({
+              id: HUD_DEBUG_CLICK_LAYER,
+              type: 'circle',
+              source: HUD_DEBUG_CLICK_SRC,
+              paint: {
+                'circle-radius': 4,
+                'circle-color': '#ff00ff',
+                'circle-opacity': 0.95,
+                'circle-stroke-width': 1,
+                'circle-stroke-color': '#ffffff',
+              },
+            })
+          }
+        } else {
+          map.addSource(HUD_DEBUG_CLICK_SRC, { type: 'geojson', data: fc })
+          map.addLayer({
+            id: HUD_DEBUG_CLICK_LAYER,
+            type: 'circle',
+            source: HUD_DEBUG_CLICK_SRC,
+            paint: {
+              'circle-radius': 4,
+              'circle-color': '#ff00ff',
+              'circle-opacity': 0.95,
+              'circle-stroke-width': 1,
+              'circle-stroke-color': '#ffffff',
+            },
+          })
+        }
+      } catch {
+        /* style churn */
+      }
+    }
+
+    apply()
+    map.on('styledata', apply)
+    return () => {
+      map.off('styledata', apply)
+      clear()
+    }
+  }, [mapInstance, debugClick])
+
+  useEffect(() => {
+    const map = mapInstance
+    if (!mapReady) return
+    if (!map) return
+    if (gps.lat == null || gps.lng == null) return
+    if (!userMarkerRef.current) {
+      const el = createUserMarkerEl()
+      userMarkerRef.current = new maplibregl.Marker({ element: el })
+        .setLngLat([gps.lng, gps.lat])
+        .addTo(map)
+      console.log('[USER MARKER CREATED]')
+      return
+    }
+    userMarkerRef.current.setLngLat([gps.lng, gps.lat])
+  }, [mapReady, mapInstance, gps.lat, gps.lng])
+
+  useEffect(() => {
+    return () => {
+      userMarkerRef.current?.remove()
+      userMarkerRef.current = null
+    }
+  }, [])
 
   return (
     <div
@@ -518,8 +930,6 @@ export default function MapCanvas() {
         height: '100%',
         minHeight: '100dvh',
         background: '#1a1f24',
-        ...mapScreenFilter(prefs.screen_hue, prefs),
-        transition: 'filter 180ms var(--cockpit-ease, ease)',
       }}
     >
       {staticFallbackVisible && (
@@ -560,21 +970,28 @@ export default function MapCanvas() {
         <div
           style={{
             position: 'absolute',
-            left: '50%',
+            left: 0,
+            right: 0,
             bottom: 16,
-            transform: 'translateX(-50%)',
+            display: 'flex',
+            justifyContent: 'center',
             zIndex: 3,
-            borderRadius: 10,
-            border: '1px solid rgba(125,255,138,0.5)',
-            background: 'rgba(8,14,10,0.86)',
-            color: '#d8f4db',
-            fontSize: 11,
-            letterSpacing: '0.05em',
-            padding: '8px 10px',
             pointerEvents: 'none',
           }}
         >
-          MAP INPUT WATCHDOG ACTIVE
+          <div
+            style={{
+              borderRadius: 10,
+              border: '1px solid rgba(125,255,138,0.5)',
+              background: 'rgba(8,14,10,0.86)',
+              color: '#d8f4db',
+              fontSize: 11,
+              letterSpacing: '0.05em',
+              padding: '8px 10px',
+            }}
+          >
+            MAP INPUT WATCHDOG ACTIVE
+          </div>
         </div>
       )}
       <div
@@ -585,6 +1002,8 @@ export default function MapCanvas() {
           width: '100%',
           height: '100%',
           zIndex: 1,
+          transform: 'none',
+          filter: 'none',
         }}
       />
     </div>
