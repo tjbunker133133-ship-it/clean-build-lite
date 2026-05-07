@@ -4,6 +4,7 @@ import React, {
   useReducer,
   useCallback,
   useEffect,
+  useMemo,
   type ReactNode
 } from 'react'
 import type { AppState, AppAction, Waypoint, LayerType, WaypointType } from '../types'
@@ -261,29 +262,44 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [state])
 
-  return (
-    <AppContext.Provider
-      value={{
-        state,
-        addWaypoint,
-        setWaypoints,
-        updateWaypoint,
-        removeWaypoint,
-        selectWaypoint,
-        setLayer,
-        setPendingType,
-        setNextWaypointLabel,
-        setKeepWaypointToolArmed,
-        setClearLabelAfterDrop,
-        setShowMapLabels,
-        setShowMapDistances,
-        setDeadManTime,
-        resetDeadMan,
-      }}
-    >
-      {children}
-    </AppContext.Provider>
+  const value = useMemo(
+    () => ({
+      state,
+      addWaypoint,
+      setWaypoints,
+      updateWaypoint,
+      removeWaypoint,
+      selectWaypoint,
+      setLayer,
+      setPendingType,
+      setNextWaypointLabel,
+      setKeepWaypointToolArmed,
+      setClearLabelAfterDrop,
+      setShowMapLabels,
+      setShowMapDistances,
+      setDeadManTime,
+      resetDeadMan,
+    }),
+    [
+      state,
+      addWaypoint,
+      setWaypoints,
+      updateWaypoint,
+      removeWaypoint,
+      selectWaypoint,
+      setLayer,
+      setPendingType,
+      setNextWaypointLabel,
+      setKeepWaypointToolArmed,
+      setClearLabelAfterDrop,
+      setShowMapLabels,
+      setShowMapDistances,
+      setDeadManTime,
+      resetDeadMan,
+    ],
   )
+
+  return <AppContext.Provider value={value}>{children}</AppContext.Provider>
 }
 
 export function useAppContext(): AppContextValue {

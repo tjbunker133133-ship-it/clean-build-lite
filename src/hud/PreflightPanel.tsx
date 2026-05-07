@@ -13,6 +13,8 @@ import {
 import { COCKPIT_STORAGE_KEY } from '../types/cockpit'
 import { resetAppState } from '../utils/resetApp'
 import { forceUpdateApp } from '../utils/forceUpdate'
+import { getDeviceProfile } from '../runtime/deviceProfile'
+import { updatePermission } from '../runtime/runtimeSnapshot'
 
 type CheckState = 'pass' | 'warn' | 'fail'
 type ManualCheckKey =
@@ -31,7 +33,12 @@ type CheckRow = {
 }
 
 const MANUAL_KEY = 'tactical_preflight_manual_v1'
-const DEVICE_TUNE_KEY = `${COCKPIT_STORAGE_KEY}_device_tune`
+// Try mobile-scoped key first, fall back to legacy desktop key. Used only for
+// status display; the authoritative writers live in CockpitContext.
+const DEVICE_TUNE_KEYS = [
+  `${COCKPIT_STORAGE_KEY}_device_tune_mobile`,
+  `${COCKPIT_STORAGE_KEY}_device_tune`,
+]
 
 function stateColor(state: CheckState) {
   if (state === 'pass') return '#7dff8a'
@@ -135,9 +142,7 @@ export default function PreflightPanel() {
   useEffect(() => {
     // Force effect refresh on explicit recheck requests.
     void recheckTick
-    const standalone =
-      window.matchMedia('(display-mode: standalone)').matches || (navigator as any).standalone === true
-    setIsStandalone(standalone)
+    setIsStandalone(getDeviceProfile().isStandalone)
   }, [recheckTick])
 
   useEffect(() => {
@@ -147,6 +152,9 @@ export default function PreflightPanel() {
       setGeoPerm(snapshot.geolocation === 'unsupported' ? 'unknown' : snapshot.geolocation)
       setMicPerm(snapshot.microphone === 'unsupported' ? 'unknown' : snapshot.microphone)
       setNotifPerm(snapshot.notifications)
+      updatePermission('geolocation', snapshot.geolocation as never)
+      updatePermission('microphone', snapshot.microphone as never)
+      updatePermission('notifications', snapshot.notifications as never)
     })
     return () => {
       alive = false
@@ -171,7 +179,11 @@ export default function PreflightPanel() {
   const speechSupported = !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)
   const deviceTuneMeta = useMemo(() => {
     try {
-      const raw = localStorage.getItem(DEVICE_TUNE_KEY)
+      let raw: string | null = null
+      for (const key of DEVICE_TUNE_KEYS) {
+        raw = localStorage.getItem(key)
+        if (raw) break
+      }
       if (!raw) return null
       const parsed = JSON.parse(raw) as { v?: string; device?: string; ts?: number }
       return {

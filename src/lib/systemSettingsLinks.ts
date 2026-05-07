@@ -3,38 +3,134 @@
  * iOS Safari often blocks or ignores these; always pair with manual steps + clipboard fallback.
  */
 
+import { classifySystemNavScheme, emitSystemNav } from '../diag/devEvents'
+import { getDeviceProfile } from '../runtime/deviceProfile'
+
 const IOS_LOCATION_PREFS = ['App-Prefs:root=Privacy&path=LOCATION', 'prefs:root=Privacy&path=LOCATION'] as const
 
 const ANDROID_LOCATION_INTENT =
   'intent:#Intent;action=android.settings.LOCATION_SOURCE_SETTINGS;end'
 
+const IOS_LOCATION_FALLBACK_TEXT =
+  'Open Settings manually in iPhone Settings > Privacy > Location'
+const ANDROID_LOCATION_FALLBACK_TEXT =
+  'Open Settings manually in Android Settings > Location'
+
+export type SystemNavigationFallback = (message: string) => void
+
+/** Delegates to unified device profile. iPad with desktop-class UA is correctly recognized. */
 export function isAppleMobileUa(): boolean {
-  if (typeof navigator === 'undefined') return false
-  return /iPhone|iPad|iPod/i.test(navigator.userAgent || '')
+  return getDeviceProfile().isIOS
 }
 
 export function isAndroidUa(): boolean {
-  if (typeof navigator === 'undefined') return false
-  return /Android/i.test(navigator.userAgent || '')
+  return getDeviceProfile().isAndroid
+}
+
+/**
+ * Safely attempt a system-scheme navigation (iOS `App-Prefs:` / `prefs:`, Android `intent:`)
+ * without surfacing the browser's generic "address invalid" sheet on the visible page.
+ *
+ * Strategy:
+ * - iOS prefs schemes are loaded via a hidden iframe so any OS-level scheme rejection
+ *   stays in the iframe's navigation context, not the parent page.
+ * - All schemes race a `visibilitychange` listener: if the OS consumes the URL the
+ *   browser backgrounds and we cancel the fallback. Otherwise the timer fires and
+ *   `onFallback(fallbackMessage)` runs so the caller can show in-app guidance.
+ */
+export function safeSystemNavigation(
+  url: string,
+  fallbackMessage: string,
+  onFallback?: SystemNavigationFallback,
+): void {
+  if (typeof document === 'undefined' || typeof window === 'undefined') {
+    onFallback?.(fallbackMessage)
+    return
+  }
+  const scheme = classifySystemNavScheme(url)
+  emitSystemNav({ phase: 'attempt', url, scheme, ts: Date.now() })
+  const isIosPrefsScheme = scheme === 'ios-prefs'
+  let consumed = false
+  let timer: number | null = null
+  let frame: HTMLIFrameElement | null = null
+
+  const cleanup = (): void => {
+    if (timer != null) {
+      window.clearTimeout(timer)
+      timer = null
+    }
+    window.removeEventListener('pagehide', onHide)
+    document.removeEventListener('visibilitychange', onVis)
+    if (frame && frame.parentNode) {
+      frame.parentNode.removeChild(frame)
+      frame = null
+    }
+  }
+  const fire = (): void => {
+    if (consumed) return
+    consumed = true
+    cleanup()
+    emitSystemNav({ phase: 'fallback', url, scheme, ts: Date.now() })
+    onFallback?.(fallbackMessage)
+  }
+  const consumeWithoutFallback = (): void => {
+    if (consumed) return
+    consumed = true
+    cleanup()
+    emitSystemNav({ phase: 'success', url, scheme, ts: Date.now() })
+  }
+  function onHide(): void {
+    consumeWithoutFallback()
+  }
+  function onVis(): void {
+    if (document.visibilityState === 'hidden') consumeWithoutFallback()
+  }
+
+  window.addEventListener('pagehide', onHide, { once: true })
+  document.addEventListener('visibilitychange', onVis)
+  timer = window.setTimeout(fire, 800)
+
+  if (isIosPrefsScheme) {
+    frame = document.createElement('iframe')
+    frame.style.cssText = 'position:fixed;width:0;height:0;border:0;display:none;'
+    frame.setAttribute('aria-hidden', 'true')
+    document.body.appendChild(frame)
+    try {
+      frame.src = url
+    } catch {
+      fire()
+    }
+  } else {
+    try {
+      window.location.assign(url)
+    } catch {
+      fire()
+    }
+  }
 }
 
 /** Try to jump to iOS Settings → Privacy → Location Services. May no-op on newer iOS. */
-export function tryOpenIosLocationPrivacySettings(): void {
+export function tryOpenIosLocationPrivacySettings(
+  onFallback?: SystemNavigationFallback,
+): void {
   if (typeof window === 'undefined') return
-  const url = IOS_LOCATION_PREFS[0]
-  window.location.assign(url)
+  safeSystemNavigation(IOS_LOCATION_PREFS[0], IOS_LOCATION_FALLBACK_TEXT, onFallback)
 }
 
 /** Second legacy prefs URL; some iOS builds respond to one and not the other. */
-export function tryOpenIosLocationPrivacySettingsAlternate(): void {
+export function tryOpenIosLocationPrivacySettingsAlternate(
+  onFallback?: SystemNavigationFallback,
+): void {
   if (typeof window === 'undefined') return
-  window.location.assign(IOS_LOCATION_PREFS[1])
+  safeSystemNavigation(IOS_LOCATION_PREFS[1], IOS_LOCATION_FALLBACK_TEXT, onFallback)
 }
 
 /** Try Android location source settings (Chrome / system browser). */
-export function tryOpenAndroidLocationSettings(): void {
+export function tryOpenAndroidLocationSettings(
+  onFallback?: SystemNavigationFallback,
+): void {
   if (typeof window === 'undefined') return
-  window.location.assign(ANDROID_LOCATION_INTENT)
+  safeSystemNavigation(ANDROID_LOCATION_INTENT, ANDROID_LOCATION_FALLBACK_TEXT, onFallback)
 }
 
 export async function copyTextToClipboard(text: string): Promise<boolean> {

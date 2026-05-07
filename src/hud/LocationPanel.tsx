@@ -3,6 +3,7 @@ import HudPanel from './HudPanel'
 import { useMapContext } from '../context/MapContext'
 import { usePanelData } from '../context/PanelDataContext'
 import { useGPS } from '../hooks/useGPS'
+import { getDeviceProfile } from '../runtime/deviceProfile'
 
 type FollowZoomMode = 'fixed' | 'dynamic'
 
@@ -20,14 +21,23 @@ export default function LocationPanel() {
   const { userLocation } = usePanelData()
   const gps = useGPS()
   const { requestLocation } = gps
-  const [followLock, setFollowLock] = useState(false)
-  const [zoomMode, setZoomMode] = useState<FollowZoomMode>('fixed')
+  const [followLock, setFollowLock] = useState(() => {
+    try {
+      return localStorage.getItem('hud_follow_lock_v1') === '1'
+    } catch {
+      return false
+    }
+  })
+  const [zoomMode, setZoomMode] = useState<FollowZoomMode>(() => {
+    try {
+      return localStorage.getItem('hud_follow_zoom_v1') === 'dynamic' ? 'dynamic' : 'fixed'
+    } catch {
+      return 'fixed'
+    }
+  })
   const lastFollowCenterRef = useRef<{ lat: number; lng: number } | null>(null)
 
-  const isIOS = useMemo(
-    () => typeof navigator !== 'undefined' && /iPhone|iPad|iPod/.test(navigator.userAgent || ''),
-    [],
-  )
+  const isIOS = useMemo(() => getDeviceProfile().isIOS, [])
 
   useEffect(() => {
     if (!followLock) return
@@ -50,6 +60,15 @@ export default function LocationPanel() {
       essential: true,
     })
   }, [followLock, gps.lat, gps.lng, gps.accuracy, gps.locationState, map, zoomMode])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('hud_follow_lock_v1', followLock ? '1' : '0')
+      localStorage.setItem('hud_follow_zoom_v1', zoomMode)
+    } catch {
+      /* ignore */
+    }
+  }, [followLock, zoomMode])
 
   const jumpToMe = () => {
     console.log('[LOCATE CLICK]', { lat: gps.lat, lng: gps.lng, source: gps.source })

@@ -1,4 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
+import {
+  markLastKnownGoodSnapshotTime,
+  updateGpsRecoveryState,
+  updatePermission,
+} from '../runtime/runtimeSnapshot'
 
 // ⚠️ LOCKED SYSTEM — Behavior Freeze Active
 // Any change to interaction, layout, display modes, or layers requires explicit approval.
@@ -94,6 +99,7 @@ const LISTENER_ZERO_GRACE_MS = 450
 let watchFlushRaf: number | null = null
 let watchPending: GeolocationPosition | null = null
 let watchRetryTimer: number | null = null
+let lastGoodFixAt = Date.now()
 /** Throttle localStorage writes from high-frequency watch updates (first fix still persists immediately). */
 let lastGpsPersistAt = 0
 const WATCH_PERSIST_MIN_MS = 12_000
@@ -105,6 +111,17 @@ function gpsLoopDebugEnabled(): boolean {
       (window as Window & { HUD_LOOP_DEBUG?: number }).HUD_LOOP_DEBUG === 1
     )
   )
+}
+
+/** High-frequency GPS `console.log` telemetry: DEV only; enable via `localStorage.hud_tier1_debug = '1'` or loop-debug globals. */
+function gpsTelemetryVerboseEnabled(): boolean {
+  if (!import.meta.env.DEV) return false
+  if (gpsLoopDebugEnabled()) return true
+  try {
+    return localStorage.getItem('hud_tier1_debug') === '1'
+  } catch {
+    return false
+  }
 }
 
 function tier1GpsLog(next: GPSData): void {
@@ -160,7 +177,9 @@ function setShared(next: GPSData) {
     }
     return
   }
-  console.log('[GPS STATE UPDATE]', { lat: next.lat, lng: next.lng, source: next.source })
+  if (gpsTelemetryVerboseEnabled()) {
+    console.log('[GPS STATE UPDATE]', { lat: next.lat, lng: next.lng, source: next.source })
+  }
   shared = next
   tier1GpsLog(next)
   emit()
@@ -185,6 +204,8 @@ function persistCurrentFix() {
         }),
       )
       localStorage.setItem(GPS_PERMISSION_KEY, 'granted')
+      updatePermission('geolocation', 'granted')
+      markLastKnownGoodSnapshotTime(lastGpsPersistAt)
     }
   } catch {
     /* ignore */
@@ -216,7 +237,9 @@ async function triggerIPFallback() {
       error: shared.error,
     })
     persistCurrentFix()
-    console.log('[GPS FALLBACK SUCCESS]', { lat, lng, source: 'ip' })
+    if (gpsTelemetryVerboseEnabled()) {
+      console.log('[GPS FALLBACK SUCCESS]', { lat, lng, source: 'ip' })
+    }
   } catch (e) {
     console.warn('[GPS FALLBACK FAILED]', e)
   } finally {
@@ -235,6 +258,8 @@ function flushWatchPending() {
   const pos = watchPending
   watchPending = null
   if (!pos) return
+  lastGoodFixAt = Date.now()
+  updateGpsRecoveryState('healthy')
   setShared({
     lat: pos.coords.latitude,
     lng: pos.coords.longitude,
@@ -265,11 +290,15 @@ function startWatching() {
   watcherId = navigator.geolocation.watchPosition(
     (pos) => {
       hasGPSFix = true
-      console.log('[GPS SUCCESS]', {
-        lat: pos.coords.latitude,
-        lng: pos.coords.longitude,
-        accuracy: pos.coords.accuracy,
-      })
+      lastGoodFixAt = Date.now()
+      updateGpsRecoveryState('healthy')
+      if (gpsTelemetryVerboseEnabled()) {
+        console.log('[GPS SUCCESS]', {
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+          accuracy: pos.coords.accuracy,
+        })
+      }
       watchPending = pos
       scheduleWatchFlush()
     },
@@ -281,6 +310,8 @@ function startWatching() {
       console.warn('GPS watch error:', err)
       if (err?.code === 1) {
         stopWatching()
+        updateGpsRecoveryState('denied')
+        updatePermission('geolocation', 'denied')
         try {
           localStorage.setItem(GPS_PERMISSION_KEY, 'denied')
         } catch {
@@ -292,6 +323,7 @@ function startWatching() {
           error: 'Location permission denied',
         })
       } else if (watchRetryTimer == null) {
+        updateGpsRecoveryState('recovering')
         watchRetryTimer = window.setTimeout(() => {
           watchRetryTimer = null
           if (watcherId == null) startWatching()
@@ -300,7 +332,9 @@ function startWatching() {
     },
     { enableHighAccuracy: true, maximumAge: 5_000, timeout: 15_000 },
   )
-  console.log('[GPS WATCH STARTED]')
+  if (gpsTelemetryVerboseEnabled()) {
+    console.log('[GPS WATCH STARTED]')
+  }
   gpsFallbackTimer = window.setTimeout(() => {
     gpsFallbackTimer = null
     if (!hasGPSFix) {
@@ -313,6 +347,7 @@ function startWatching() {
 function startWatchSafely() {
   if (watcherId != null) return
   hasGPSFix = false
+  updateGpsRecoveryState('recovering')
   startWatching()
 }
 
@@ -347,6 +382,8 @@ function stopWatching() {
  */
 export function requestLocation(): Promise<LocationState> {
   if (typeof navigator === 'undefined' || !navigator.geolocation) {
+    updateGpsRecoveryState('denied')
+    updatePermission('geolocation', 'unsupported')
     setShared({
       lat: null,
       lng: null,
@@ -370,6 +407,7 @@ export function requestLocation(): Promise<LocationState> {
       locationState: 'requesting',
       error: undefined,
     })
+    updateGpsRecoveryState('recovering')
     if (typeof navigator !== 'undefined' && 'permissions' in navigator) {
       void navigator.permissions
         .query({ name: 'geolocation' as PermissionName })
@@ -386,6 +424,8 @@ export function requestLocation(): Promise<LocationState> {
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         hasGPSFix = true
+        lastGoodFixAt = Date.now()
+        updateGpsRecoveryState('healthy')
         setShared({
           lat: pos.coords.latitude,
           lng: pos.coords.longitude,
@@ -402,6 +442,8 @@ export function requestLocation(): Promise<LocationState> {
       (err) => {
         const denied = err?.code === 1
         if (denied) {
+          updateGpsRecoveryState('denied')
+          updatePermission('geolocation', 'denied')
           try {
             localStorage.setItem(GPS_PERMISSION_KEY, 'denied')
           } catch {
@@ -470,6 +512,16 @@ export function useGPS(): GPSData & { requestLocation: typeof requestLocation; s
         console.log('[GPS AUTO START FALLBACK]')
         startWatchSafely()
       })
+  }, [])
+
+  useEffect(() => {
+    const t = window.setInterval(() => {
+      if (shared.locationState !== 'granted') return
+      if (Date.now() - lastGoodFixAt > 45_000) {
+        updateGpsRecoveryState('stale')
+      }
+    }, 5000)
+    return () => window.clearInterval(t)
   }, [])
 
   useEffect(() => {

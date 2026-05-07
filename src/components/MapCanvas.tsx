@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type MutableRefObject } from 'react'
+import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react'
 import maplibregl, { type GeoJSONSource } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { useMapContext } from '../context/MapContext'
@@ -15,10 +15,63 @@ import {
   validatedEmergencyFallbackStyle,
 } from '../lib/mapStyles'
 import { tier1Debug } from '../lib/tier1DebugLog'
+import { hudObsMark, hudObsMeasure } from '../diag/hudObs'
+import { getDeviceProfile } from '../runtime/deviceProfile'
 
 const HUD_DEBUG_CLICK_SRC = 'hud-debug-click'
 const HUD_DEBUG_CLICK_LAYER = 'hud-debug-click-circle'
 const TERRAIN_SOURCE_ID = 'hud-maptiler-terrain-rgb'
+const MAP_VIEWPORT_KEY = 'hud_map_viewport_v1'
+const LAST_KNOWN_LOCATION_KEY = 'lastKnownLocation'
+
+type PersistedViewport = {
+  lng: number
+  lat: number
+  zoom: number
+  bearing: number
+  pitch: number
+  ts: number
+}
+
+function readPersistedViewport(): PersistedViewport | null {
+  try {
+    const raw = localStorage.getItem(MAP_VIEWPORT_KEY)
+    if (!raw) return null
+    const p = JSON.parse(raw) as Partial<PersistedViewport> | null
+    if (!p) return null
+    if (
+      typeof p.lng !== 'number' ||
+      typeof p.lat !== 'number' ||
+      typeof p.zoom !== 'number' ||
+      typeof p.bearing !== 'number' ||
+      typeof p.pitch !== 'number'
+    ) {
+      return null
+    }
+    return {
+      lng: p.lng,
+      lat: p.lat,
+      zoom: p.zoom,
+      bearing: p.bearing,
+      pitch: p.pitch,
+      ts: typeof p.ts === 'number' ? p.ts : Date.now(),
+    }
+  } catch {
+    return null
+  }
+}
+
+function readCachedOperationalFix(): { lat: number; lng: number } | null {
+  try {
+    const raw = localStorage.getItem(LAST_KNOWN_LOCATION_KEY)
+    if (!raw) return null
+    const p = JSON.parse(raw) as { lat?: unknown; lng?: unknown } | null
+    if (!p || typeof p.lat !== 'number' || typeof p.lng !== 'number') return null
+    return { lat: p.lat, lng: p.lng }
+  } catch {
+    return null
+  }
+}
 
 function createUserMarkerEl() {
   const el = document.createElement('div')
@@ -154,6 +207,12 @@ export default function MapCanvas() {
   setDebugClickRef.current = setDebugClick
   const { map: mapInstance, setMap, setStatus } = useMapContext()
   const gps = useGPS()
+  const gpsRef = useRef(gps)
+  gpsRef.current = gps
+  const initialOperationalCenterAppliedRef = useRef(false)
+  const autoOperationalCenteringRef = useRef(false)
+  const userHasTakenViewportControlRef = useRef(false)
+  const restoredViewportRef = useRef(false)
   const userMarkerRef = useRef<maplibregl.Marker | null>(null)
   const {
     state,
@@ -196,7 +255,63 @@ export default function MapCanvas() {
   const setStatusRef = useRef(setStatus)
   setStatusRef.current = setStatus
 
+  const persistViewport = (map: maplibregl.Map) => {
+    try {
+      const c = map.getCenter()
+      const body: PersistedViewport = {
+        lng: c.lng,
+        lat: c.lat,
+        zoom: map.getZoom(),
+        bearing: map.getBearing(),
+        pitch: map.getPitch(),
+        ts: Date.now(),
+      }
+      localStorage.setItem(MAP_VIEWPORT_KEY, JSON.stringify(body))
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const tryApplyInitialOperationalCenter = useCallback(() => {
+    const map = mapRef.current
+    if (!map) return false
+    if (initialOperationalCenterAppliedRef.current) return false
+    if (restoredViewportRef.current) return false
+    if (userHasTakenViewportControlRef.current) return false
+
+    const live = gpsRef.current
+    const seed =
+      live.lat != null && live.lng != null
+        ? { lat: live.lat, lng: live.lng }
+        : readCachedOperationalFix()
+    if (!seed) return false
+
+    map.jumpTo({
+      center: [seed.lng, seed.lat],
+      zoom: Math.max(14, map.getZoom()),
+    })
+    autoOperationalCenteringRef.current = true
+    window.setTimeout(() => {
+      autoOperationalCenteringRef.current = false
+    }, 0)
+    initialOperationalCenterAppliedRef.current = true
+    return true
+  }, [])
+
   useEffect(() => {
+    if (!import.meta.env.DEV) return
+    try {
+      const w = window as Window & { __HUD_LOOP_DEBUG__?: number; HUD_LOOP_DEBUG?: number }
+      if (
+        localStorage.getItem('hud_tier1_debug') !== '1' &&
+        w.__HUD_LOOP_DEBUG__ !== 1 &&
+        w.HUD_LOOP_DEBUG !== 1
+      ) {
+        return
+      }
+    } catch {
+      return
+    }
     console.log('[MAP EFFECT] activeLayer changed:', activeLayer)
   }, [activeLayer])
 
@@ -217,10 +332,7 @@ export default function MapCanvas() {
     let multiTouchActive = false
     let touchStart: { x: number; y: number } | null = null
     let touchLast: { x: number; y: number } | null = null
-    const isAppleWebKit =
-      typeof navigator !== 'undefined' &&
-      /AppleWebKit/i.test(navigator.userAgent || '') &&
-      /iPhone|iPad|iPod|Macintosh/i.test(navigator.userAgent || '')
+    const isAppleWebKit = getDeviceProfile().isAppleWebKit
     const tapDiagnosticsEnabled =
       typeof window !== 'undefined' &&
       (window.location.search.includes('tapdiag=1') || localStorage.getItem('hud_tapdiag') === '1')
@@ -228,6 +340,10 @@ export default function MapCanvas() {
       if (tapDiagnosticsEnabled) console.info(`[tapdiag] ${msg}`)
     }
     let watchdogTimer: number | null = null
+    const markUserViewportControl = () => {
+      if (userHasTakenViewportControlRef.current) return
+      userHasTakenViewportControlRef.current = true
+    }
 
     // Render blank maps are usually tied to WebGL/context or sizing churn.
     // Strategy: show static OSM until MapLibre reaches `idle` with tiles drawn.
@@ -316,6 +432,7 @@ export default function MapCanvas() {
       currentStyleRef.current = initialStyle
       logActiveLayerTileDebug(initLayer)
 
+      hudObsMark('hud:map:boot:start')
       map = new maplibregl.Map({
         container,
         style: initialStyle,
@@ -325,6 +442,7 @@ export default function MapCanvas() {
         renderWorldCopies: false,
       })
 
+      hudObsMark('hud:map:boot:constructed')
       mapRef.current = map
       skipLayerSyncRef.current = true
       setWatchdogNotice(false)
@@ -363,6 +481,8 @@ export default function MapCanvas() {
 
       const markReady = () => {
         if (cancelled || !map || readyOnce) return
+        hudObsMark('hud:map:boot:ready')
+        hudObsMeasure('hud:map:boot:ready', 'hud:map:boot:start', 'hud:map:boot:ready')
         readyOnce = true
         fallbackLocked = false
         clearRenderTimer()
@@ -420,9 +540,25 @@ export default function MapCanvas() {
       }
 
       const onLoad = () => {
+        if (!map) return
+        hudObsMark('hud:map:boot:load')
+        hudObsMeasure('hud:map:boot:load', 'hud:map:boot:start', 'hud:map:boot:load')
         startupResetAttemptsRef.current = 0
         setMapReady(true)
         setMap(map)
+        const persisted = readPersistedViewport()
+        if (persisted) {
+          map.jumpTo({
+            center: [persisted.lng, persisted.lat],
+            zoom: persisted.zoom,
+            bearing: persisted.bearing,
+            pitch: persisted.pitch,
+          })
+          restoredViewportRef.current = true
+          initialOperationalCenterAppliedRef.current = true
+        } else {
+          void tryApplyInitialOperationalCenter()
+        }
         scheduleResize()
         scheduleResize()
         // Safari fallback: do not wait exclusively for `idle`.
@@ -508,6 +644,7 @@ export default function MapCanvas() {
 
       map.on('click', (e: any) => {
         lastUserInteractionAt = Date.now()
+        markUserViewportControl()
         // iOS emits synthetic click shortly after a successful touch drop.
         if (Date.now() - lastTouchDropAt < 550) return
         selectWaypoint(null)
@@ -516,6 +653,7 @@ export default function MapCanvas() {
       })
       map.on('touchstart', (e: any) => {
         lastUserInteractionAt = Date.now()
+        markUserViewportControl()
         const pointCount = Array.isArray(e?.points) ? e.points.length : 0
         multiTouchActive = pointCount > 1
         const p = e?.points?.[0]
@@ -548,6 +686,19 @@ export default function MapCanvas() {
         if (dropped) lastTouchDropAt = Date.now()
         tapDiag(`touchend dropped=${String(dropped)}`)
       })
+      map.on('dragstart', markUserViewportControl)
+      map.on('zoomstart', markUserViewportControl)
+      map.on('rotatestart', markUserViewportControl)
+      map.on('pitchstart', markUserViewportControl)
+      map.on('movestart', () => {
+        if (autoOperationalCenteringRef.current) return
+        markUserViewportControl()
+      })
+      map.on('moveend', () => {
+        if (!map) return
+        if (!userHasTakenViewportControlRef.current) return
+        persistViewport(map)
+      })
     }
 
     roRef.current = new ResizeObserver(() => {
@@ -563,6 +714,19 @@ export default function MapCanvas() {
     vv?.addEventListener('scroll', onVisualViewportChange)
     window.addEventListener('orientationchange', onVisualViewportChange)
 
+    const onVisibilityChange = function onVisibilityChange() {
+      if (document.hidden) return
+      if (document.visibilityState !== 'visible') return
+      if (cancelled) return
+      if (!map) return
+      try {
+        map.resize()
+      } catch {
+        /* ignore */
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+
     initMap()
 
     return () => {
@@ -570,6 +734,7 @@ export default function MapCanvas() {
       vv?.removeEventListener('resize', onVisualViewportChange)
       vv?.removeEventListener('scroll', onVisualViewportChange)
       window.removeEventListener('orientationchange', onVisualViewportChange)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
       roRef.current?.disconnect()
       roRef.current = null
       if (resizeRafRef.current != null) {
@@ -653,6 +818,8 @@ export default function MapCanvas() {
 
     function markStyleReady() {
       if (cancelled || gen !== styleSwitchGenRef.current || styleReady) return
+      hudObsMark(`hud:map:style:${gen}:ready`)
+      hudObsMeasure(`hud:map:style:${gen}`, `hud:map:style:${gen}:start`, `hud:map:style:${gen}:ready`)
       styleReady = true
       if (!recoveredToRaster) {
         currentStyleRef.current = urlForThisGen
@@ -752,6 +919,7 @@ export default function MapCanvas() {
         applyEmergencyFallback('Style load stalled (timeout)')
       }, 12000)
 
+      hudObsMark(`hud:map:style:${gen}:start`)
       mapCtl.setStyle(nextStyle, { diff: false })
       mapCtl.once('load', onLoadOnce)
       mapCtl.once('idle', onIdleOnce)
@@ -912,6 +1080,14 @@ export default function MapCanvas() {
     }
     userMarkerRef.current.setLngLat([gps.lng, gps.lat])
   }, [mapReady, mapInstance, gps.lat, gps.lng])
+
+  useEffect(() => {
+    if (!mapReady) return
+    if (restoredViewportRef.current) return
+    if (userHasTakenViewportControlRef.current) return
+    if (initialOperationalCenterAppliedRef.current) return
+    void tryApplyInitialOperationalCenter()
+  }, [mapReady, gps.lat, gps.lng, tryApplyInitialOperationalCenter])
 
   useEffect(() => {
     return () => {

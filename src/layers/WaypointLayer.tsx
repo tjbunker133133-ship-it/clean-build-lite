@@ -4,6 +4,7 @@ import { useMapContext } from '../context/MapContext'
 import { useAppContext } from '../context/AppContext'
 import type { WaypointType } from '../types'
 import { haversineDistance, formatDistance } from '../lib/haversine'
+import { getDeviceProfile } from '../runtime/deviceProfile'
 
 /** Micro-shift so visual circle tip meets route vertex ([y negative] = nudge up). Tune: [0,-1] … [0,-3] or ±x for horizontal. */
 const WAYPOINT_PIN_OFFSET_PX: [number, number] = [0, -2]
@@ -42,8 +43,7 @@ export default function WaypointLayer() {
     const nav = navigator as Navigator & { deviceMemory?: number }
     const cores = nav.hardwareConcurrency ?? 8
     const mem = nav.deviceMemory ?? 8
-    const coarse = window.matchMedia('(pointer: coarse)').matches
-    return coarse && (cores <= 6 || mem <= 4)
+    return getDeviceProfile().isCoarsePointer && (cores <= 6 || mem <= 4)
   }, [])
 
   useEffect(() => {

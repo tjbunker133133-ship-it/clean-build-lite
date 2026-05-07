@@ -15,6 +15,7 @@ import {
   distancePointToRouteFeet,
 } from '../lib/corridor'
 import { useMapContext } from '../context/MapContext'
+import { getDeviceProfile } from '../runtime/deviceProfile'
 
 type BatteryManagerLike = { level: number } | null
 
@@ -28,6 +29,7 @@ export default function StatusRail() {
   const [showCorridorBanner, setShowCorridorBanner] = useState(false)
   const [corridorArmed, setCorridorArmed] = useState(false)
   const [requestingGeo, setRequestingGeo] = useState(false)
+  const [settingsFallback, setSettingsFallback] = useState<string | null>(null)
   const routeChangeAtRef = useRef<number>(Date.now())
   const lastRouteSigRef = useRef<string>('')
 
@@ -75,10 +77,7 @@ export default function StatusRail() {
   }, [gps.lat, gps.lng, gps.status])
   const battPct = useMemo(() => {
     if (battery) return `${Math.round(battery.level * 100)}%`
-    const isiOS =
-      typeof navigator !== 'undefined' &&
-      /iPhone|iPad|iPod/i.test(navigator.userAgent || '')
-    return isiOS ? 'N/A' : '--'
+    return getDeviceProfile().isIOS ? 'N/A' : '--'
   }, [battery])
   const wxAge = weatherAgeMin == null ? '--' : `${weatherAgeMin}m`
   const runtimeGuards = typeof window !== 'undefined' && !!(window as any).__hudRuntimeGuards
@@ -146,11 +145,11 @@ export default function StatusRail() {
 
   const openSystemLocationSettings = () => {
     if (isAppleMobileUa()) {
-      tryOpenIosLocationPrivacySettings()
+      tryOpenIosLocationPrivacySettings(setSettingsFallback)
       return
     }
     if (isAndroidUa()) {
-      tryOpenAndroidLocationSettings()
+      tryOpenAndroidLocationSettings(setSettingsFallback)
       return
     }
     openPermissionHelp()
@@ -307,6 +306,63 @@ export default function StatusRail() {
             : '--'}
         </span>
       </div>
+      {settingsFallback && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Open Settings manually"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 100003,
+            background: 'rgba(0,0,0,0.65)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 24,
+            pointerEvents: 'auto',
+          }}
+          onClick={() => setSettingsFallback(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: 'min(420px, 100%)',
+              background: 'rgba(8,12,14,0.96)',
+              border: '1px solid rgba(125,255,138,0.55)',
+              borderRadius: 12,
+              padding: 16,
+              color: '#d8e3d8',
+              display: 'grid',
+              gap: 10,
+              fontFamily: 'var(--font-mono, monospace)',
+            }}
+          >
+            <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.08em', color: '#7dff8a' }}>
+              OPEN SETTINGS MANUALLY
+            </div>
+            <div style={{ fontSize: 11, color: '#b8c4b8', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
+              {settingsFallback}
+            </div>
+            <button
+              type="button"
+              onClick={() => setSettingsFallback(null)}
+              style={{
+                minHeight: 36,
+                borderRadius: 8,
+                border: '1px solid rgba(125,255,138,0.45)',
+                background: 'rgba(125,255,138,0.14)',
+                color: '#d8f6de',
+                fontSize: 11,
+                letterSpacing: '0.08em',
+                cursor: 'pointer',
+              }}
+            >
+              OK
+            </button>
+          </div>
+        </div>
+      )}
     </>
   )
 }

@@ -6,7 +6,9 @@ import { DURATION_MS, EASE } from '../types/cockpit'
 import { DesktopInteractionController } from '../controllers/DesktopInteractionController'
 import { MobileInteractionController } from '../controllers/MobileInteractionController'
 import type { DockRequestSource } from '../controllers/InteractionController'
-import { getDeviceEnvironment } from '../utils/device'
+import { getDeviceProfile } from '../runtime/deviceProfile'
+import { updateActiveController } from '../runtime/runtimeSnapshot'
+import { assertPolicy, reportPolicyAttempt } from '../runtime/devicePolicy'
 
 // ⚠️ LOCKED SYSTEM — Behavior Freeze Active
 // Any change to interaction, layout, display modes, or layers requires explicit approval.
@@ -201,16 +203,11 @@ export default function CockpitHudPanel({
   dockPreviewRef.current = dockPreview
   snapGuideRef.current = snapGuide
 
-  const wantsReducedMotion =
-    typeof window !== 'undefined' &&
-    window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  const isIOSWebKit =
-    typeof window !== 'undefined' &&
-    /iPhone|iPad|iPod/i.test(navigator.userAgent || '')
-  const { isMobileEnvironment } = getDeviceEnvironment()
-  const isMobile = isMobileEnvironment
-  const isCoarsePointer =
-    typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
+  const profile = getDeviceProfile()
+  const wantsReducedMotion = profile.prefersReducedMotion
+  const isIOSWebKit = profile.isIOS
+  const isMobile = profile.interactionMode === 'mobile'
+  const isCoarsePointer = profile.isCoarsePointer
   const dragThreshold = isIOSWebKit ? 14 : isCoarsePointer ? 12 : DRAG_THRESHOLD_PX
   const edgeDockZone = isMobile
     ? Math.max(10, Math.round(EDGE_DOCK_ZONE_PX * 0.6))
@@ -225,10 +222,14 @@ export default function CockpitHudPanel({
   const minWidthEffective = isMobile ? Math.max(120, minWidth - 20) : minWidth
   const minHeightEffective = isMobile ? Math.max(96, minHeight - 16) : minHeight
   const mobileFocusBoost = isMobile && dragMode !== 'none' ? 1000 : 0
-  const interactionController = useMemo(
-    () => (isMobile ? new MobileInteractionController() : new DesktopInteractionController()),
-    [isMobile],
-  )
+  const interactionController = useMemo(() => {
+    // Critical DEPE guard: if desktop interaction is forbidden for the current
+    // mode, force mobile controller selection.
+    if (!isMobile && !assertPolicy('controller.desktopInteractionModel', `panel=${panelId}`)) {
+      return new MobileInteractionController()
+    }
+    return isMobile ? new MobileInteractionController() : new DesktopInteractionController()
+  }, [isMobile, panelId])
   const canDock = useCallback(
     (source: DockRequestSource) => interactionController.onDockRequest(source),
     [interactionController],
@@ -257,7 +258,21 @@ export default function CockpitHudPanel({
       console.log('[INTERACTION ROUTE]', isMobile ? 'mobile' : 'desktop')
       console.warn('[DOCK AUDIT]', 'Verify docking conditionals remain routed through InteractionController')
     }
-  }, [isMobile])
+    updateActiveController(isMobile ? 'mobile' : 'desktop')
+    // DEPE: announce which interaction model is active. Engine compares
+    // against the policy table for the current device mode and emits a
+    // violation if (e.g.) desktop controller mounted in mobile mode.
+    reportPolicyAttempt(
+      isMobile ? 'controller.mobileInteractionModel' : 'controller.desktopInteractionModel',
+      'enable',
+      `panel=${panelId}`,
+    )
+    reportPolicyAttempt(
+      isMobile ? 'controller.desktopInteractionModel' : 'controller.mobileInteractionModel',
+      'disable',
+      `panel=${panelId}`,
+    )
+  }, [isMobile, panelId])
 
   const avoidRuntimeOverlap = useCallback(
     (x: number, y: number, w: number, h: number) => {
@@ -462,9 +477,15 @@ export default function CockpitHudPanel({
     })
   }, [isFloating, hasInitializedFloatingSize, dockSide, panelId, safeUpdatePanel, isCoarsePointer, isMobile, minHeightEffective, minWidthEffective])
 
+  // Floating panels: width/height must not animate — ResizeObserver→syncSize commits layout from
+  // getBoundingClientRect(); animating those dimensions yields intermediate sizes and feedback growth.
+  const floatingForDimensionSync =
+    !docked && !minimized && !(isMobile && isMaximized)
+  const dimensionTransitionMs =
+    prefs.animations_enabled && !wantsReducedMotion && floatingForDimensionSync ? 0 : DURATION_MS
   const transition =
     prefs.animations_enabled && !wantsReducedMotion
-      ? `box-shadow ${DURATION_MS}ms ${EASE}, width ${DURATION_MS}ms ${EASE}, height ${DURATION_MS}ms ${EASE}, left ${DURATION_MS}ms ${EASE}, top ${DURATION_MS}ms ${EASE}, transform ${DURATION_MS}ms ${EASE}`
+      ? `box-shadow ${DURATION_MS}ms ${EASE}, width ${dimensionTransitionMs}ms ${EASE}, height ${dimensionTransitionMs}ms ${EASE}, left ${DURATION_MS}ms ${EASE}, top ${DURATION_MS}ms ${EASE}, transform ${DURATION_MS}ms ${EASE}`
       : undefined
 
   const getDockedY = useCallback(
@@ -542,6 +563,9 @@ export default function CockpitHudPanel({
   useEffect(() => {
     const el = rootRef.current
     if (!el || !layout || docked || minimized || dragMode !== 'none') return
+    // Maximized mobile shell uses width/height `auto` + inset layout; measuring here would
+    // persist viewport-sized dimensions and corrupt the real floating size on restore.
+    if (isMobile && isMaximized) return
 
     const syncSize = () => {
       const rect = el.getBoundingClientRect()
@@ -576,7 +600,7 @@ export default function CockpitHudPanel({
         pendingSizeRaf.current = null
       }
     }
-  }, [panelId, safeUpdatePanel, layout?.w, layout?.h, layout?.docked, docked, minimized, dragMode])
+  }, [panelId, safeUpdatePanel, layout?.w, layout?.h, layout?.docked, docked, minimized, dragMode, isMaximized])
 
   const commitPosition = useCallback(() => {
     const el = rootRef.current
@@ -873,38 +897,14 @@ export default function CockpitHudPanel({
     setMapInteractionBlocked,
   ])
 
-  useEffect(() => {
-    if (!isMobile || docked || dragMode !== 'none') return
-    const onResize = () => {
-      const { vw, vh } = viewportSize()
-      const maxW = Math.max(minWidthEffective, vw - 8)
-      const maxH = Math.max(minHeightEffective, vh - 40)
-      const nw = Math.min(sizeRef.current.w, maxW)
-      const nh = Math.min(Math.max(minHeightEffective, sizeRef.current.h ?? minHeightEffective), maxH)
-      const nx = Math.max(0, Math.min(posRef.current.x, vw - nw))
-      const ny = Math.max(36, Math.min(posRef.current.y, vh - nh))
-      const sizeChanged = Math.abs(nw - sizeRef.current.w) >= 0.5 || Math.abs(nh - (sizeRef.current.h ?? nh)) >= 0.5
-      const posChanged = Math.abs(nx - posRef.current.x) >= 0.5 || Math.abs(ny - posRef.current.y) >= 0.5
-      if (!sizeChanged && !posChanged) return
-      if (sizeChanged) {
-        const nextSize = { w: nw, h: nh }
-        sizeRef.current = nextSize
-        setSize(nextSize)
-      }
-      if (posChanged) {
-        const next = { x: nx, y: ny }
-        posRef.current = next
-        setPos(next)
-      }
-      safeUpdatePanel(panelId, { x: nx, y: ny, w: nw, h: nh, docked: false })
-    }
-    window.addEventListener('resize', onResize)
-    window.addEventListener('orientationchange', onResize)
-    return () => {
-      window.removeEventListener('resize', onResize)
-      window.removeEventListener('orientationchange', onResize)
-    }
-  }, [isMobile, docked, dragMode, minHeightEffective, minWidthEffective, panelId, safeUpdatePanel])
+  // MOBILE FIELD INTERACTION RULE: panels MUST NOT auto-rearrange on rotation,
+  // resize, or visualViewport changes (URL bar collapse, software keyboard).
+  // The previous mobile resize handler clamped position/size to viewport bounds
+  // and wrote the result back to persisted state on every viewport tick, which
+  // counted as auto-rearrange and contradicted the manual-placement contract.
+  // If a panel ends up off-screen after rotation, the user repositions it
+  // (drag, or minimize → dock to bring it back to the dock lane).
+  // Desktop behavior is unchanged (this effect was mobile-only).
 
   const onHeaderPointerDown = (e: React.PointerEvent) => {
     if (isMobile && isMaximized) return
@@ -1284,6 +1284,7 @@ export default function CockpitHudPanel({
           : minimized
             ? (isCoarsePointer ? 46 : 44)
             : size.h ?? undefined,
+        boxSizing: 'border-box',
         minHeight: docked
           ? dockedHeight
           : minimized

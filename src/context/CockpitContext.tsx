@@ -21,6 +21,14 @@ import {
   SNAP_PX,
 } from '../types/cockpit'
 import { cockpitViewport } from '../lib/viewport'
+import { emitPanelCommit } from '../diag/devEvents'
+import { getDeviceProfile } from '../runtime/deviceProfile'
+import { enforcePolicyAttempt, getCurrentPolicyMode, reportPolicyAttempt } from '../runtime/devicePolicy'
+import {
+  markLastKnownGoodSnapshotTime,
+  updateGestureActive,
+  updatePersistenceHealth,
+} from '../runtime/runtimeSnapshot'
 
 declare global {
   // TEMP render-phase detector
@@ -88,9 +96,81 @@ function themeToAccent(theme: HudColorTheme): string {
   }
 }
 
+/**
+ * MOBILE / DESKTOP LAYOUT STATE SEPARATION.
+ *
+ * Per the field-deployment model, mobile and desktop interaction modes maintain
+ * independent persisted layouts. They share command registry and preferences
+ * data shape, but never share storage keys.
+ *
+ *   desktop interaction mode → COCKPIT_STORAGE_KEY                       (legacy/unchanged)
+ *   mobile  interaction mode → COCKPIT_STORAGE_KEY + '_mobile'           (new)
+ *
+ * `interactionMode` is read from the unified `getDeviceProfile()` so this
+ * routing matches the runtime controller selection in CockpitHudPanel.
+ *
+ * One-time migration: if a mobile session boots with no mobile-scoped key
+ * AND the legacy key has data, we copy the legacy snapshot once. After that
+ * the two scopes are completely independent and never overwrite each other.
+ */
+
+const MOBILE_LAYOUT_SUFFIX = '_mobile'
+const DEVICE_TUNE_SUFFIX = '_device_tune'
+const SCENE_BACKUP_SUFFIX = '_scene_backup'
+const MOBILE_MIGRATION_FLAG_KEY = `${COCKPIT_STORAGE_KEY}_mobile_migration_v1`
+
+function getLayoutScope(): 'mobile' | 'desktop' {
+  if (typeof window === 'undefined') return 'desktop'
+  return getDeviceProfile().interactionMode === 'mobile' ? 'mobile' : 'desktop'
+}
+
+function getLayoutStorageKey(scope: 'mobile' | 'desktop' = getLayoutScope()): string {
+  return scope === 'mobile' ? `${COCKPIT_STORAGE_KEY}${MOBILE_LAYOUT_SUFFIX}` : COCKPIT_STORAGE_KEY
+}
+
+function getDeviceTuneStorageKey(scope: 'mobile' | 'desktop' = getLayoutScope()): string {
+  return scope === 'mobile'
+    ? `${COCKPIT_STORAGE_KEY}${DEVICE_TUNE_SUFFIX}${MOBILE_LAYOUT_SUFFIX}`
+    : `${COCKPIT_STORAGE_KEY}${DEVICE_TUNE_SUFFIX}`
+}
+
+function getSceneBackupStorageKey(scope: 'mobile' | 'desktop' = getLayoutScope()): string {
+  return scope === 'mobile'
+    ? `${COCKPIT_STORAGE_KEY}${SCENE_BACKUP_SUFFIX}${MOBILE_LAYOUT_SUFFIX}`
+    : `${COCKPIT_STORAGE_KEY}${SCENE_BACKUP_SUFFIX}`
+}
+
 function loadState(): StoredState | null {
   try {
-    const raw = localStorage.getItem(COCKPIT_STORAGE_KEY)
+    const scope = getLayoutScope()
+    const key = getLayoutStorageKey(scope)
+    let raw = localStorage.getItem(key)
+
+    // One-time migration: existing mobile users had data under the legacy key
+    // before this scope-split. On first mobile boot after upgrade, copy the
+    // legacy snapshot into the mobile-scoped key so they don't see "first launch"
+    // docked behavior unexpectedly. Guarded by a flag so a deliberate mobile
+    // reset (which clears the mobile key) does not auto-restore from desktop.
+    if (!raw && scope === 'mobile') {
+      const migrated = localStorage.getItem(MOBILE_MIGRATION_FLAG_KEY)
+      if (!migrated) {
+        try {
+          const legacyRaw = localStorage.getItem(COCKPIT_STORAGE_KEY)
+          if (legacyRaw) {
+            localStorage.setItem(key, legacyRaw)
+            raw = legacyRaw
+          }
+        } catch {
+          /* ignore */
+        }
+        try {
+          localStorage.setItem(MOBILE_MIGRATION_FLAG_KEY, '1')
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+
     if (!raw) return null
     const o = JSON.parse(raw) as Partial<StoredState> | null
     if (!o || o.v !== LAYOUT_VERSION) return null
@@ -99,22 +179,43 @@ function loadState(): StoredState | null {
       o.prefs && typeof o.prefs === 'object'
         ? ({ ...PREFS_DEFAULT, ...(o.prefs as Partial<CockpitPrefs>) } as CockpitPrefs)
         : PREFS_DEFAULT
+    updatePersistenceHealth('healthy')
     return { v: LAYOUT_VERSION, panels, prefs }
   } catch {
+    // Crash-safe recovery path: try last-known-good snapshot.
+    try {
+      const scope = getLayoutScope()
+      const lkgKey = `${getLayoutStorageKey(scope)}_lkg`
+      const rawLkg = localStorage.getItem(lkgKey)
+      if (!rawLkg) {
+        updatePersistenceHealth('error')
+        return null
+      }
+      const o = JSON.parse(rawLkg) as Partial<StoredState> | null
+      if (!o || o.v !== LAYOUT_VERSION) {
+        updatePersistenceHealth('error')
+        return null
+      }
+      const panels = o.panels && typeof o.panels === 'object' ? (o.panels as PanelMap) : {}
+      const prefs =
+        o.prefs && typeof o.prefs === 'object'
+          ? ({ ...PREFS_DEFAULT, ...(o.prefs as Partial<CockpitPrefs>) } as CockpitPrefs)
+          : PREFS_DEFAULT
+      updatePersistenceHealth('corrupt_recovered')
+      markLastKnownGoodSnapshotTime()
+      return { v: LAYOUT_VERSION, panels, prefs }
+    } catch {
+      updatePersistenceHealth('error')
+    }
     return null
   }
 }
 
 function detectDevicePreset(): DevicePreset {
-  const ua = navigator.userAgent || ''
-  const isiOS = /iPhone|iPad|iPod/i.test(ua)
-  const isAndroid = /Android/i.test(ua)
-  const { vw, vh } = cockpitViewport()
-  const shortEdge = Math.min(vw, vh)
-  const isTabletLike = shortEdge >= 700 && shortEdge <= 1100
-  if (isiOS && !isTabletLike) return 'iphone'
-  if (isAndroid && !isTabletLike) return 'android'
-  if (isTabletLike) return 'tablet'
+  const profile = getDeviceProfile()
+  if (profile.type === 'tablet') return 'tablet'
+  if (profile.isIOS && profile.type === 'mobile') return 'iphone'
+  if (profile.isAndroid && profile.type === 'mobile') return 'android'
   return 'desktop'
 }
 
@@ -172,8 +273,13 @@ function firstRunPreset(device: DevicePreset): {
         low_map_brightness: 0.16,
       },
       panelPatches: {
-        voice: { x: 1180, y: 280, w: 330, h: null, z: 431, minimized: false, docked: false },
-        sos: { x: 1180, y: 520, w: 260, h: null, z: 432, minimized: false, docked: false },
+        layers: { x: 8, y: 48, w: 176, h: null, z: 430, minimized: false, docked: true, dockSide: 'left' },
+        waypoints: { x: 8, y: 148, w: 300, h: null, z: 431, minimized: false, docked: true, dockSide: 'left' },
+        location: { x: 8, y: 248, w: 300, h: null, z: 432, minimized: false, docked: true, dockSide: 'right' },
+        voice: { x: 8, y: 348, w: 330, h: null, z: 433, minimized: false, docked: true, dockSide: 'right' },
+        sos: { x: 8, y: 448, w: 280, h: null, z: 434, minimized: false, docked: true, dockSide: 'right' },
+        weather: { x: 8, y: 548, w: 320, h: null, z: 435, minimized: false, docked: true, dockSide: 'right' },
+        display: { x: 8, y: 648, w: 280, h: null, z: 436, minimized: false, docked: true, dockSide: 'left' },
       },
     }
   }
@@ -243,9 +349,50 @@ function deviceOptimizationPrefs(device: DevicePreset): Partial<CockpitPrefs> {
 
 function saveState(panels: PanelMap, prefs: CockpitPrefs) {
   try {
+    const scope = getLayoutScope()
+    // DEPE: each write announces which scope it is targeting; the engine
+    // compares against the mode policy. A mobile session writing to the
+    // desktop key (or vice versa) triggers a `crossModePersistence` violation.
+    const scopeEnableOk = enforcePolicyAttempt(
+      scope === 'mobile' ? 'storage.scope.mobile' : 'storage.scope.desktop',
+      'enable',
+      'saveState',
+    )
+    enforcePolicyAttempt(
+      scope === 'mobile' ? 'storage.scope.desktop' : 'storage.scope.mobile',
+      'disable',
+      'saveState',
+    )
+
     const body: StoredState = { v: LAYOUT_VERSION, panels, prefs }
-    localStorage.setItem(COCKPIT_STORAGE_KEY, JSON.stringify(body))
+    const bodyJson = JSON.stringify(body)
+    reportPolicyAttempt('persistence.transactionalWrite', 'enable', 'saveState.txn')
+    if (scopeEnableOk) {
+      const key = getLayoutStorageKey(scope)
+      const tmpKey = `${key}_tmp`
+      const lkgKey = `${key}_lkg`
+      localStorage.setItem(tmpKey, bodyJson)
+      const parsed = JSON.parse(localStorage.getItem(tmpKey) ?? 'null') as Partial<StoredState> | null
+      if (parsed?.v !== LAYOUT_VERSION || !parsed?.panels || !parsed?.prefs) {
+        updatePersistenceHealth('error')
+        return
+      }
+      localStorage.setItem(key, bodyJson)
+      localStorage.setItem(lkgKey, bodyJson)
+      localStorage.removeItem(tmpKey)
+      updatePersistenceHealth('healthy')
+      markLastKnownGoodSnapshotTime()
+      return
+    }
+
+    // Critical DEPE correction: if a scope violation is detected, force write
+    // to the canonical scope for the current interaction mode.
+    const correctedScope = getCurrentPolicyMode() === 'mobile' ? 'mobile' : 'desktop'
+    localStorage.setItem(getLayoutStorageKey(correctedScope), bodyJson)
+    updatePersistenceHealth('recovering')
+    markLastKnownGoodSnapshotTime()
   } catch {
+    updatePersistenceHealth('error')
     /* ignore */
   }
 }
@@ -489,7 +636,7 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
     })
     try {
       localStorage.setItem(
-        `${COCKPIT_STORAGE_KEY}_device_tune`,
+        getDeviceTuneStorageKey(),
         JSON.stringify({ v: DEVICE_TUNE_VERSION, device, ts: Date.now() }),
       )
     } catch {
@@ -500,7 +647,7 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let alreadyApplied = false
     try {
-      const raw = localStorage.getItem(`${COCKPIT_STORAGE_KEY}_device_tune`)
+      const raw = localStorage.getItem(getDeviceTuneStorageKey())
       if (raw) {
         const parsed = JSON.parse(raw) as { v?: string; device?: DevicePreset }
         alreadyApplied = parsed?.v === DEVICE_TUNE_VERSION && parsed?.device === devicePreset
@@ -521,6 +668,10 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
     const device = detectDevicePreset()
     const preset = firstRunPreset(device)
     if (!Object.keys(preset.panelPatches).length && !Object.keys(preset.prefs).length) return
+    // DEPE: first-launch auto-dock is required on mobile and allowed elsewhere.
+    // Engine confirms the verdict; we don't gate on it (would break first run)
+    // but a forbidden mode would surface a violation in the snapshot.
+    reportPolicyAttempt('panel.autoDockOnFirstLaunch', 'enable', `device=${device}`)
     setPanels((prev) =>
       normalizeNoOverlapLayout(
         { ...prev, ...preset.panelPatches },
@@ -548,6 +699,10 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
     return () => clearInterval(t)
   }, [panels, prefs, persist])
 
+  useEffect(() => {
+    updateGestureActive(mapInteractionBlocked)
+  }, [mapInteractionBlocked])
+
   const accent = useMemo(() => {
     if (prefs.screen_hue === 'low_light') return '#7dff8a'
     if (prefs.screen_hue === 'red_tactical') return '#ff1744'
@@ -557,17 +712,19 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
   /** Root CSS variables + classes */
   useEffect(() => {
     const root = document.documentElement
-    const ua = navigator.userAgent || ''
-    const isiOS = /iPhone|iPad|iPod/i.test(ua)
-    const isAndroid = /Android/i.test(ua)
+    const profile = getDeviceProfile()
+    const isiOS = profile.isIOS
+    const isAndroid = profile.isAndroid
+    // DEPE rule: any device whose interaction model is mobile (phones AND
+    // tablets) gets the platform-mobile CSS class, ensuring touch-target
+    // sizing and rounded panel cosmetics apply uniformly.
     const isMobileLike =
+      profile.interactionMode === 'mobile' ||
       isAndroid ||
       isiOS ||
-      window.matchMedia('(pointer: coarse)').matches ||
-      window.matchMedia('(max-width: 820px)').matches
-    const wantsReducedMotion = window.matchMedia(
-      '(prefers-reduced-motion: reduce)',
-    ).matches
+      profile.isCoarsePointer ||
+      profile.width < 820
+    const wantsReducedMotion = profile.prefersReducedMotion
     const anim =
       prefs.animations_enabled && !wantsReducedMotion ? `${DURATION_MS}ms` : '0ms'
     root.style.setProperty('--cockpit-glass-intensity', String(prefs.glass_intensity))
@@ -643,6 +800,14 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
           (cur.docked ?? false) === (nextPanel.docked ?? false) &&
           (cur.dockSide ?? 'left') === (nextPanel.dockSide ?? 'left')
         if (unchanged) return prev
+        emitPanelCommit({
+          panelId: id,
+          before: { w: cur.w ?? null, h: cur.h ?? null },
+          after: { w: nextPanel.w ?? null, h: nextPanel.h ?? null },
+          dw: (nextPanel.w ?? 0) - (cur.w ?? 0),
+          dh: (nextPanel.h ?? 0) - (cur.h ?? 0),
+          ts: Date.now(),
+        })
         const merged = { ...prev, [id]: nextPanel }
         const next = normalizeNoOverlapLayout(merged, panelGapPx(prefs))
         persist(next, prefs)
@@ -733,7 +898,7 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
     persist(panels, prefs)
     try {
       localStorage.setItem(
-        COCKPIT_STORAGE_KEY + '_scene_backup',
+        getSceneBackupStorageKey(),
         JSON.stringify({ v: 2, panels, prefs }),
       )
     } catch {
@@ -743,7 +908,7 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
 
   const loadScene = useCallback(() => {
     try {
-      const raw = localStorage.getItem(COCKPIT_STORAGE_KEY + '_scene_backup')
+      const raw = localStorage.getItem(getSceneBackupStorageKey())
       if (!raw) return
       const o = JSON.parse(raw) as StoredState
       if (o?.panels) {

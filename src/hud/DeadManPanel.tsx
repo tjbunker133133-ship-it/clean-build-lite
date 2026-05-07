@@ -15,6 +15,14 @@ import HudPanel from './HudPanel'
 import { useDeadMan } from '../hooks/useDeadMan'
 import { useGPS } from '../hooks/useGPS'
 import { useAppContext } from '../context/AppContext'
+import { isDeadManAudioEnabled } from '../runtime/deadManAudio'
+import {
+  recordDeadManEscalation,
+  updateDeadManTimer,
+  type DeadManEscalationLevel,
+  type DeadManTimerState,
+} from '../runtime/runtimeSnapshot'
+import { logInfo, logWarn } from '../runtime/logger'
 
 const ALERT_THRESHOLDS = [
   { ms: 60 * 60 * 1000, label: '1 HOUR LEFT' },
@@ -98,7 +106,28 @@ function resolveRapidEndpoint(): string {
   return ''
 }
 
+/**
+ * Local audio playback for dead-man alerts.
+ *
+ * AUDIO GATE: This function is the SINGLE entry point for dead-man
+ * audible playback (escalation alerts + expiry alert). It honors the
+ * centralized flag exported from `runtime/deadManAudio.ts`:
+ *
+ *   - flag = true   → SpeechSynthesis utterance plays as before
+ *   - flag = false  → no playback; emits a `[DEADMAN]` log line so
+ *                     operators can confirm the alert fired with audio
+ *                     suppressed. All other dead-man behavior continues
+ *                     unchanged.
+ *
+ * The SpeechSynthesis code below is intentionally preserved verbatim so
+ * flipping the flag back to `true` re-enables playback with no other
+ * code changes.
+ */
 function speak(text: string) {
+  if (!isDeadManAudioEnabled()) {
+    logInfo('DEADMAN', `audioSuppressed=true text="${text.slice(0, 80)}"`)
+    return
+  }
   if (!('speechSynthesis' in window)) return
   const u = new SpeechSynthesisUtterance(text)
   u.rate = 1
@@ -186,6 +215,29 @@ export default function DeadManPanel() {
     }
   }
 
+  // Mirror dead-man timer state into the runtime snapshot so the debug
+  // overlay and any external operator tooling can answer "what is the
+  // dead-man subsystem doing right now?". Never alters timer behavior.
+  useEffect(() => {
+    const timerState: DeadManTimerState = !isActive
+      ? 'standby'
+      : isExpired && renewCountdown != null && renewCountdown > 0
+        ? 'renew_window'
+        : isExpired
+          ? 'expired'
+          : isCritical
+            ? 'critical'
+            : isWarning
+              ? 'warning'
+              : 'nominal'
+    updateDeadManTimer({
+      timerState,
+      active: isActive,
+      remainingMs,
+      durationMs,
+    })
+  }, [isActive, isExpired, isCritical, isWarning, remainingMs, durationMs, renewCountdown])
+
   // Pulse animation ref for critical state
   const pulseRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -216,6 +268,23 @@ export default function DeadManPanel() {
       if (remainingMs <= t.ms && !firedAlertsRef.current.has(t.label)) {
         firedAlertsRef.current.add(t.label)
         setStatusText(`ALERT: ${t.label} — RENEW TIMER`)
+        // Map threshold to escalation level for runtime visibility.
+        const level: DeadManEscalationLevel =
+          t.ms === 60 * 60 * 1000
+            ? '1h'
+            : t.ms === 30 * 60 * 1000
+              ? '30m'
+              : t.ms === 15 * 60 * 1000
+                ? '15m'
+                : '5m'
+        // Structured log: separate lines so the audio-suppression state
+        // is unambiguous in the production console.
+        logWarn('DEADMAN', `escalation="${level}" label="${t.label}"`)
+        if (!isDeadManAudioEnabled()) {
+          logInfo('DEADMAN', 'audioSuppressed=true')
+        }
+        recordDeadManEscalation(level, t.label)
+        // The audio call below remains intact; gated centrally inside speak().
         speak(`Deadman alert. ${t.label.toLowerCase()}. Renew timer now.`)
       }
     }
@@ -225,6 +294,12 @@ export default function DeadManPanel() {
     if (!isExpired || !isActive) return
     setStatusText(`EXPIRED — RENEW WITHIN ${RENEW_WINDOW_S}S`)
     setRenewCountdown(RENEW_WINDOW_S)
+    logWarn('DEADMAN', 'escalation="expired" label="TIMER EXPIRED"')
+    if (!isDeadManAudioEnabled()) {
+      logInfo('DEADMAN', 'audioSuppressed=true')
+    }
+    recordDeadManEscalation('expired', 'TIMER EXPIRED')
+    // Audio call preserved; centrally gated inside speak().
     speak('Deadman timer expired. Renew now or rescue will be sent.')
     renewTimerRef.current = window.setInterval(() => {
       setRenewCountdown((prev) => {

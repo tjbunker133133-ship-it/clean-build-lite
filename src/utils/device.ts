@@ -1,28 +1,19 @@
+/**
+ * Legacy API kept for backwards compatibility.
+ *
+ * Internally delegates to `src/runtime/deviceProfile.ts`, which is the single
+ * source of truth for device classification. New code should import from
+ * `runtime/deviceProfile` directly.
+ */
+import { getDeviceProfile } from '../runtime/deviceProfile'
+
 export const getDeviceEnvironment = () => {
-  if (typeof window === 'undefined') {
-    return {
-      isTouchDevice: false,
-      isCompactLayout: false,
-      isMobileEnvironment: false,
-      width: 0,
-      height: 0,
-    }
-  }
-
-  const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0
-
-  const width = window.innerWidth
-  const height = window.innerHeight
-
-  const isCompactLayout = width < 900
-
-  const isMobileEnvironment = isTouchDevice && isCompactLayout
-
+  const p = getDeviceProfile()
   return {
-    isTouchDevice,
-    isCompactLayout,
-    isMobileEnvironment,
-    width,
-    height,
+    isTouchDevice: p.isTouch,
+    isCompactLayout: p.width > 0 ? p.width < 900 : false,
+    isMobileEnvironment: p.interactionMode === 'mobile',
+    width: p.width,
+    height: p.height,
   }
 }

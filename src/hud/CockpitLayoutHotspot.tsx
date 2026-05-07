@@ -1,4 +1,5 @@
 import { useCockpit } from '../context/CockpitContext'
+import { getDeviceProfile } from '../runtime/deviceProfile'
 
 /**
  * Double-tap / double-click this chrome hit target (44×44 min) to reset layout.
@@ -6,8 +7,7 @@ import { useCockpit } from '../context/CockpitContext'
  */
 export default function CockpitLayoutHotspot() {
   const { resetLayout } = useCockpit()
-  const coarse =
-    typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
+  const coarse = getDeviceProfile().isCoarsePointer
   const runReset = () => {
     if (!coarse || window.confirm('Reset panel layout?')) {
       resetLayout()

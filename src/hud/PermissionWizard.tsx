@@ -120,6 +120,11 @@ export default function PermissionWizard({
   const [attempted, setAttempted] = useState<Partial<Record<WizardStepId, boolean>>>({})
   const [linkHint, setLinkHint] = useState<string | null>(null)
   const [showAdvanced, setShowAdvanced] = useState(false)
+  const [settingsFallback, setSettingsFallback] = useState<string | null>(null)
+  const showSettingsFallback = useCallback(
+    (msg: string) => setSettingsFallback(msg),
+    [],
+  )
 
   useEffect(() => {
     if (visible) {
@@ -212,6 +217,7 @@ export default function PermissionWizard({
   if (!visible) return null
 
   return (
+    <>
     <div
       style={{
         width: 'min(560px, 100%)',
@@ -289,7 +295,7 @@ export default function PermissionWizard({
                     onClick={() => {
                       setLinkHint('If Settings does not open, use COPY STEPS.')
                       window.setTimeout(() => setLinkHint(null), 8000)
-                      tryOpenIosLocationPrivacySettings()
+                      tryOpenIosLocationPrivacySettings(showSettingsFallback)
                     }}
                     style={{ ...btnBase, flex: '1 1 140px', borderColor: 'rgba(125,255,138,0.5)', background: 'rgba(125,255,138,0.12)' }}
                   >
@@ -297,7 +303,7 @@ export default function PermissionWizard({
                   </button>
                   <button
                     type="button"
-                    onClick={() => tryOpenIosLocationPrivacySettingsAlternate()}
+                    onClick={() => tryOpenIosLocationPrivacySettingsAlternate(showSettingsFallback)}
                     style={{ ...btnBase, flex: '1 1 120px' }}
                   >
                     ALT SETTINGS LINK
@@ -315,7 +321,7 @@ export default function PermissionWizard({
                 <>
                   <button
                     type="button"
-                    onClick={() => tryOpenAndroidLocationSettings()}
+                    onClick={() => tryOpenAndroidLocationSettings(showSettingsFallback)}
                     style={{ ...btnBase, flex: '1 1 160px', borderColor: 'rgba(125,255,138,0.5)' }}
                   >
                     OPEN ANDROID LOCATION
@@ -570,5 +576,52 @@ export default function PermissionWizard({
         </div>
       </div>
     </div>
+    {settingsFallback && (
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Open Settings manually"
+        style={{
+          position: 'fixed',
+          inset: 0,
+          zIndex: 100003,
+          background: 'rgba(0,0,0,0.65)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 24,
+        }}
+        onClick={() => setSettingsFallback(null)}
+      >
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            width: 'min(420px, 100%)',
+            background: 'rgba(8,12,14,0.96)',
+            border: '1px solid rgba(125,255,138,0.55)',
+            borderRadius: 12,
+            padding: 16,
+            color: '#d8e3d8',
+            display: 'grid',
+            gap: 10,
+          }}
+        >
+          <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: '0.06em', color: '#7dff8a' }}>
+            OPEN SETTINGS MANUALLY
+          </div>
+          <div style={{ fontSize: 12, color: '#b8c4b8', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
+            {settingsFallback}
+          </div>
+          <button
+            type="button"
+            onClick={() => setSettingsFallback(null)}
+            style={{ ...btnBase, marginTop: 4 }}
+          >
+            OK
+          </button>
+        </div>
+      </div>
+    )}
+    </>
   )
 }

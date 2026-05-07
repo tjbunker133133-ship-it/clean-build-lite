@@ -1,19 +1,26 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import HudPanel from './HudPanel'
-import { useAppContext } from '../context/AppContext'
-import { useCockpit } from '../context/CockpitContext'
-import { useMapContext } from '../context/MapContext'
-import { useGPS } from '../hooks/useGPS'
-import { formatDistance, haversineDistance, totalRouteDistance } from '../lib/haversine'
-import { HALF_CORRIDOR_FEET, corridorSeverity, corridorZoneLabel, distancePointToRouteFeet } from '../lib/corridor'
-import { fetchWeather } from '../lib/weather'
 import { requestMicrophonePermission } from '../lib/devicePermissions'
-import { fetchElevationMeters } from '../lib/elevation'
+import { useHudCommands, type CommandSource } from '../hooks/useHudCommands'
+import {
+  recordWakeWordGatePassed,
+  updatePermission,
+  updateVoiceArmed,
+  updateVoiceMeta,
+  updateVoiceState,
+  updateVoiceRecoveryState,
+  updateVoiceRegistryReport,
+} from '../runtime/runtimeSnapshot'
+import { enforcePolicyAttempt, reportPolicyAttempt } from '../runtime/devicePolicy'
+import { validateVoiceRegistry, type VoiceDirectoryItem } from '../runtime/voiceRegistry'
 
 type VoiceState = 'sleeping' | 'listening' | 'processing' | 'success' | 'failure'
 
-const WAKE_WORD = 'hud'
-const WAKE_WINDOW_MS = 5000
+// SYSTEM RULE: HUD is the ONLY valid activation token.
+// No aliases, no fuzzy matching, no fallback activation allowed.
+// This constant is the single source of truth for the wake word and is the
+// only string that can authorize voice command execution.
+const WAKE_WORD = 'hud' as const
 
 function speak(text: string) {
   if (!('speechSynthesis' in window)) return
@@ -49,16 +56,6 @@ function playChime() {
 
 function normalize(input: string): string {
   return input.toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim()
-}
-
-function bearingDeg(lat1: number, lng1: number, lat2: number, lng2: number): number {
-  const toRad = (d: number) => (d * Math.PI) / 180
-  const toDeg = (r: number) => (r * 180) / Math.PI
-  const y = Math.sin(toRad(lng2 - lng1)) * Math.cos(toRad(lat2))
-  const x =
-    Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) -
-    Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(toRad(lng2 - lng1))
-  return (toDeg(Math.atan2(y, x)) + 360) % 360
 }
 
 const QUICK_COMMAND_GROUPS: Array<{
@@ -105,39 +102,89 @@ const QUICK_COMMAND_GROUPS: Array<{
 ]
 
 export default function VoicePanel() {
-  const { map } = useMapContext()
-  const gps = useGPS()
-  const { state, addWaypoint, removeWaypoint, setWaypoints } = useAppContext()
-  const { setScreenHue, resetLayout, raisePanel, updatePanel } = useCockpit()
+  const { commands, dispatch } = useHudCommands()
+
+  // Flatten the voice directory definition into the validator's expected
+  // shape. This lets us answer "are any directory items missing from the
+  // registry?" and surface ghost items + label drift in the runtime
+  // overlay. Source of truth for what a button does is still the registry
+  // descriptor; this UI is a curated subset of that registry.
+  const directoryItems = useMemo<VoiceDirectoryItem[]>(
+    () =>
+      QUICK_COMMAND_GROUPS.flatMap((g) =>
+        g.items.map((it) => ({ group: g.group, cmd: it.cmd, label: it.label })),
+      ),
+    [],
+  )
+
+  useEffect(() => {
+    const report = validateVoiceRegistry(commands, directoryItems)
+    updateVoiceRegistryReport(report)
+  }, [commands, directoryItems])
 
   const [voiceState, setVoiceState] = useState<VoiceState>('sleeping')
   const [expanded, setExpanded] = useState(false)
+  // SYSTEM RULE: `armed` IS the SR lifecycle master.
+  // - true  → SpeechRecognition is constructed, started, and listens for "HUD"
+  // - false → SR is fully torn down (rec.stop + listener removal). No background streams.
+  // The "CONTINUOUS ON/OFF" UI button mirrors this single flag.
   const [armed, setArmed] = useState(false)
   const [typed, setTyped] = useState('')
   const [lastHeard, setLastHeard] = useState('')
-  const [attachedPinId, setAttachedPinId] = useState<string | null>(null)
   const [statusText, setStatusText] = useState('🎤 HUD (tap to wake)')
-  const [continuousMode, setContinuousMode] = useState(false)
-  const [morseEnabled, setMorseEnabled] = useState(false)
-  const [torchEnabled, setTorchEnabled] = useState(false)
+  const [recoveryNonce, setRecoveryNonce] = useState(0)
   const recognitionRef = useRef<any>(null)
   const armedRef = useRef(false)
+  const recoveryAttemptedRef = useRef(false)
+  const suspendedByLifecycleRef = useRef(false)
+  const restartAttemptsRef = useRef(0)
+  const restartTimerRef = useRef<number | null>(null)
+  const lastRecognitionAtRef = useRef<number | null>(null)
   armedRef.current = armed
-  const wakeUntilRef = useRef(0)
   const parseAndRunRef = useRef<(text: string) => Promise<void>>(async () => {})
   const supportsRec =
     typeof window !== 'undefined' &&
     !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)
 
-  const attachedPin = useMemo(
-    () => state.waypoints.find((w) => w.id === attachedPinId) ?? null,
-    [attachedPinId, state.waypoints],
-  )
+  // Mirror support flag into runtime snapshot once on mount.
+  useEffect(() => {
+    updateVoiceMeta({ supported: supportsRec })
+    if (!supportsRec) updateVoiceState('unavailable', { lastError: 'SpeechRecognition unsupported' })
+  }, [supportsRec])
 
+  // Mirror armed flag into runtime snapshot + DEPE.
+  useEffect(() => {
+    updateVoiceArmed(armed)
+    if (!armed) {
+      restartAttemptsRef.current = 0
+      if (restartTimerRef.current != null) {
+        window.clearTimeout(restartTimerRef.current)
+        restartTimerRef.current = null
+      }
+      updateVoiceMeta({ restartAttempts: 0 })
+    }
+    // DEPE: SR running while disarmed is forbidden in every mode.
+    // We announce the listener's actual state ('enable' when armed, 'disable'
+    // when teardown). The engine surfaces a violation if a future change
+    // ever leaves a listener running while armed=false.
+    reportPolicyAttempt(
+      'voice.continuousListening',
+      armed ? 'enable' : 'disable',
+      'VoicePanel.armed-effect',
+    )
+    reportPolicyAttempt(
+      'voice.backgroundListenerWhenDisarmed',
+      armed ? 'disable' : 'disable',
+      'VoicePanel.armed-effect',
+    )
+  }, [armed])
+
+  /** Transient acknowledgement: centralized snapshot signal → CockpitHudShell CSS pulse.
+   * Haptic is dispatched by `recordWakeWordGatePassed` via the centralized
+   * runtime broker (capability-checked, throttled, mobile-only). SR/parser/
+   * dispatch unchanged. */
   const pulseWake = () => {
-    document.documentElement.classList.add('voice-wake-pulse')
-    window.setTimeout(() => document.documentElement.classList.remove('voice-wake-pulse'), 500)
-    if ('vibrate' in navigator) navigator.vibrate(30)
+    recordWakeWordGatePassed()
     playChime()
   }
 
@@ -145,400 +192,342 @@ export default function VoicePanel() {
     setStatusText(text)
     setVoiceState(ok ? 'success' : 'failure')
     speak(text)
-    window.setTimeout(() => setVoiceState(armed ? 'listening' : 'sleeping'), 650)
+    window.setTimeout(() => setVoiceState(armedRef.current ? 'listening' : 'sleeping'), 650)
   }
 
-  const runCommand = async (rawCmd: string) => {
+  /**
+   * Voice → command-id → central dispatcher → speech feedback.
+   * The voice layer never mutates app/cockpit/map state directly.
+   *
+   * `rawTranscript` carries the original full transcript (including the
+   * "HUD" wake word) so the structured `[VOICE]` log records the
+   * user-facing phrase in `heard`, while `cmd` carries the post-wake-word
+   * normalized form used for dispatch matching.
+   */
+  const dispatchAndReport = async (
+    rawCmd: string,
+    source: CommandSource,
+    rawTranscript?: string,
+  ) => {
     const cmd = normalize(rawCmd)
     if (!cmd) return
     setVoiceState('processing')
     setLastHeard(`HUD ${cmd}`)
-
-    // Help / directory
-    if (cmd === 'help' || cmd === 'commands' || cmd === 'directory') {
-      report('Navigation, route, status, display, and safety commands are available.')
-      return
-    }
-
-    // Navigation
-    if (cmd === 'center') {
-      if (!map || gps.lat == null || gps.lng == null) return report('GPS center unavailable.', false)
-      map.easeTo({ center: [gps.lng, gps.lat], duration: 480, essential: true })
-      return report('Centered on your GPS.')
-    }
-    if (cmd === 'zoom in') {
-      if (!map) return report('Map unavailable.', false)
-      map.zoomTo(map.getZoom() + 1, { duration: 250 })
-      return report('Zooming in.')
-    }
-    if (cmd === 'zoom out') {
-      if (!map) return report('Map unavailable.', false)
-      map.zoomTo(map.getZoom() - 1, { duration: 250 })
-      return report('Zooming out.')
-    }
-    if (cmd === 'north' || cmd === 'south' || cmd === 'east' || cmd === 'west') {
-      if (!map) return report('Map unavailable.', false)
-      const c = map.getCenter()
-      const step = 0.04
-      const dLat = cmd === 'north' ? step : cmd === 'south' ? -step : 0
-      const dLng = cmd === 'east' ? step : cmd === 'west' ? -step : 0
-      map.easeTo({ center: [c.lng + dLng, c.lat + dLat], duration: 220, essential: true })
-      return report(`Panning ${cmd}.`)
-    }
-
-    // GPS pin attach/detach/recenter/distance
-    if (cmd === 'attach') {
-      if (gps.lat == null || gps.lng == null || state.waypoints.length === 0) {
-        return report('No pins to attach.', false)
-      }
-      const nearest = [...state.waypoints].sort((a, b) => {
-        const da = haversineDistance(gps.lat!, gps.lng!, a.lat, a.lng).miles
-        const db = haversineDistance(gps.lat!, gps.lng!, b.lat, b.lng).miles
-        return da - db
-      })[0]
-      setAttachedPinId(nearest.id)
-      return report(`Attached to ${nearest.label}.`)
-    }
-    if (cmd === 'detach') {
-      setAttachedPinId(null)
-      return report('Detached from pin.')
-    }
-    if (cmd === 'recenter') {
-      if (!map || !attachedPin) return report('No attached pin.', false)
-      map.easeTo({
-        center: [attachedPin.lng, attachedPin.lat],
-        zoom: Math.max(14, map.getZoom()),
-        duration: 520,
-        essential: true,
-      })
-      return report(`Recentered to ${attachedPin.label}.`)
-    }
-    if (cmd === 'distance') {
-      if (!attachedPin || gps.lat == null || gps.lng == null) return report('Distance unavailable.', false)
-      const d = haversineDistance(gps.lat, gps.lng, attachedPin.lat, attachedPin.lng)
-      return report(`Distance to ${attachedPin.label}: ${formatDistance(d.miles)}.`)
-    }
-
-    // Compass
-    if (cmd === 'bearing') {
-      if (!map) return report('Bearing unavailable.', false)
-      return report(`Current map bearing ${Math.round((map.getBearing() + 360) % 360)} degrees.`)
-    }
-    if (cmd === 'direction') {
-      if (!attachedPin || gps.lat == null || gps.lng == null) return report('Direction unavailable.', false)
-      const b = bearingDeg(gps.lat, gps.lng, attachedPin.lat, attachedPin.lng)
-      return report(`Direction to ${attachedPin.label}: ${Math.round(b)} degrees.`)
-    }
-    if (cmd === 'calibrate') {
-      if (!map) return report('Compass unavailable.', false)
-      map.easeTo({ bearing: 0, duration: 280, essential: true })
-      return report('Compass calibrated.')
-    }
-
-    // Route
-    if (cmd === 'add pin') {
-      if (gps.lat == null || gps.lng == null) return report('GPS fix required.', false)
-      const idx = state.waypoints.length + 1
-      addWaypoint({
-        id: `wp_voice_${Date.now()}`,
-        lat: gps.lat,
-        lng: gps.lng,
-        label: `VOICE-${idx}`,
-        type: 'default',
-        createdAt: Date.now(),
-      })
-      return report('Pin added at current location.')
-    }
-    if (cmd === 'delete last') {
-      const last = state.waypoints[state.waypoints.length - 1]
-      if (!last) return report('No pins to delete.', false)
-      removeWaypoint(last.id)
-      return report('Last pin deleted.')
-    }
-    if (cmd === 'clear route') {
-      setWaypoints([])
-      return report('Route cleared.')
-    }
-    if (cmd === 'save route') {
-      if (state.waypoints.length < 2) return report('Need at least two pins to save route.', false)
-      const trkseg = state.waypoints
-        .map((w) => `<trkpt lat="${w.lat}" lon="${w.lng}"></trkpt>`)
-        .join('')
-      const gpx =
-        `<?xml version="1.0" encoding="UTF-8"?>` +
-        `<gpx version="1.1" creator="Tactical HUD"><trk><name>Voice Route</name><trkseg>${trkseg}</trkseg></trk></gpx>`
-      const blob = new Blob([gpx], { type: 'application/gpx+xml' })
-      const a = document.createElement('a')
-      a.href = URL.createObjectURL(blob)
-      a.download = 'voice-route.gpx'
-      a.click()
-      window.setTimeout(() => URL.revokeObjectURL(a.href), 1500)
-      return report('Route exported as GPX.')
-    }
-    if (cmd === 'reverse route') {
-      if (state.waypoints.length < 2) return report('Need at least two pins to reverse.', false)
-      const rev = [...state.waypoints]
-        .reverse()
-        .map((w, i) => ({ ...w, id: `wp_rev_${Date.now()}_${i}`, createdAt: Date.now() + i }))
-      setWaypoints(rev)
-      return report('Route reversed.')
-    }
-    if (cmd === 'route stats') {
-      const total = totalRouteDistance(state.waypoints.map((w) => ({ lat: w.lat, lng: w.lng })))
-      return report(`Route has ${state.waypoints.length} pins. Distance ${formatDistance(total.miles)}.`)
-    }
-
-    // Status
-    if (cmd === 'status') {
-      const total = totalRouteDistance(state.waypoints.map((w) => ({ lat: w.lat, lng: w.lng })))
-      const gpsState =
-        gps.locationState === 'granted' && gps.lat != null
-          ? 'GPS on'
-          : gps.locationState === 'idle'
-            ? 'Location off'
-            : gps.locationState === 'requesting'
-              ? 'GPS requesting'
-              : gps.locationState === 'denied'
-                ? 'GPS denied'
-                : 'GPS unavailable'
-      return report(`${gpsState}. ${state.waypoints.length} pins. Route ${formatDistance(total.miles)}.`)
-    }
-    if (cmd === 'time') return report(`Current time ${new Date().toLocaleTimeString()}.`)
-    if (cmd === 'battery') {
-      const nav = navigator as any
-      if (!nav.getBattery) return report('Battery API unavailable.', false)
-      nav.getBattery().then((b: any) => report(`Battery ${Math.round((b.level ?? 0) * 100)} percent.`))
-      return
-    }
-    if (cmd === 'signal') return report(navigator.onLine ? 'Connectivity online.' : 'Connectivity offline.')
-    if (cmd === 'elevation') {
-      if (!map) return report('Elevation unavailable.', false)
-      try {
-        const c = map.getCenter()
-        const m = (map as any).queryTerrainElevation?.(c)
-        if (m != null && !Number.isNaN(m)) {
-          return report(`Current elevation ${Math.round(m * 3.28084)} feet.`)
-        }
-        if (gps.lat != null && gps.lng != null) {
-          const fallback = await fetchElevationMeters(gps.lat, gps.lng)
-          if (fallback != null && !Number.isNaN(fallback)) {
-            return report(`Current elevation ${Math.round(fallback * 3.28084)} feet.`)
-          }
-        }
-        return report('Elevation unavailable.', false)
-      } catch {
-        return report('Elevation unavailable.', false)
-      }
-    }
-    if (cmd === 'corridor' || cmd === 'corridor status') {
-      if (gps.lat == null || gps.lng == null || state.waypoints.length < 2) {
-        return report('Corridor unavailable. Need GPS lock and at least two route points.', false)
-      }
-      const route = state.waypoints.map((w) => ({ lat: w.lat, lng: w.lng }))
-      const dFt = distancePointToRouteFeet({ lat: gps.lat, lng: gps.lng }, route)
-      const sev = corridorSeverity(dFt, HALF_CORRIDOR_FEET)
-      const edgeFt = Math.max(0, Math.round(HALF_CORRIDOR_FEET - dFt))
-      return report(`Corridor ${corridorZoneLabel(sev)}. Edge ${edgeFt} feet. Offset ${Math.round(dFt)} feet.`)
-    }
-
-    // SOS
-    if (cmd === 'sos' || cmd === 'emergency' || cmd === 'rescue') {
-      window.dispatchEvent(new CustomEvent('hud:sos-arm'))
-      raisePanel('sos')
-      updatePanel('sos', { minimized: false, docked: false })
-      return report('Emergency protocol armed. SOS panel activated.')
-    }
-    if (cmd === 'morse yes') {
-      window.dispatchEvent(new CustomEvent('hud:sos-morse', { detail: { enabled: true } }))
-      return report(
-        morseEnabled
-          ? 'Morse screen flash is already on.'
-          : 'Morse screen flash is currently off. Enabling it now.',
-      )
-    }
-    if (cmd === 'morse no') {
-      window.dispatchEvent(new CustomEvent('hud:sos-morse', { detail: { enabled: false } }))
-      return report(
-        morseEnabled
-          ? 'Morse screen flash is currently on. Disabling it now.'
-          : 'Morse screen flash is already off.',
-      )
-    }
-    if (cmd === 'morse toggle') {
-      const next = !morseEnabled
-      window.dispatchEvent(new CustomEvent('hud:sos-morse', { detail: { enabled: next } }))
-      return report(
-        morseEnabled
-          ? 'Morse screen flash is currently on. Toggling it off.'
-          : 'Morse screen flash is currently off. Toggling it on.',
-      )
-    }
-    if (cmd === 'torch on' || cmd === 'torch yes') {
-      window.dispatchEvent(new CustomEvent('hud:sos-torch', { detail: { enabled: true } }))
-      return report(
-        torchEnabled
-          ? 'Torch is already on. Keeping Morse torch flash enabled.'
-          : 'Torch is currently off. Enabling Morse torch flash.',
-      )
-    }
-    if (cmd === 'torch off' || cmd === 'torch no') {
-      window.dispatchEvent(new CustomEvent('hud:sos-torch', { detail: { enabled: false } }))
-      return report(
-        torchEnabled
-          ? 'Torch is currently on. Disabling Morse torch flash.'
-          : 'Torch is already off. Keeping Morse torch flash disabled.',
-      )
-    }
-    if (cmd === 'torch toggle') {
-      const next = !torchEnabled
-      window.dispatchEvent(new CustomEvent('hud:sos-torch', { detail: { enabled: next } }))
-      return report(
-        torchEnabled
-          ? 'Torch is currently on. Toggling off Morse torch flash.'
-          : 'Torch is currently off. Toggling on Morse torch flash.',
-      )
-    }
-
-    // Display
-    if (cmd === 'night') {
-      setScreenHue('red_tactical')
-      return report('Red tactical mode enabled.')
-    }
-    if (cmd === 'low light') {
-      setScreenHue('low_light')
-      return report('Low light mode enabled.')
-    }
-    if (cmd === 'bright') {
-      setScreenHue('bright_day')
-      return report('Bright mode enabled.')
-    }
-    if (cmd === 'reset') {
-      resetLayout()
-      return report('Panel layout reset.')
-    }
-
-    // Tier stubs
-    if (cmd === 'weather panel') {
-      updatePanel('weather', { docked: false, minimized: false })
-      raisePanel('weather')
-      return report('Weather panel opened.')
-    }
-    if (cmd === 'weather refresh') {
-      const w = await fetchWeather(gps.lat, gps.lng)
-      window.dispatchEvent(new CustomEvent('hud:weather-refresh'))
-      if ('error' in w) return report(`Unable to refresh weather: ${w.error}`, false)
-      return report('Weather refreshed.')
-    }
-    if (cmd === 'weather') {
-      const w = await fetchWeather(gps.lat, gps.lng)
-      window.dispatchEvent(new CustomEvent('hud:weather-refresh'))
-      if ('error' in w) return report(`Unable to get weather: ${w.error}`, false)
-      return report(
-        `Current weather for ${w.location}: ${w.condition}, ${w.temperature} ${w.unit.replace('°', 'degrees ')}, wind ${Math.round(w.windSpeed)} ${w.windUnit}.`,
-      )
-    }
-    if (['fire', 'water', 'deadman'].includes(cmd)) return report('Coming in Tier 2.')
+    const res = await dispatch(cmd, source, rawTranscript ?? `HUD ${cmd}`)
     if (cmd === 'voice continuous') {
-      setContinuousMode(true)
-      return report('Continuous listening enabled. Say HUD sleep to stop.')
+      // Already armed if we're hearing this command, but the alias is preserved
+      // for parity with the legacy directory.
+      report('Continuous listening enabled. Say HUD sleep to stop.')
+      return
     }
     if (cmd === 'sleep' || cmd === 'voice sleep') {
-      setContinuousMode(false)
-      wakeUntilRef.current = 0
-      return report('Continuous listening disabled.')
+      // HARD STOP: tearing down SR is gated on armed===false; the effect
+      // cleanup runs rec.stop() and removes pagehide/visibility listeners.
+      setArmed(false)
+      report('Continuous listening disabled.')
+      return
     }
-    if (['ai route', 'biometric', 'forage', 'lidar', 'ar'].includes(cmd)) {
-      return report('Coming in Tier 3.')
-    }
-
-    report(`Unknown command: ${cmd}. Say HUD help for directory.`, false)
+    report(res.message, res.ok)
   }
 
   const parseAndRun = async (text: string) => {
     const norm = normalize(text)
-    const now = Date.now()
-    const i = norm.indexOf(`${WAKE_WORD} `)
-    const hasWakeWord = norm === WAKE_WORD || i === 0 || i > -1
+    if (!norm) return
 
-    if (hasWakeWord) {
-      pulseWake()
-      setVoiceState('listening')
-      wakeUntilRef.current = now + WAKE_WINDOW_MS
-      const commandsPart = i === -1 ? '' : norm.slice(i + WAKE_WORD.length).trim()
-      const parts = commandsPart.split(/\bthen\b/).map((s) => s.trim()).filter(Boolean)
-      if (parts.length === 0) return report('Ready. Say HUD plus command.', true)
-      for (const p of parts) {
-        await runCommand(p)
-      }
+    // SYSTEM RULE: HUD is the ONLY valid activation token.
+    // No aliases, no fuzzy matching, no fallback activation allowed.
+    //
+    // The transcript MUST start with the literal token "hud" (case-insensitive
+    // via `normalize`). The check is exact-equality OR exact-prefix `"hud "`.
+    // Any other input is silently ignored — no error UI, no fallback modal,
+    // no continuous-mode bypass, no rolling wake window. This gate is the only
+    // entry path for free-text transcripts (voice + typed-input fallback).
+    if (norm !== WAKE_WORD && !norm.startsWith(`${WAKE_WORD} `)) {
+      // Critical DEPE guard: wake-word bypass attempt detected and blocked.
+      reportPolicyAttempt('voice.wakeWordRequired', 'disable', 'parseAndRun.missing-wake-word')
       return
     }
 
-    if (continuousMode || now <= wakeUntilRef.current) {
-      const parts = norm.split(/\bthen\b/).map((s) => s.trim()).filter(Boolean)
-      for (const p of parts) {
-        await runCommand(p)
-      }
+    // DEPE: wake-word gate is REQUIRED in every mode. We report 'enable' when
+    // the gate is honored (we just passed it). A future code path that bypassed
+    // this check would never call this report, and the engine's required-vs-
+    // active periodic validator would catch the silent absence.
+    reportPolicyAttempt('voice.wakeWordRequired', 'enable', 'parseAndRun.gate-passed')
+    pulseWake()
+    setVoiceState('listening')
+    updateVoiceState('processing')
+    const commandsPart =
+      norm === WAKE_WORD ? '' : norm.slice(WAKE_WORD.length + 1).trim()
+    const parts = commandsPart.split(/\bthen\b/).map((s) => s.trim()).filter(Boolean)
+    if (parts.length === 0) {
+      report('Ready. Say HUD plus command.', true)
+      updateVoiceState('listening')
+      return
     }
+    for (const p of parts) {
+      // Compose a stable `heard` value per part: "HUD <part>" — preserves
+      // the wake word in the structured log even when multiple commands
+      // are chained via "then".
+      await dispatchAndReport(p, 'voice', `${WAKE_WORD} ${p}`)
+    }
+    if (armedRef.current) updateVoiceState('listening')
   }
   parseAndRunRef.current = parseAndRun
 
   useEffect(() => {
-    const onMorseState = (ev: Event) => {
-      const custom = ev as CustomEvent<{ enabled?: boolean }>
-      if (typeof custom.detail?.enabled !== 'boolean') return
-      setMorseEnabled(custom.detail.enabled)
-    }
-    const onTorchState = (ev: Event) => {
-      const custom = ev as CustomEvent<{ enabled?: boolean }>
-      if (typeof custom.detail?.enabled !== 'boolean') return
-      setTorchEnabled(custom.detail.enabled)
-    }
-    window.addEventListener('hud:sos-morse-state', onMorseState)
-    window.addEventListener('hud:sos-torch-state', onTorchState)
-    return () => {
-      window.removeEventListener('hud:sos-morse-state', onMorseState)
-      window.removeEventListener('hud:sos-torch-state', onTorchState)
-    }
-  }, [])
-
-  useEffect(() => {
     if (!armed || !supportsRec) return
+    if (recognitionRef.current) {
+      reportPolicyAttempt('voice.backgroundListenerWhenDisarmed', 'enable', 'duplicate-recognition-instance')
+      return
+    }
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
     const rec = new SR()
     recognitionRef.current = rec
     rec.lang = 'en-US'
     rec.continuous = true
     rec.interimResults = false
+
+    let startedOnce = false
+    const MAX_RESTART_ATTEMPTS = 6
+    const BASE_BACKOFF_MS = 400
+    const MAX_BACKOFF_MS = 8000
+    let watchdog: number | null = null
+
+    const armWatchdog = () => {
+      if (watchdog != null) window.clearTimeout(watchdog)
+      // If `onstart` does not fire within 1500 ms after rec.start(), declare dead.
+      watchdog = window.setTimeout(() => {
+        if (!startedOnce && armedRef.current) {
+          updateVoiceState('dead', { lastError: 'recognizer onstart timeout' })
+          // DEPE: silent dead-state is forbidden — surface as a violation so
+          // it shows up in the overlay and console.
+          reportPolicyAttempt('voice.silentDeadState', 'enable', 'watchdog-timeout-1500ms')
+          setVoiceState('failure')
+          setStatusText('🎤 Voice unresponsive — tap to retry')
+          setArmed(false)
+        }
+      }, 1500)
+    }
+
     rec.onstart = () => {
+      startedOnce = true
+      restartAttemptsRef.current = 0
+      updateVoiceMeta({ restartAttempts: 0, lastSrStartAt: Date.now(), lastInterruptionReason: null })
+      recoveryAttemptedRef.current = false
+      if (watchdog != null) {
+        window.clearTimeout(watchdog)
+        watchdog = null
+      }
       setVoiceState('listening')
       setStatusText('🎤 HUD listening')
+      updateVoiceState('listening')
+      if (suspendedByLifecycleRef.current) {
+        updateVoiceRecoveryState('resumed')
+        suspendedByLifecycleRef.current = false
+      } else {
+        updateVoiceRecoveryState('idle')
+      }
     }
     rec.onresult = (e: any) => {
       const transcript = Array.from(e.results)
         .slice(e.resultIndex)
         .map((r: any) => r[0]?.transcript ?? '')
         .join(' ')
+      lastRecognitionAtRef.current = Date.now()
+      updateVoiceMeta({ lastTranscript: transcript.slice(0, 200), lastRecognitionAt: lastRecognitionAtRef.current })
       void parseAndRunRef.current(transcript)
     }
-    rec.onerror = () => setVoiceState('failure')
-    rec.onend = () => {
-      if (armedRef.current) {
-        try {
-          rec.start()
-        } catch {
-          // ignore restart failures
-        }
-      }
+    // Safety: any recognition error (incl. permission denial mid-session)
+    // immediately disarms and stops listening — no auto-restart loop.
+    rec.onerror = (e: any) => {
+      const code = String(e?.error ?? 'unknown')
+      const denied = code === 'not-allowed' || code === 'service-not-allowed'
+      setVoiceState('failure')
+      setStatusText(denied ? '🎤 Microphone permission denied' : '🎤 Voice recognition error')
+      updateVoiceMeta({ lastInterruptionReason: `error:${code}` })
+      setArmed(false)
+      updateVoiceState(denied ? 'blocked' : 'degraded', { lastError: code })
+      if (denied) updatePermission('microphone', 'denied')
+      updateVoiceRecoveryState('failed')
     }
-    rec.start()
-    return () => {
+    rec.onend = () => {
+      if (!armedRef.current) {
+        updateVoiceState('inactive_clean')
+        updateVoiceRecoveryState('idle')
+        return
+      }
+      // Bounded recovery strategy: exponential backoff, capped attempts.
+      restartAttemptsRef.current += 1
+      updateVoiceMeta({ restartAttempts: restartAttemptsRef.current, lastInterruptionReason: 'onend' })
+      updateVoiceRecoveryState('recovering')
+      updateVoiceState('recovering')
+
+      if (restartAttemptsRef.current > MAX_RESTART_ATTEMPTS) {
+        updateVoiceState('degraded', { lastError: 'recovery attempts exceeded' })
+        setVoiceState('failure')
+        setStatusText('🎤 Voice degraded — tap to re-arm')
+        setArmed(false)
+        updateVoiceRecoveryState('failed')
+        return
+      }
+
+      const backoff = Math.min(MAX_BACKOFF_MS, BASE_BACKOFF_MS * Math.pow(2, restartAttemptsRef.current - 1))
+      if (restartTimerRef.current != null) {
+        window.clearTimeout(restartTimerRef.current)
+        restartTimerRef.current = null
+      }
+      restartTimerRef.current = window.setTimeout(() => {
+        restartTimerRef.current = null
+        if (!armedRef.current) return
+        try {
+          startedOnce = false
+          rec.start()
+          armWatchdog()
+        } catch (err) {
+          updateVoiceMeta({
+            lastInterruptionReason: `restart-throw:${(err as Error)?.message ?? 'unknown'}`,
+          })
+          updateVoiceState('degraded', { lastError: 'restart threw' })
+          setVoiceState('failure')
+          setStatusText('🎤 Voice degraded — tap to re-arm')
+          setArmed(false)
+          updateVoiceRecoveryState('failed')
+        }
+      }, backoff)
+    }
+
+    try {
+      updateVoiceState('recovering', { lastSrStartAt: Date.now() })
+      rec.start()
+      armWatchdog()
+    } catch (err) {
+      updateVoiceState('degraded', {
+        lastError: `start threw: ${(err as Error)?.message ?? 'unknown'}`,
+      })
+      setVoiceState('failure')
+      setStatusText('🎤 Voice unresponsive — tap to retry')
+      setArmed(false)
+      updateVoiceRecoveryState('failed')
+      return
+    }
+
+    // Field continuity: lifecycle interruption does not cancel user intent.
+    const onPageHide = () => {
+      suspendedByLifecycleRef.current = true
+      updateVoiceRecoveryState('suspended')
+      updateVoiceState('inactive_clean', { lastError: 'interrupted: pagehide' })
       try {
         rec.stop()
       } catch {
         // ignore
       }
+      recognitionRef.current = null
     }
-  }, [armed, supportsRec])
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        suspendedByLifecycleRef.current = true
+        updateVoiceRecoveryState('suspended')
+        updateVoiceState('inactive_clean', { lastError: 'interrupted: hidden' })
+        try {
+          rec.stop()
+        } catch {
+          // ignore
+        }
+        recognitionRef.current = null
+        return
+      }
+      // One-shot recovery on resume while preserving armed intent.
+      if (armedRef.current && suspendedByLifecycleRef.current && !recoveryAttemptedRef.current) {
+        recoveryAttemptedRef.current = true
+        updateVoiceRecoveryState('recovering')
+        setRecoveryNonce((n) => n + 1)
+      }
+    }
+    window.addEventListener('pagehide', onPageHide)
+    document.addEventListener('visibilitychange', onVisibility)
+
+    return () => {
+      window.removeEventListener('pagehide', onPageHide)
+      document.removeEventListener('visibilitychange', onVisibility)
+      if (watchdog != null) {
+        window.clearTimeout(watchdog)
+        watchdog = null
+      }
+      if (restartTimerRef.current != null) {
+        window.clearTimeout(restartTimerRef.current)
+        restartTimerRef.current = null
+      }
+      try {
+        rec.stop()
+      } catch {
+        // ignore
+      }
+      recognitionRef.current = null
+      // Reflect the user's intent: arm=false → clean inactive; otherwise we
+      // were torn down externally and do not change state here.
+      if (!armedRef.current) updateVoiceState('inactive_clean')
+    }
+  }, [armed, supportsRec, recoveryNonce])
+
+  useEffect(() => {
+    if (armed) return
+    const rec = recognitionRef.current
+    if (!rec) return
+    // Critical DEPE correction: disarmed state must never leave SR running.
+    enforcePolicyAttempt(
+      'voice.backgroundListenerWhenDisarmed',
+      'enable',
+      'VoicePanel.disarmed-sr-detected',
+      () => {
+        try {
+          rec.onstart = null
+          rec.onresult = null
+          rec.onerror = null
+          rec.onend = null
+          rec.stop?.()
+        } catch {
+          // ignore
+        } finally {
+          recognitionRef.current = null
+        }
+      },
+    )
+  }, [armed])
+
+  // Single SR lifecycle toggle. Used by both the primary mic button and the
+  // CONTINUOUS ON/OFF button so they cannot disagree.
+  // Pre-condition for ON: mic permission must be granted.
+  // Post-condition for OFF: SR effect cleanup runs (rec.stop + listener
+  // removal) — no background listener remains.
+  const toggleVoiceLifecycle = async () => {
+    if (!armed) {
+      updateVoiceState('arming')
+      const mic = await requestMicrophonePermission()
+      const permState =
+        mic === 'granted'
+          ? 'granted'
+          : mic === 'denied'
+            ? 'denied'
+            : mic === 'unsupported'
+              ? 'unsupported'
+              : 'prompt'
+      updatePermission('microphone', permState)
+      updateVoiceMeta({ permission: permState })
+      if (mic !== 'granted') {
+        setVoiceState('failure')
+        setStatusText('🎤 Microphone permission needed')
+        updateVoiceState(mic === 'unsupported' ? 'unavailable' : 'blocked', {
+          lastError: `mic permission: ${mic}`,
+        })
+        return
+      }
+    } else {
+      updateVoiceState('inactive_clean')
+    }
+    setArmed((v) => !v)
+    setVoiceState((s) => (s === 'sleeping' ? 'listening' : 'sleeping'))
+    setStatusText((t) => (t.includes('listening') ? '🎤 HUD (tap to wake)' : '🎤 HUD listening'))
+  }
 
   return (
     <HudPanel
@@ -553,19 +542,7 @@ export default function VoicePanel() {
         <button
           type="button"
           data-no-drag
-          onClick={async () => {
-            if (!armed) {
-              const mic = await requestMicrophonePermission()
-              if (mic !== 'granted') {
-                setVoiceState('failure')
-                setStatusText('🎤 Microphone permission needed')
-                return
-              }
-            }
-            setArmed((v) => !v)
-            setVoiceState((s) => (s === 'sleeping' ? 'listening' : 'sleeping'))
-            setStatusText((t) => (t.includes('listening') ? '🎤 HUD (tap to wake)' : '🎤 HUD listening'))
-          }}
+          onClick={toggleVoiceLifecycle}
           style={{
             minHeight: 40,
             borderRadius: 8,
@@ -603,21 +580,22 @@ export default function VoicePanel() {
           <button
             type="button"
             data-no-drag
-            onClick={() => setContinuousMode((v) => !v)}
+            onClick={toggleVoiceLifecycle}
+            aria-label={armed ? 'Voice lifecycle on, tap to turn off' : 'Voice lifecycle off, tap to turn on'}
             style={{
               minHeight: 34,
               borderRadius: 8,
-              border: continuousMode
+              border: armed
                 ? '1px solid rgba(125,255,138,0.6)'
                 : '1px solid rgba(199,206,198,0.28)',
-              background: continuousMode ? 'rgba(125,255,138,0.16)' : 'rgba(10,12,13,0.8)',
-              color: continuousMode ? '#7dff8a' : 'var(--cockpit-panel-subtle)',
+              background: armed ? 'rgba(125,255,138,0.16)' : 'rgba(10,12,13,0.8)',
+              color: armed ? '#7dff8a' : 'var(--cockpit-panel-subtle)',
               cursor: 'pointer',
               fontSize: 10,
               letterSpacing: '0.08em',
             }}
           >
-            {continuousMode ? 'CONTINUOUS ON' : 'CONTINUOUS OFF'}
+            {armed ? 'CONTINUOUS ON' : 'CONTINUOUS OFF'}
           </button>
         </div>
 
@@ -697,7 +675,7 @@ export default function VoicePanel() {
                       key={`${group.group}-${item.cmd}`}
                       type="button"
                       data-no-drag
-                      onClick={() => void runCommand(item.cmd)}
+                      onClick={() => void dispatchAndReport(item.cmd, 'ui')}
                       style={{
                         width: '100%',
                         minHeight: 34,

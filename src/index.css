@@ -262,14 +262,40 @@ html.cockpit-reduced-transparency [style*="backdrop-filter"] {
   backdrop-filter: none !important;
 }
 
-@keyframes voice-wake-pulse {
-  0% { box-shadow: 0 0 0 rgba(0, 229, 255, 0); }
-  50% { box-shadow: 0 0 0 2px rgba(0, 229, 255, 0.65), 0 0 18px rgba(0, 229, 255, 0.45); }
-  100% { box-shadow: 0 0 0 rgba(0, 229, 255, 0); }
+/* Wake-word acknowledgement — CockpitHudShell only; driven by runtime snapshot wakeWordDetectedAt */
+@keyframes hud-wake-ack-pulse {
+  0% {
+    box-shadow: inset 0 0 0 0 rgba(125, 255, 138, 0), 0 0 0 rgba(125, 255, 138, 0);
+  }
+  45% {
+    box-shadow:
+      inset 0 0 0 1px rgba(125, 255, 138, 0.42),
+      0 0 18px rgba(125, 255, 138, 0.1);
+  }
+  100% {
+    box-shadow: inset 0 0 0 0 rgba(125, 255, 138, 0), 0 0 0 rgba(125, 255, 138, 0);
+  }
 }
 
-html.voice-wake-pulse .cockpit-panel {
-  animation: voice-wake-pulse 0.5s ease;
+@keyframes hud-wake-ack-minimal {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.97;
+  }
+}
+
+.cockpit-hud-shell.hud-wake-ack {
+  animation: hud-wake-ack-pulse 400ms ease-out forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cockpit-hud-shell.hud-wake-ack {
+    animation: hud-wake-ack-minimal 90ms ease-out forwards;
+    box-shadow: none !important;
+  }
 }
 
 .cockpit-panel button,

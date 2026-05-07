@@ -1,65 +1,25 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useCockpit } from '../context/CockpitContext'
-import { useMapContext } from '../context/MapContext'
-import { useGPS } from '../hooks/useGPS'
-
-type Action = { id: string; label: string; run: () => void }
+import { useHudCommands } from '../hooks/useHudCommands'
 
 export default function CommandPalette() {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
-  const { map } = useMapContext()
-  const gps = useGPS()
-  const { setScreenHue, resetLayout, raisePanel, updatePanel } = useCockpit()
+  const { commands, dispatch } = useHudCommands()
 
-  const actions = useMemo<Action[]>(
-    () => [
-      {
-        id: 'center',
-        label: 'Center map on GPS',
-        run: () => {
-          if (!map || gps.lat == null || gps.lng == null) return
-          map.easeTo({ center: [gps.lng, gps.lat], duration: 700, essential: true })
-        },
-      },
-      {
-        id: 'weather-refresh',
-        label: 'Refresh weather now',
-        run: () => window.dispatchEvent(new CustomEvent('hud:weather-refresh')),
-      },
-      { id: 'mode-low', label: 'Display mode: low light', run: () => setScreenHue('low_light') },
-      { id: 'mode-red', label: 'Display mode: red tactical', run: () => setScreenHue('red_tactical') },
-      { id: 'mode-bright', label: 'Display mode: bright day', run: () => setScreenHue('bright_day') },
-      { id: 'layout-reset', label: 'Reset panel layout', run: () => resetLayout() },
-      {
-        id: 'open-weather',
-        label: 'Open weather panel',
-        run: () => {
-          updatePanel('weather', { docked: false, minimized: false })
-          raisePanel('weather')
-        },
-      },
-      {
-        id: 'open-location',
-        label: 'Open location panel',
-        run: () => {
-          updatePanel('location', { docked: false, minimized: false })
-          raisePanel('location')
-        },
-      },
-      {
-        id: 'open-voice',
-        label: 'Open voice panel',
-        run: () => {
-          updatePanel('voice', { docked: false, minimized: false })
-          raisePanel('voice')
-        },
-      },
-    ],
-    [gps.lat, gps.lng, map, raisePanel, resetLayout, setScreenHue, updatePanel],
-  )
+  // Same registry the voice layer uses; palette only surfaces commands marked
+  // `paletteVisible` to keep the UI focused.
+  const visible = useMemo(() => commands.filter((c) => c.paletteVisible), [commands])
 
-  const filtered = actions.filter((a) => a.label.toLowerCase().includes(query.toLowerCase()))
+  const filtered = useMemo(() => {
+    const q = query.toLowerCase().trim()
+    if (!q) return visible
+    return visible.filter(
+      (c) =>
+        c.label.toLowerCase().includes(q) ||
+        c.id.toLowerCase().includes(q) ||
+        (c.aliases ?? []).some((a) => a.includes(q)),
+    )
+  }, [query, visible])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -117,11 +77,11 @@ export default function CommandPalette() {
           }}
         />
         <div style={{ marginTop: 10, display: 'grid', gap: 6, maxHeight: 360, overflowY: 'auto' }}>
-          {filtered.map((a) => (
+          {filtered.map((c) => (
             <button
-              key={a.id}
+              key={c.id}
               onClick={() => {
-                a.run()
+                void dispatch(c.id, 'ui')
                 setOpen(false)
               }}
               style={{
@@ -136,7 +96,7 @@ export default function CommandPalette() {
                 fontSize: 12,
               }}
             >
-              {a.label}
+              {c.label}
             </button>
           ))}
         </div>

@@ -2,14 +2,14 @@ import React from 'react'
 import { useCockpit } from '../context/CockpitContext'
 import { useMapContext } from '../context/MapContext'
 import { useGPS } from '../hooks/useGPS'
+import { getDeviceProfile } from '../runtime/deviceProfile'
 
 export default function TopBar() {
   const { prefs } = useCockpit()
   const { map } = useMapContext()
   const gps = useGPS()
-  const isCompact =
-    typeof window !== 'undefined' &&
-    (window.matchMedia('(max-width: 720px)').matches || window.matchMedia('(pointer: coarse)').matches)
+  const profile = getDeviceProfile()
+  const isCompact = profile.width < 720 || profile.isCoarsePointer
   const hasFix = gps.lat != null && gps.lng != null
 
   const locateMe = () => {

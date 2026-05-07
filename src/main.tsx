@@ -4,9 +4,29 @@ import App from './App'
 import './index.css'
 import { registerSW } from 'virtual:pwa-register'
 import { getDeviceEnvironment } from './utils/device'
+import {
+  installRuntimeSnapshot,
+  updateServiceWorker,
+  getRuntimeSnapshot,
+  updatePendingSwUpdate,
+} from './runtime/runtimeSnapshot'
+import { mountRuntimeDebugOverlay } from './runtime/RuntimeDebugOverlay'
+import { logInfo, logWarn } from './runtime/logger'
+import { getDeviceProfile } from './runtime/deviceProfile'
+import { reportPolicyAttempt } from './runtime/devicePolicy'
 
 console.log('[BUILD ID]', __BUILD_ID__)
 console.log('[DEVICE DETECT]', getDeviceEnvironment())
+
+// Install runtime truth beacon as early as possible so any subsequent
+// subsystem (SW registration, voice, permissions) can update it.
+installRuntimeSnapshot()
+mountRuntimeDebugOverlay()
+logInfo('RUNTIME', 'boot', {
+  build: __BUILD_ID__,
+  device: getDeviceProfile().type,
+  mode: getDeviceProfile().interactionMode,
+})
 
 if (typeof document !== 'undefined') {
   document.title = `HUD [${import.meta.env.VITE_GIT_COMMIT || 'dev'}]`
@@ -14,17 +34,54 @@ if (typeof document !== 'undefined') {
 }
 
 if (import.meta.env.PROD) {
+  updateServiceWorker({ status: 'installing' })
   const activateUpdate = registerSW({
     immediate: true,
     onNeedRefresh() {
       console.log('[UPDATE AVAILABLE]')
+      updateServiceWorker({ needsRefresh: true, status: 'installed' })
+      updatePendingSwUpdate(true)
       window.dispatchEvent(
         new CustomEvent('hud:sw-update', {
           detail: { activate: activateUpdate },
         }),
       )
     },
+    onOfflineReady() {
+      updateServiceWorker({ status: 'activated' })
+      updatePendingSwUpdate(false)
+    },
   })
+
+  // Track SW lifecycle in detail for the runtime snapshot. Workbox-window's
+  // events go through `controllerchange`; we also poll the registration once.
+  if ('serviceWorker' in navigator) {
+    void navigator.serviceWorker
+      .getRegistration()
+      .then((reg) => {
+        if (!reg) {
+          updateServiceWorker({ status: 'unregistered' })
+          return
+        }
+        const setFromState = (sw: ServiceWorker | null) => {
+          if (!sw) return
+          updateServiceWorker({
+            status: sw.state as never,
+            controllerScriptUrl: sw.scriptURL ?? null,
+            scope: reg.scope ?? null,
+          })
+          sw.addEventListener('statechange', () => {
+            updateServiceWorker({ status: sw.state as never })
+          })
+        }
+        setFromState(reg.active)
+        setFromState(reg.installing)
+        setFromState(reg.waiting)
+      })
+      .catch(() => {
+        updateServiceWorker({ status: 'error' })
+      })
+  }
 }
 
 const DEBUG_OVERLAY_ID = 'hud-build-debug-overlay'
@@ -80,7 +137,20 @@ if (typeof window !== 'undefined') {
   console.log('[FORCE RELOAD AVAILABLE] window.__forceReload()')
 
   const onViewportChange = () => {
-    console.log('[DEVICE DETECT UPDATE]', getDeviceEnvironment())
+    if (import.meta.env.DEV) {
+      try {
+        const w = window as Window & { __HUD_LOOP_DEBUG__?: number; HUD_LOOP_DEBUG?: number }
+        if (
+          localStorage.getItem('hud_tier1_debug') === '1' ||
+          w.__HUD_LOOP_DEBUG__ === 1 ||
+          w.HUD_LOOP_DEBUG === 1
+        ) {
+          console.log('[DEVICE DETECT UPDATE]', getDeviceEnvironment())
+        }
+      } catch {
+        /* ignore */
+      }
+    }
     refreshDebugOverlay()
   }
 
@@ -89,7 +159,41 @@ if (typeof window !== 'undefined') {
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.addEventListener('controllerchange', () => {
-      console.log('[SW] Controller changed → reloading')
+      const snap = getRuntimeSnapshot()
+      const inFlight =
+        snap.voice.state === 'arming' ||
+        snap.voice.state === 'processing'
+      const recovering =
+        snap.runtimeContinuity.voiceRecoveryState === 'recovering' ||
+        snap.runtimeContinuity.appLifecycleState === 'resuming'
+      const gestureActive = snap.runtimeContinuity.gestureActive
+      // If a voice/permission gesture is in flight, defer the reload so we don't
+      // abort an OS-level prompt. Otherwise, reload to pick up the new SW.
+      updateServiceWorker({ status: 'controlling', needsRefresh: false })
+      // DEPE: deferring during a voice gesture is REQUIRED. Reload-without-defer
+      // is FORBIDDEN. Announce both states to the engine.
+      reportPolicyAttempt(
+        'sw.deferReloadDuringVoiceGesture',
+        inFlight ? 'enable' : 'disable',
+        `voiceState=${snap.voice.state}`,
+      )
+      reportPolicyAttempt(
+        'sw.unconditionalReloadOnControllerchange',
+        'disable',
+        'controllerchange-handler',
+      )
+      if (inFlight) {
+        logWarn('SW', 'controllerchange deferred — voice gesture in flight')
+        return
+      }
+      if (recovering || gestureActive) {
+        logWarn('SW', 'controllerchange deferred — recovery or gesture active', {
+          recovering,
+          gestureActive,
+        })
+        return
+      }
+      logInfo('SW', 'controllerchange — reloading')
       window.location.reload()
     })
   }
@@ -118,3 +222,9 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <App />
   </React.StrictMode>,
 )
+
+if (import.meta.env.DEV) {
+  void import('./diag/DevTestPanel').then(({ mountDevTestPanel }) => {
+    mountDevTestPanel()
+  })
+}
