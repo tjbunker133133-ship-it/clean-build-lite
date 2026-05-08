@@ -206,11 +206,11 @@ function verifyHueDataAttr(expected: string): Promise<VerifierResult> {
 }
 
 /**
- * Torch verifier: listens for the next `hud:sos-torch-state` echo
+ * Flashlight verifier: listens for the next `hud:sos-torch-state` echo
  * dispatched by `SOSPanel`. The race against the dispatcher's timeout
  * cleans up if no echo arrives.
  */
-function verifyTorchState(expected: boolean): Promise<VerifierResult> {
+function verifyFlashlightState(expected: boolean): Promise<VerifierResult> {
   return new Promise((resolve) => {
     if (typeof window === 'undefined') {
       resolve({ ok: false, reason: 'unsupported' })
@@ -261,9 +261,9 @@ export function installBuiltinCommandVerifiers(): void {
   registerCommandVerifier('low light', () => verifyHueDataAttr('low_light'))
   registerCommandVerifier('bright', () => verifyHueDataAttr('bright_day'))
 
-  // Torch — strong event-echo verification.
-  registerCommandVerifier('torch on', () => verifyTorchState(true))
-  registerCommandVerifier('torch off', () => verifyTorchState(false))
+  // Flashlight — strong event-echo verification.
+  registerCommandVerifier('flashlight on', () => verifyFlashlightState(true))
+  registerCommandVerifier('flashlight off', () => verifyFlashlightState(false))
 
   // Map navigation — handler precondition is the verification.
   registerCommandVerifier('center', verifyMapPrecondition)

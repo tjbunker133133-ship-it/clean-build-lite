@@ -130,6 +130,8 @@ export default function SOSPanel() {
   const [launchCountdown, setLaunchCountdown] = useState<number | null>(null)
   const [flashInvert, setFlashInvert] = useState(false)
   const [torchActive, setTorchActive] = useState(false)
+  const [flashlightSupport, setFlashlightSupport] = useState<'unknown' | 'supported' | 'unsupported'>('unknown')
+  const [flashlightPermission, setFlashlightPermission] = useState<'unknown' | 'granted' | 'denied'>('unknown')
   // Audible alarm is operator-owned. Its lifecycle is fully decoupled from
   // the SOS rescue dispatch path: only the start/stop alarm functions and
   // the "TEST AUDIBLE ALARM" button mutate this flag. SOS arming, the
@@ -223,17 +225,28 @@ export default function SOSPanel() {
   const ensureTorchTrack = async () => {
     try {
       if (torchTrackRef.current) return torchTrackRef.current
-      if (!navigator.mediaDevices?.getUserMedia) return null
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setFlashlightSupport('unsupported')
+        console.log('[FLASHLIGHT]', {
+          supported: false,
+          permission: flashlightPermission,
+          active: false,
+          device: navigator.userAgent,
+        })
+        return null
+      }
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: { ideal: 'environment' } },
         audio: false,
       })
       const track = stream.getVideoTracks()[0]
       if (!track) return null
+      setFlashlightPermission('granted')
       torchStreamRef.current = stream
       torchTrackRef.current = track
       return track
     } catch {
+      setFlashlightPermission('denied')
       return null
     }
   }
@@ -243,10 +256,27 @@ export default function SOSPanel() {
       const track = await ensureTorchTrack()
       if (!track) return false
       const caps = track.getCapabilities?.() as MediaTrackCapabilities & { torch?: boolean }
-      if (!caps?.torch) return false
+      if (!caps?.torch) {
+        setFlashlightSupport('unsupported')
+        console.log('[FLASHLIGHT]', {
+          supported: false,
+          permission: flashlightPermission,
+          active: false,
+          device: navigator.userAgent,
+        })
+        return false
+      }
       await track.applyConstraints({ advanced: [{ torch: on } as MediaTrackConstraintSet] })
+      setFlashlightSupport('supported')
+      console.log('[FLASHLIGHT]', {
+        supported: true,
+        permission: flashlightPermission === 'unknown' ? 'granted' : flashlightPermission,
+        active: on,
+        device: navigator.userAgent,
+      })
       return true
     } catch {
+      setFlashlightSupport('unsupported')
       return false
     }
   }
@@ -469,7 +499,7 @@ export default function SOSPanel() {
       const custom = ev as CustomEvent<{ enabled?: boolean }>
       if (typeof custom.detail?.enabled !== 'boolean') return
       setFlashTorch(custom.detail.enabled ? 'yes' : 'no')
-      setStatus(custom.detail.enabled ? 'MORSE TORCH ENABLED' : 'MORSE TORCH DISABLED')
+      setStatus(custom.detail.enabled ? 'MORSE FLASHLIGHT ENABLED' : 'MORSE FLASHLIGHT DISABLED')
     }
     window.addEventListener('hud:sos-morse', onVoiceMorse)
     window.addEventListener('hud:sos-torch', onVoiceTorch)
@@ -486,6 +516,20 @@ export default function SOSPanel() {
       }),
     )
   }, [flashTorch])
+
+  useEffect(() => {
+    window.dispatchEvent(
+      new CustomEvent('hud:flashlight-capability', {
+        detail: {
+          supported: flashlightSupport === 'supported',
+          supportState: flashlightSupport,
+          permission: flashlightPermission,
+          active: torchActive,
+          device: navigator.userAgent,
+        },
+      }),
+    )
+  }, [flashlightSupport, flashlightPermission, torchActive])
 
   useEffect(() => {
     window.dispatchEvent(
@@ -877,7 +921,7 @@ export default function SOSPanel() {
               </button>
             </div>
             <div style={{ color: '#ffd5de', fontSize: fontMd, letterSpacing: '0.06em', marginTop: 4, fontWeight: 700 }}>
-              MORSE TORCH FLASH
+              MORSE FLASHLIGHT FLASH
             </div>
             <div style={{ display: 'flex', gap: gapLg }}>
               <button
@@ -1006,7 +1050,7 @@ export default function SOSPanel() {
             </button>
           </div>
           <div style={{ marginTop: gapMd, color: '#c894a0', fontSize: fontSm }}>
-            Torch: {torchActive ? 'ACTIVE' : flashTorch === 'yes' ? 'REQUESTED' : 'OFF'}
+            Flashlight: {torchActive ? 'ACTIVE' : flashTorch === 'yes' ? 'REQUESTED' : 'OFF'}
           </div>
         </div>
       </HudPanel>

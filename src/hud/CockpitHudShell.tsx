@@ -8,6 +8,7 @@ export default function CockpitHudShell({ children }: { children: ReactNode }) {
   const { mapInteractionBlocked, prefs } = useCockpit()
   const shellRef = useRef<HTMLDivElement>(null)
   const lastWakeAtRef = useRef<number | null>(null)
+  const lastUiActionTsRef = useRef<number>(0)
 
   /**
    * Wake-word acknowledgement pulse — driven ONLY by `wakeWordDetectedAt`
@@ -37,6 +38,24 @@ export default function CockpitHudShell({ children }: { children: ReactNode }) {
     <div
       ref={shellRef}
       className="cockpit-hud-shell"
+      onClickCapture={(e) => {
+        const target = e.target as HTMLElement | null
+        if (!target) return
+        const control = target.closest('button, [role="button"], input[type="checkbox"], input[type="radio"], input[type="range"], select')
+        if (!control) return
+        const now = Date.now()
+        // Suppress accidental duplicate logs from nested click surfaces.
+        if (now - lastUiActionTsRef.current < 80) return
+        lastUiActionTsRef.current = now
+        const el = control as HTMLElement
+        const name =
+          el.getAttribute('data-ui-action') ||
+          el.getAttribute('aria-label') ||
+          (el.textContent ?? '').trim().replace(/\s+/g, ' ').slice(0, 64) ||
+          el.getAttribute('id') ||
+          el.tagName.toLowerCase()
+        console.log('[UI ACTION]', name)
+      }}
       style={{
         position: 'absolute',
         inset: 0,

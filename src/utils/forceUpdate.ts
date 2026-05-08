@@ -5,6 +5,12 @@ import {
   SW_DEFERRED_RELOAD_KEY,
 } from '../runtime/forceUpdateMeta'
 import { traceAction } from '../runtime/actionTrace'
+import { getRuntimeSnapshot } from '../runtime/runtimeSnapshot'
+
+const FORCE_UPDATE_IN_FLIGHT_KEY = 'hud_force_update_in_flight_v1'
+const FORCE_UPDATE_LAST_RELOAD_KEY = 'hud_force_update_last_reload_v1'
+const FORCE_UPDATE_RELOAD_GUARD_MS = 15_000
+const FORCE_UPDATE_RESULT_KEY = 'hud_force_update_result_v1'
 
 function reloadWithUpdateQuery(): void {
   const qs = new URLSearchParams(window.location.search)
@@ -14,9 +20,47 @@ function reloadWithUpdateQuery(): void {
   window.location.href = next
 }
 
-export async function forceUpdateApp(): Promise<void> {
+function detectPwaMode(): boolean {
+  try {
+    const mq = window.matchMedia?.('(display-mode: standalone)')
+    const legacyStandalone = Boolean((navigator as Navigator & { standalone?: boolean }).standalone)
+    return Boolean(mq?.matches || legacyStandalone)
+  } catch {
+    return false
+  }
+}
+
+async function getLocalStorageSizeSafe(): Promise<number> {
+  try {
+    let total = 0
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const k = localStorage.key(i)
+      if (!k) continue
+      const v = localStorage.getItem(k) ?? ''
+      total += k.length + v.length
+    }
+    return total
+  } catch {
+    return -1
+  }
+}
+
+type RecoveryResult = { ok: boolean; message: string }
+
+export async function forceUpdateApp(): Promise<RecoveryResult> {
   traceAction('force_update_app', 'handler_enter')
-  console.log('[FORCE UPDATE] Checking SW')
+  console.log('[ForceUpdate] button pressed')
+  console.log('[ForceUpdate] checking service worker')
+  const now = Date.now()
+  try {
+    const inFlightAt = Number(sessionStorage.getItem(FORCE_UPDATE_IN_FLIGHT_KEY) ?? '0')
+    if (Number.isFinite(inFlightAt) && inFlightAt > 0 && now - inFlightAt < 10_000) {
+      return { ok: false, message: 'Force update already running' }
+    }
+    sessionStorage.setItem(FORCE_UPDATE_IN_FLIGHT_KEY, String(now))
+  } catch {
+    // ignore
+  }
   if (typeof window !== 'undefined') {
     try {
       sessionStorage.setItem(
@@ -34,23 +78,57 @@ export async function forceUpdateApp(): Promise<void> {
     }
   }
 
+  let swRegistered = false
+  let updateAvailable = false
+  let activeWorkerCount = 0
+  let registrationCount = 0
+  let cacheKeys: string[] = []
+  let localStorageSize = -1
+  let registrationRef: ServiceWorkerRegistration | null = null
+  const snapBefore = getRuntimeSnapshot()
+  const beforeBuild = snapBefore.buildId
+  const networkBuild = snapBefore.deploymentIntegrity.latestBuildId
+
   if ('serviceWorker' in navigator) {
     try {
       traceAction('force_update_app', 'async_start', { step: 'sw_registration_update' })
       const regs = await navigator.serviceWorker.getRegistrations()
+      swRegistered = regs.length > 0
+      registrationCount = regs.length
+      activeWorkerCount = regs.filter((r) => Boolean(r.active)).length
       let waitingPresent = false
       for (const reg of regs) {
+        registrationRef ??= reg
         await reg.update()
         const waiting = reg.waiting
         if (waiting) {
           waitingPresent = true
+          updateAvailable = true
+          console.log('[ForceUpdate] update available', reg)
           waiting.postMessage({ type: 'SKIP_WAITING' })
         }
+      }
+      if (import.meta.env.DEV) {
+        try {
+          cacheKeys = 'caches' in window && window.caches ? await window.caches.keys() : []
+        } catch {
+          cacheKeys = []
+        }
+        localStorageSize = await getLocalStorageSizeSafe()
+        console.table({
+          swRegistered,
+          updateAvailable,
+          cacheKeys: cacheKeys.length,
+          localStorageSize,
+          platform: navigator.userAgent,
+          isPWA: detectPwaMode(),
+        })
       }
       if (import.meta.env.DEV) {
         console.info('[HUD DEV] force-update-check', {
           registrations: regs.length,
           waitingPresent,
+          activeWorkerCount,
           controllerUrl: navigator.serviceWorker.controller?.scriptURL ?? null,
         })
       }
@@ -65,14 +143,56 @@ export async function forceUpdateApp(): Promise<void> {
         reason: 'sw_update_failed',
         message: (err as Error)?.message ?? 'unknown',
       })
+      try {
+        sessionStorage.removeItem(FORCE_UPDATE_IN_FLIGHT_KEY)
+      } catch {
+        // ignore
+      }
+      return { ok: false, message: 'Force update failed while checking service worker' }
     }
   } else {
     traceAction('force_update_app', 'guard_reject', { reason: 'sw_unsupported' })
+    try {
+      sessionStorage.removeItem(FORCE_UPDATE_IN_FLIGHT_KEY)
+    } catch {
+      // ignore
+    }
+    return { ok: false, message: 'Service worker unsupported in this browser' }
   }
 
-  console.log('[FORCE UPDATE] Triggered')
+  // A healthy production state should typically have <=1 active registration for this scope.
+  if (activeWorkerCount > 1) {
+    console.warn('[ForceUpdate] multiple active service workers detected', { activeWorkerCount, registrationCount })
+  }
+
+  console.log('[ForceUpdate] reload triggered')
   window.setTimeout(() => {
     try {
+      const lastReloadAt = Number(sessionStorage.getItem(FORCE_UPDATE_LAST_RELOAD_KEY) ?? '0')
+      if (Number.isFinite(lastReloadAt) && lastReloadAt > 0 && Date.now() - lastReloadAt < FORCE_UPDATE_RELOAD_GUARD_MS) {
+        console.warn('[ForceUpdate] reload suppressed by guard window')
+        sessionStorage.removeItem(FORCE_UPDATE_IN_FLIGHT_KEY)
+        return
+      }
+      sessionStorage.setItem(FORCE_UPDATE_LAST_RELOAD_KEY, String(Date.now()))
+      const reloadReason =
+        updateAvailable
+          ? 'update_available'
+          : snapBefore.deploymentIntegrity.staleStatus === 'stale_detected'
+            ? 'recovery_reload'
+            : 'already_latest'
+      sessionStorage.setItem(
+        FORCE_UPDATE_RESULT_KEY,
+        JSON.stringify({
+          beforeBuild,
+          afterBuild: __BUILD_ID__,
+          networkBuild,
+          updateTriggered: true,
+          reloadReason,
+          swState: snapBefore.serviceWorker.status,
+          cacheGeneration: snapBefore.deploymentIntegrity.cacheGeneration,
+        }),
+      )
       const raw = sessionStorage.getItem(FORCE_UPDATE_META_KEY)
       const parsed = raw ? (JSON.parse(raw) as Record<string, unknown>) : {}
       sessionStorage.setItem(
@@ -87,8 +207,13 @@ export async function forceUpdateApp(): Promise<void> {
     } catch {
       // ignore storage failures
     }
-    console.log('[FORCE UPDATE] Reloading')
+    // Timeout fail-safe: if waiting worker exists but controllerchange is delayed,
+    // this deterministic reload still advances runtime freshness.
+    if (registrationRef?.waiting) {
+      registrationRef.waiting.postMessage({ type: 'SKIP_WAITING' })
+    }
     traceAction('force_update_app', 'reload_requested', { source: 'force_update_timeout' })
     reloadWithUpdateQuery()
   }, 500)
+  return { ok: true, message: 'Force update triggered' }
 }

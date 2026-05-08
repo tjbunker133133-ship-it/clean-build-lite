@@ -14,18 +14,20 @@ import { COCKPIT_STORAGE_KEY } from '../types/cockpit'
 import { resetAppState } from '../utils/resetApp'
 import { forceUpdateApp } from '../utils/forceUpdate'
 import { getDeviceProfile } from '../runtime/deviceProfile'
-import { updatePermission } from '../runtime/runtimeSnapshot'
+import { getRuntimeSnapshot, subscribeRuntimeSnapshot, updatePermission } from '../runtime/runtimeSnapshot'
 import { touchFontSm, touchFontMd, touchGapMd, touchGapSm, touchMinTarget } from './tokens'
 import {
   fetchEmergencyContacts,
   createEmergencyContact,
   deleteEmergencyContact,
+  updateEmergencyContact,
   type EmergencyContact,
 } from '../lib/emergencyContacts'
 import { traceAction } from '../runtime/actionTrace'
 import { useCockpit } from '../context/CockpitContext'
 import { clampMobileToReachableViewport, isPanelReachableInViewport } from '../lib/mobilePanelHelpers'
 import { cockpitViewport } from '../lib/viewport'
+import { useAppContext } from '../context/AppContext'
 
 type CheckState = 'pass' | 'warn' | 'fail'
 type ManualCheckKey =
@@ -50,6 +52,7 @@ const DEVICE_TUNE_KEYS = [
   `${COCKPIT_STORAGE_KEY}_device_tune_mobile`,
   `${COCKPIT_STORAGE_KEY}_device_tune`,
 ]
+const CONTACT_PHONE_STORAGE_KEY = 'hud_emergency_contact_phone_v1'
 
 function stateColor(state: CheckState) {
   if (state === 'pass') return '#7dff8a'
@@ -100,6 +103,7 @@ function readRapidEndpoint(): string {
 }
 
 export default function PreflightPanel() {
+  const { state } = useAppContext()
   const { panels, updatePanel, raisePanel } = useCockpit()
   const gps = useGPS()
   const [online, setOnline] = useState(navigator.onLine)
@@ -126,9 +130,17 @@ export default function PreflightPanel() {
   // error, table missing, RLS denial, etc.) — empty arrays are 'ok'.
   const [contacts, setContacts] = useState<EmergencyContact[]>([])
   const [contactsStatus, setContactsStatus] = useState<'loading' | 'ok' | 'unavailable'>('loading')
-  const [contactForm, setContactForm] = useState<{ name: string; email: string; relationship: string }>({
+  const [contactForm, setContactForm] = useState<{
+    id: string | null
+    name: string
+    email: string
+    phone: string
+    relationship: string
+  }>({
+    id: null,
     name: '',
     email: '',
+    phone: '',
     relationship: '',
   })
   const [contactBusy, setContactBusy] = useState(false)
@@ -136,6 +148,20 @@ export default function PreflightPanel() {
   const [lastContactDiagSig, setLastContactDiagSig] = useState('')
   const [lastEligibilityDiagSig, setLastEligibilityDiagSig] = useState('')
   const [lastVisibilityDiagSig, setLastVisibilityDiagSig] = useState('')
+  const [forceUpdateBusy, setForceUpdateBusy] = useState(false)
+  const [resetBusy, setResetBusy] = useState(false)
+  const [recoveryStatus, setRecoveryStatus] = useState<string | null>(null)
+  const [contactPhoneMap, setContactPhoneMap] = useState<Record<string, string>>({})
+  const [runtimeSnap, setRuntimeSnap] = useState(() => getRuntimeSnapshot())
+
+  const persistContactPhoneMap = (next: Record<string, string>) => {
+    setContactPhoneMap(next)
+    try {
+      localStorage.setItem(CONTACT_PHONE_STORAGE_KEY, JSON.stringify(next))
+    } catch {
+      // noop
+    }
+  }
 
   useEffect(() => {
     try {
@@ -143,6 +169,18 @@ export default function PreflightPanel() {
       if (!raw) return
       const parsed = JSON.parse(raw)
       setManual((prev) => ({ ...prev, ...parsed }))
+    } catch {
+      // noop
+    }
+  }, [])
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(CONTACT_PHONE_STORAGE_KEY)
+      if (!raw) return
+      const parsed = JSON.parse(raw) as Record<string, string> | null
+      if (!parsed || typeof parsed !== 'object') return
+      setContactPhoneMap(parsed)
     } catch {
       // noop
     }
@@ -291,7 +329,13 @@ export default function PreflightPanel() {
   }, [])
 
   const endpoint = useMemo(() => readRapidEndpoint(), [])
-  const buildId = useMemo(() => ((import.meta as any).env?.VITE_GIT_COMMIT as string | undefined) ?? 'unknown', [])
+  const compileBuild = useMemo(
+    () => (typeof __BUILD_ID__ === 'string' && __BUILD_ID__.length > 0 ? __BUILD_ID__ : 'unknown'),
+    [],
+  )
+  const runtimeBuild = runtimeSnap.buildId || 'unknown'
+  const preflightBuild = runtimeBuild
+  const overlayBuild = runtimeSnap.buildId || 'unknown'
   const speechSupported = !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)
   const deviceTuneMeta = useMemo(() => {
     try {
@@ -387,6 +431,26 @@ export default function PreflightPanel() {
         critical: true,
       },
       {
+        label: 'Contacts Loaded',
+        state: contactsStatus === 'ok' && contacts.length > 0 ? 'pass' : 'warn',
+        detail: contactsStatus === 'ok' ? `${contacts.length} loaded` : 'Not loaded',
+        weight: 1.1,
+        critical: true,
+      },
+      {
+        label: 'Routes Selected',
+        state: state.waypoints.length > 0 ? 'pass' : 'warn',
+        detail: state.waypoints.length > 0 ? `${state.waypoints.length} selected` : 'No route selected',
+        weight: 0.9,
+      },
+      {
+        label: 'Emergency Contacts Saved',
+        state: contactsStatus === 'ok' && contacts.length > 0 ? 'pass' : 'warn',
+        detail: contactsStatus === 'ok' ? `${contacts.length} saved` : 'Unavailable',
+        weight: 1.1,
+        critical: true,
+      },
+      {
         label: 'Emergency Contacts',
         state: contactsStatus === 'ok' && contacts.length > 0 ? 'pass' : 'warn',
         detail:
@@ -412,6 +476,7 @@ export default function PreflightPanel() {
     online,
     contactsStatus,
     contacts.length,
+    state.waypoints.length,
     speechSupported,
     recheckTick,
   ])
@@ -480,6 +545,7 @@ export default function PreflightPanel() {
     }
     setContacts(data)
     setContactsStatus('ok')
+    console.log('[EmergencyContacts] loaded', data)
   }
 
   const handleAddContact = async () => {
@@ -491,6 +557,7 @@ export default function PreflightPanel() {
     const name = contactForm.name.trim()
     const email = contactForm.email.trim()
     const relationship = contactForm.relationship.trim()
+    const phone = contactForm.phone.trim()
     if (!name || !email) {
       setContactError('Name and email required')
       traceAction('emergency_contact_add', 'guard_reject', { reason: 'validation_missing_fields' })
@@ -504,21 +571,32 @@ export default function PreflightPanel() {
     setContactBusy(true)
     setContactError(null)
     traceAction('emergency_contact_add', 'async_start')
-    const { error } = await createEmergencyContact({
-      contact_name: name,
-      email,
-      relationship: relationship || null,
-      // First contact added becomes priority 1 (primary); subsequent get 2.
-      priority: contacts.length === 0 ? 1 : 2,
-    })
+    const action = contactForm.id
+      ? updateEmergencyContact(contactForm.id, {
+          contact_name: name,
+          email,
+          relationship: relationship || null,
+        })
+      : createEmergencyContact({
+          contact_name: name,
+          email,
+          relationship: relationship || null,
+          // First contact added becomes priority 1 (primary); subsequent get 2.
+          priority: contacts.length === 0 ? 1 : 2,
+        })
+    const { error } = await action
     if (error) {
       setContactError(error.message)
       traceAction('emergency_contact_add', 'failure', { reason: 'backend_error' })
       setContactBusy(false)
       return
     }
-    setContactForm({ name: '', email: '', relationship: '' })
+    if (contactForm.id) {
+      persistContactPhoneMap({ ...contactPhoneMap, [contactForm.id]: phone })
+    }
+    setContactForm({ id: null, name: '', email: '', phone: '', relationship: '' })
     await reloadContacts()
+    console.log('[EmergencyContacts] saved count', contacts.length + (contactForm.id ? 0 : 1))
     traceAction('emergency_contact_add', 'async_complete', { hydratedCount: contacts.length + 1 })
     setContactBusy(false)
   }
@@ -540,8 +618,23 @@ export default function PreflightPanel() {
       return
     }
     setContacts((prev) => prev.filter((c) => c.id !== id))
+    const nextPhones = { ...contactPhoneMap }
+    delete nextPhones[id]
+    persistContactPhoneMap(nextPhones)
+    console.log('[EmergencyContacts] saved count', Math.max(0, contacts.length - 1))
     traceAction('emergency_contact_remove', 'async_complete', { removed: true })
     setContactBusy(false)
+  }
+
+  const startEditContact = (c: EmergencyContact) => {
+    setContactForm({
+      id: c.id,
+      name: c.contact_name,
+      email: c.email,
+      phone: contactPhoneMap[c.id] ?? '',
+      relationship: c.relationship ?? '',
+    })
+    setContactError(null)
   }
 
   const requestAllPermissions = async () => {
@@ -581,6 +674,56 @@ export default function PreflightPanel() {
     }
   }
 
+  const handleForceUpdate = async () => {
+    if (forceUpdateBusy || resetBusy) return
+    setForceUpdateBusy(true)
+    setRecoveryStatus('Checking for runtime update…')
+    try {
+      const snap = getRuntimeSnapshot()
+      const beforeBuild = snap.buildId
+      const networkBuild = snap.deploymentIntegrity.latestBuildId
+      const reloadReason =
+        snap.deploymentIntegrity.staleStatus === 'stale_detected'
+          ? 'recovery_reload'
+          : 'force_update'
+      console.table({
+        beforeBuild,
+        afterBuild: 'pending_reload',
+        networkBuild: networkBuild ?? 'unknown',
+        updateTriggered: true,
+        reloadReason,
+      })
+      const result = await forceUpdateApp()
+      if (!result.ok) {
+        setRecoveryStatus(result.message)
+      } else if (runtimeSnap.deploymentIntegrity.staleStatus === 'fresh') {
+        setRecoveryStatus('Already on latest build')
+      } else {
+        setRecoveryStatus(result.message)
+      }
+    } catch (err) {
+      console.warn('[ForceUpdate] handler error', err)
+      setRecoveryStatus('Force update failed before reload')
+    } finally {
+      window.setTimeout(() => setForceUpdateBusy(false), 1200)
+    }
+  }
+
+  const handleResetApp = async () => {
+    if (resetBusy || forceUpdateBusy) return
+    setResetBusy(true)
+    setRecoveryStatus('Running app reset…')
+    try {
+      const result = await resetAppState()
+      setRecoveryStatus(result.message)
+    } catch (err) {
+      console.warn('[ResetApp] handler error', err)
+      setRecoveryStatus('Reset failed before reload')
+    } finally {
+      window.setTimeout(() => setResetBusy(false), 1200)
+    }
+  }
+
   const isMobile = getDeviceProfile().interactionMode === 'mobile'
   const fontSm = touchFontSm(isMobile)
   const fontMd = touchFontMd(isMobile)
@@ -600,8 +743,62 @@ export default function PreflightPanel() {
   }
 
   useEffect(() => {
-    if (import.meta.env.DEV) console.log('[BUILD]', buildId)
-  }, [buildId])
+    return subscribeRuntimeSnapshot((snap) => setRuntimeSnap({ ...snap }))
+  }, [])
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    console.log('[BuildSource]', {
+      compileBuild,
+      runtimeBuild,
+      preflightBuild,
+      overlayBuild,
+    })
+  }, [compileBuild, runtimeBuild, preflightBuild, overlayBuild])
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    console.count('[PreflightPanel render]')
+    const layout = panels.preflight
+    if (!layout) return
+    console.log('[PreflightPanel dimensions]', {
+      w: layout.w,
+      h: layout.h ?? null,
+      x: layout.x,
+      y: layout.y,
+      docked: layout.docked,
+      minimized: layout.minimized,
+    })
+  }, [panels.preflight])
+
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem('hud_force_update_result_v1')
+      if (!raw) return
+      sessionStorage.removeItem('hud_force_update_result_v1')
+      const parsed = JSON.parse(raw) as {
+        beforeBuild?: string
+        afterBuild?: string
+        networkBuild?: string | null
+        reloadReason?: string
+      }
+      if (parsed.reloadReason === 'already_latest') {
+        setRecoveryStatus('Already on latest build')
+      } else if (
+        typeof parsed.beforeBuild === 'string' &&
+        typeof parsed.afterBuild === 'string' &&
+        parsed.beforeBuild !== parsed.afterBuild
+      ) {
+        setRecoveryStatus(`Updated from ${parsed.beforeBuild.slice(0, 19)} -> ${parsed.afterBuild.slice(0, 19)}`)
+      } else if (parsed.reloadReason === 'recovery_reload') {
+        setRecoveryStatus('Recovery reload executed')
+      } else {
+        setRecoveryStatus('Reload executed; build unchanged (already latest deploy)')
+      }
+    } catch {
+      // ignore
+    }
+  }, [])
 
   return (
     <HudPanel panelId="preflight" title="Preflight Test" initialPos={{ x: 16, y: 180 }} initialWidth={320}>
@@ -818,7 +1015,21 @@ export default function PreflightPanel() {
             Tune version: <strong style={{ color: '#d6ddd6' }}>{deviceTuneMeta?.version ?? 'not applied'}</strong>
           </div>
           <div>
-            Build: <strong style={{ color: '#d6ddd6' }}>{buildId}</strong>
+            Build: <strong style={{ color: '#d6ddd6' }}>{runtimeBuild}</strong>
+          </div>
+          <div>
+            Status:{' '}
+            <strong style={{ color: '#d6ddd6' }}>
+              Build {runtimeBuild.slice(0, 19)} • SW {runtimeSnap.serviceWorker.status} • Freshness{' '}
+              {runtimeSnap.deploymentIntegrity.staleStatus}
+            </strong>
+          </div>
+          <div>
+            SW state: <strong style={{ color: '#d6ddd6' }}>{runtimeSnap.serviceWorker.status}</strong>
+          </div>
+          <div>
+            Stale status:{' '}
+            <strong style={{ color: '#d6ddd6' }}>{runtimeSnap.deploymentIntegrity.staleStatus}</strong>
           </div>
           <div>
             Legacy local contacts: <strong style={{ color: '#d6ddd6' }}>{legacySavedContactsCount}</strong>
@@ -889,29 +1100,52 @@ export default function PreflightPanel() {
                     </div>
                     <div style={{ color: '#9ea7a0', fontSize: fontSm }}>
                       {c.email}
+                      {contactPhoneMap[c.id] ? ` · ${contactPhoneMap[c.id]}` : ''}
                       {c.relationship ? ` · ${c.relationship}` : ''}
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    data-no-drag
-                    disabled={contactBusy}
-                    onClick={() => void handleDeleteContact(c.id)}
-                    style={{
-                      minHeight: tapMin,
-                      borderRadius: 6,
-                      border: '1px solid rgba(255,107,135,0.45)',
-                      background: 'rgba(255,107,135,0.12)',
-                      color: '#ffd5dd',
-                      cursor: contactBusy ? 'wait' : 'pointer',
-                      fontSize: fontSm,
-                      letterSpacing: '0.08em',
-                      fontWeight: 700,
-                      padding: '0 10px',
-                    }}
-                  >
-                    REMOVE
-                  </button>
+                  <div style={{ display: 'grid', gap: 6 }}>
+                    <button
+                      type="button"
+                      data-no-drag
+                      disabled={contactBusy}
+                      onClick={() => startEditContact(c)}
+                      style={{
+                        minHeight: tapMin,
+                        borderRadius: 6,
+                        border: '1px solid rgba(125,209,255,0.45)',
+                        background: 'rgba(125,209,255,0.12)',
+                        color: '#d8eefc',
+                        cursor: contactBusy ? 'wait' : 'pointer',
+                        fontSize: fontSm,
+                        letterSpacing: '0.08em',
+                        fontWeight: 700,
+                        padding: '0 10px',
+                      }}
+                    >
+                      EDIT
+                    </button>
+                    <button
+                      type="button"
+                      data-no-drag
+                      disabled={contactBusy}
+                      onClick={() => void handleDeleteContact(c.id)}
+                      style={{
+                        minHeight: tapMin,
+                        borderRadius: 6,
+                        border: '1px solid rgba(255,107,135,0.45)',
+                        background: 'rgba(255,107,135,0.12)',
+                        color: '#ffd5dd',
+                        cursor: contactBusy ? 'wait' : 'pointer',
+                        fontSize: fontSm,
+                        letterSpacing: '0.08em',
+                        fontWeight: 700,
+                        padding: '0 10px',
+                      }}
+                    >
+                      REMOVE
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -942,6 +1176,23 @@ export default function PreflightPanel() {
               placeholder="Email"
               value={contactForm.email}
               onChange={(e) => setContactForm((f) => ({ ...f, email: e.target.value }))}
+              disabled={contactBusy || contactsStatus === 'unavailable'}
+              style={{
+                minHeight: tapMin,
+                borderRadius: 6,
+                border: '1px solid rgba(199,206,198,0.28)',
+                background: 'rgba(10,12,13,0.8)',
+                color: '#d3dad3',
+                padding: '0 10px',
+                fontSize: fontMd,
+              }}
+            />
+            <input
+              type="tel"
+              data-no-drag
+              placeholder="Phone (optional)"
+              value={contactForm.phone}
+              onChange={(e) => setContactForm((f) => ({ ...f, phone: e.target.value }))}
               disabled={contactBusy || contactsStatus === 'unavailable'}
               style={{
                 minHeight: tapMin,
@@ -987,8 +1238,29 @@ export default function PreflightPanel() {
                 fontWeight: 700,
               }}
             >
-              {contactBusy ? 'SAVING…' : 'ADD CONTACT'}
+              {contactBusy ? 'SAVING…' : contactForm.id ? 'SAVE CONTACT' : 'ADD CONTACT'}
             </button>
+            {contactForm.id && (
+              <button
+                type="button"
+                data-no-drag
+                onClick={() => setContactForm({ id: null, name: '', email: '', phone: '', relationship: '' })}
+                disabled={contactBusy}
+                style={{
+                  minHeight: tapMin,
+                  borderRadius: 8,
+                  border: '1px solid rgba(199,206,198,0.35)',
+                  background: 'rgba(199,206,198,0.12)',
+                  color: '#d8e3d8',
+                  cursor: 'pointer',
+                  fontSize: fontSm,
+                  letterSpacing: '0.08em',
+                  fontWeight: 700,
+                }}
+              >
+                CANCEL EDIT
+              </button>
+            )}
             {contactError && (
               <div style={{ color: stateColor('fail'), fontSize: fontSm }}>{contactError}</div>
             )}
@@ -1106,39 +1378,48 @@ export default function PreflightPanel() {
           <button
             type="button"
             data-no-drag
-            onClick={() => void forceUpdateApp()}
+            onClick={() => void handleForceUpdate()}
+            disabled={forceUpdateBusy || resetBusy}
             style={{
               minHeight: tapMin,
               borderRadius: 8,
               border: '1px solid rgba(125,209,255,0.45)',
               background: 'rgba(125,209,255,0.12)',
               color: '#d8eefc',
-              cursor: 'pointer',
+              cursor: forceUpdateBusy || resetBusy ? 'wait' : 'pointer',
               fontSize: fontSm,
               letterSpacing: '0.08em',
               fontWeight: 700,
+              opacity: forceUpdateBusy || resetBusy ? 0.8 : 1,
             }}
           >
-            FORCE UPDATE APP
+            {forceUpdateBusy ? 'FORCE UPDATE IN PROGRESS…' : 'FORCE UPDATE APP'}
           </button>
           <button
             type="button"
             data-no-drag
-            onClick={() => void resetAppState()}
+            onClick={() => void handleResetApp()}
+            disabled={resetBusy || forceUpdateBusy}
             style={{
               minHeight: tapMin,
               borderRadius: 8,
               border: '1px solid rgba(255,107,135,0.4)',
               background: 'rgba(255,107,135,0.12)',
               color: '#ffd5dd',
-              cursor: 'pointer',
+              cursor: resetBusy || forceUpdateBusy ? 'wait' : 'pointer',
               fontSize: fontSm,
               letterSpacing: '0.08em',
               fontWeight: 700,
+              opacity: resetBusy || forceUpdateBusy ? 0.8 : 1,
             }}
           >
-            RESET APP / FIX ISSUES
+            {resetBusy ? 'RESET IN PROGRESS…' : 'RESET APP / FIX ISSUES'}
           </button>
+          {recoveryStatus && (
+            <div style={{ color: '#9ea7a0', fontSize: fontSm }}>
+              {recoveryStatus}
+            </div>
+          )}
         </div>
       </div>
     </HudPanel>

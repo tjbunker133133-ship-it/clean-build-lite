@@ -16,6 +16,7 @@ import { getDeviceProfile } from './runtime/deviceProfile'
 import { reportPolicyAttempt } from './runtime/devicePolicy'
 import { classifyBuildFreshness } from './runtime/buildFreshness'
 import { shouldDeferReloadOnControllerChange, shouldFlushDeferredReload } from './runtime/swReloadPolicy'
+import { installDeploymentFreshnessGuard } from './runtime/deploymentFreshness'
 import {
   classifyStaleRuntimeReason,
   FORCE_UPDATE_META_KEY,
@@ -29,6 +30,23 @@ console.log('[DEVICE DETECT]', getDeviceEnvironment())
 
 if (import.meta.env.DEV && typeof window !== 'undefined') {
   try {
+    const rawResult = sessionStorage.getItem('hud_force_update_result_v1')
+    if (rawResult) {
+      const parsed = JSON.parse(rawResult) as {
+        beforeBuild?: string
+        afterBuild?: string
+        networkBuild?: string | null
+        updateTriggered?: boolean
+        reloadReason?: string
+      }
+      console.table({
+        beforeBuild: parsed.beforeBuild ?? 'unknown',
+        afterBuild: __BUILD_ID__,
+        networkBuild: parsed.networkBuild ?? 'unknown',
+        updateTriggered: Boolean(parsed.updateTriggered),
+        reloadReason: parsed.reloadReason ?? 'unknown',
+      })
+    }
     const lastSeen = sessionStorage.getItem('hud_last_build_id')
     const runtimeBuild = getRuntimeSnapshot().buildId
     const freshness = classifyBuildFreshness({
@@ -53,6 +71,7 @@ if (import.meta.env.DEV && typeof window !== 'undefined') {
 // Install runtime truth beacon as early as possible so any subsequent
 // subsystem (SW registration, voice, permissions) can update it.
 installRuntimeSnapshot()
+installDeploymentFreshnessGuard()
 mountRuntimeDebugOverlay()
 logInfo('RUNTIME', 'boot', {
   build: __BUILD_ID__,

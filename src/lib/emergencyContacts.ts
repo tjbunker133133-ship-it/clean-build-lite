@@ -5,6 +5,7 @@ export type EmergencyContact = {
   operator_id: string | null
   contact_name: string
   email: string
+  phone?: string | null
   relationship: string | null
   priority: number
   created_at: string
@@ -14,6 +15,7 @@ export type EmergencyContactInput = {
   operator_id?: string | null
   contact_name: string
   email: string
+  phone?: string | null
   relationship?: string | null
   priority?: number
 }
@@ -61,6 +63,33 @@ export async function createEmergencyContact(
         relationship: input.relationship ?? null,
         priority: input.priority ?? 1,
       })
+      .select(SELECT_COLS)
+      .single()
+    if (error) {
+      return { data: null, error: new Error(error.message) }
+    }
+    return { data: data as EmergencyContact, error: null }
+  } catch (e) {
+    return {
+      data: null,
+      error: e instanceof Error ? e : new Error(String(e)),
+    }
+  }
+}
+
+export async function updateEmergencyContact(
+  id: string,
+  input: EmergencyContactInput,
+): Promise<ContactsResult<EmergencyContact | null>> {
+  try {
+    const { data, error } = await supabase
+      .from('emergency_contacts')
+      .update({
+        contact_name: input.contact_name,
+        email: input.email,
+        relationship: input.relationship ?? null,
+      })
+      .eq('id', id)
       .select(SELECT_COLS)
       .single()
     if (error) {

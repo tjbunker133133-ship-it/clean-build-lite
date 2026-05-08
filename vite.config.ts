@@ -31,7 +31,9 @@ export default defineConfig({
         ],
       },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,svg,png,ico,webp}'],
+        // Keep HTML out of precache so the app shell revalidates from network
+        // and cannot pin stale chunk graphs across deployments.
+        globPatterns: ['**/*.{js,css,svg,png,ico,webp,webmanifest}'],
         cleanupOutdatedCaches: true,
         skipWaiting: true,
         clientsClaim: true,

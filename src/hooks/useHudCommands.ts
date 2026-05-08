@@ -61,6 +61,25 @@ export type CommandDescriptor = {
   run: (ctx: { source: CommandSource }) => Promise<CommandResult> | CommandResult
 }
 
+export type VoiceIntentRegistryEntry = {
+  intent: string
+  category: string
+  aliases: string[]
+}
+
+export const VOICE_INTENT_REGISTRY: VoiceIntentRegistryEntry[] = [
+  { intent: 'flashlight_on', category: 'Safety', aliases: ['flashlight on', 'torch on', 'flashlight yes', 'torch yes'] },
+  { intent: 'flashlight_off', category: 'Safety', aliases: ['flashlight off', 'torch off', 'flashlight no', 'torch no'] },
+  { intent: 'flashlight_toggle', category: 'Safety', aliases: ['flashlight toggle', 'torch toggle'] },
+  { intent: 'morse_toggle', category: 'Safety', aliases: ['morse toggle'] },
+  { intent: 'weather', category: 'Weather', aliases: ['weather', 'current weather'] },
+  { intent: 'zoom_in', category: 'Navigation', aliases: ['zoom in'] },
+  { intent: 'zoom_out', category: 'Navigation', aliases: ['zoom out'] },
+  { intent: 'recenter_gps', category: 'Navigation', aliases: ['center', 'center gps', 'center map', 'gps', 'my location', 'recenter'] },
+  { intent: 'night_mode', category: 'Display', aliases: ['night', 'night mode'] },
+  { intent: 'bright_mode', category: 'Display', aliases: ['bright', 'bright mode', 'day mode', 'normal mode'] },
+]
+
 function normalize(input: string): string {
   return input.toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim()
 }
@@ -93,7 +112,12 @@ export function useHudCommands(): {
 
   const [attachedPinId, setAttachedPinId] = useState<string | null>(null)
   const [morseEnabled, setMorseEnabled] = useState(false)
-  const [torchEnabled, setTorchEnabled] = useState(false)
+  const [flashlightEnabled, setFlashlightEnabled] = useState(false)
+  const [flashlightCapability, setFlashlightCapability] = useState<{
+    supported: boolean
+    permission: 'unknown' | 'granted' | 'denied'
+    supportState: 'unknown' | 'supported' | 'unsupported'
+  }>({ supported: false, permission: 'unknown', supportState: 'unknown' })
 
   // Listen for SOS panel state echoes so spoken/textual responses stay accurate.
   useEffect(() => {
@@ -103,13 +127,29 @@ export function useHudCommands(): {
     }
     const onTorchState = (ev: Event) => {
       const detail = (ev as CustomEvent<{ enabled?: boolean }>).detail
-      if (typeof detail?.enabled === 'boolean') setTorchEnabled(detail.enabled)
+      if (typeof detail?.enabled === 'boolean') setFlashlightEnabled(detail.enabled)
+    }
+    const onFlashlightCapability = (
+      ev: Event,
+    ) => {
+      const detail = (ev as CustomEvent<{
+        supported?: boolean
+        permission?: 'unknown' | 'granted' | 'denied'
+        supportState?: 'unknown' | 'supported' | 'unsupported'
+      }>).detail
+      setFlashlightCapability({
+        supported: detail?.supported === true,
+        permission: detail?.permission ?? 'unknown',
+        supportState: detail?.supportState ?? 'unknown',
+      })
     }
     window.addEventListener('hud:sos-morse-state', onMorseState)
     window.addEventListener('hud:sos-torch-state', onTorchState)
+    window.addEventListener('hud:flashlight-capability', onFlashlightCapability)
     return () => {
       window.removeEventListener('hud:sos-morse-state', onMorseState)
       window.removeEventListener('hud:sos-torch-state', onTorchState)
+      window.removeEventListener('hud:flashlight-capability', onFlashlightCapability)
     }
   }, [])
 
@@ -120,8 +160,8 @@ export function useHudCommands(): {
 
   const morseRef = useRef(morseEnabled)
   morseRef.current = morseEnabled
-  const torchRef = useRef(torchEnabled)
-  torchRef.current = torchEnabled
+  const flashlightRef = useRef(flashlightEnabled)
+  flashlightRef.current = flashlightEnabled
 
   const attachedPin = useMemo(
     () => state.waypoints.find((w) => w.id === attachedPinId) ?? null,
@@ -143,7 +183,7 @@ export function useHudCommands(): {
       {
         id: 'center',
         label: 'Center map on GPS',
-        aliases: ['center map', 'center gps'],
+        aliases: ['center map', 'center gps', 'gps', 'my location', 'location', 'where am i'],
         paletteVisible: true,
         group: 'Navigation',
         run: () => {
@@ -475,6 +515,16 @@ export function useHudCommands(): {
         },
       },
       {
+        id: 'sos disarm',
+        label: 'Disarm SOS',
+        aliases: ['cancel sos', 'stop sos', 'sos cancel'],
+        group: 'Safety',
+        run: () => {
+          window.dispatchEvent(new CustomEvent('hud:sos-disarm'))
+          return ok('SOS disarmed.')
+        },
+      },
+      {
         id: 'morse yes',
         label: 'Morse on',
         group: 'Safety',
@@ -515,44 +565,63 @@ export function useHudCommands(): {
         },
       },
       {
-        id: 'torch on',
-        label: 'Torch on',
-        aliases: ['torch yes'],
+        id: 'flashlight on',
+        label: 'Flashlight on',
+        aliases: ['flashlight yes', 'torch on', 'torch yes'],
         group: 'Safety',
         run: () => {
+          if (flashlightCapability.permission === 'denied') {
+            return fail('Flashlight unavailable because camera permission is denied.')
+          }
+          if (flashlightCapability.supportState === 'unsupported') {
+            return fail('Flashlight control is not supported on this device/browser.')
+          }
           window.dispatchEvent(new CustomEvent('hud:sos-torch', { detail: { enabled: true } }))
           return ok(
-            torchRef.current
-              ? 'Torch is already on. Keeping Morse torch flash enabled.'
-              : 'Torch is currently off. Enabling Morse torch flash.',
+            flashlightRef.current
+              ? 'Flashlight is already on. Keeping Morse flashlight flash enabled.'
+              : 'Flashlight is currently off. Enabling Morse flashlight flash.',
           )
         },
       },
       {
-        id: 'torch off',
-        label: 'Torch off',
-        aliases: ['torch no'],
+        id: 'flashlight off',
+        label: 'Flashlight off',
+        aliases: ['flashlight no', 'torch off', 'torch no'],
         group: 'Safety',
         run: () => {
+          if (flashlightCapability.permission === 'denied') {
+            return fail('Flashlight unavailable because camera permission is denied.')
+          }
+          if (flashlightCapability.supportState === 'unsupported') {
+            return fail('Flashlight control is not supported on this device/browser.')
+          }
           window.dispatchEvent(new CustomEvent('hud:sos-torch', { detail: { enabled: false } }))
           return ok(
-            torchRef.current
-              ? 'Torch is currently on. Disabling Morse torch flash.'
-              : 'Torch is already off. Keeping Morse torch flash disabled.',
+            flashlightRef.current
+              ? 'Flashlight is currently on. Disabling Morse flashlight flash.'
+              : 'Flashlight is already off. Keeping Morse flashlight flash disabled.',
           )
         },
       },
       {
-        id: 'torch toggle',
-        label: 'Torch toggle',
+        id: 'flashlight toggle',
+        label: 'Flashlight toggle',
+        aliases: ['torch toggle'],
         group: 'Safety',
         run: () => {
-          const next = !torchRef.current
+          if (flashlightCapability.permission === 'denied') {
+            return fail('Flashlight unavailable because camera permission is denied.')
+          }
+          if (flashlightCapability.supportState === 'unsupported') {
+            return fail('Flashlight control is not supported on this device/browser.')
+          }
+          const next = !flashlightRef.current
           window.dispatchEvent(new CustomEvent('hud:sos-torch', { detail: { enabled: next } }))
           return ok(
-            torchRef.current
-              ? 'Torch is currently on. Toggling off Morse torch flash.'
-              : 'Torch is currently off. Toggling on Morse torch flash.',
+            flashlightRef.current
+              ? 'Flashlight is currently on. Toggling off Morse flashlight flash.'
+              : 'Flashlight is currently off. Toggling on Morse flashlight flash.',
           )
         },
       },
@@ -583,7 +652,7 @@ export function useHudCommands(): {
       {
         id: 'bright',
         label: 'Display: bright day',
-        aliases: ['bright mode', 'bright day', 'day mode'],
+        aliases: ['bright mode', 'bright day', 'day mode', 'normal mode', 'daylight mode'],
         paletteVisible: true,
         group: 'Display',
         run: () => {
@@ -652,6 +721,27 @@ export function useHudCommands(): {
           return ok('Emergency contacts panel opened.')
         },
       },
+      {
+        id: 'panel minimize',
+        label: 'Minimize voice panel',
+        aliases: ['minimize panel'],
+        group: 'Panels',
+        run: () => {
+          updatePanel('voice', { minimized: true })
+          return ok('Voice panel minimized.')
+        },
+      },
+      {
+        id: 'panel maximize',
+        label: 'Maximize voice panel',
+        aliases: ['maximize panel', 'restore panel'],
+        group: 'Panels',
+        run: () => {
+          updatePanel('voice', { minimized: false, docked: false })
+          raisePanel('voice')
+          return ok('Voice panel maximized.')
+        },
+      },
 
       // Weather
       {
@@ -686,6 +776,51 @@ export function useHudCommands(): {
           )
         },
       },
+      {
+        id: 'mute',
+        label: 'Mute voice feedback',
+        aliases: ['mute voice', 'silence'],
+        group: 'Status',
+        run: () => {
+          try {
+            window.speechSynthesis?.cancel()
+            sessionStorage.setItem('hud_voice_muted', '1')
+          } catch {
+            // noop
+          }
+          return ok('Voice feedback muted.')
+        },
+      },
+      {
+        id: 'unmute',
+        label: 'Unmute voice feedback',
+        aliases: ['unmute voice'],
+        group: 'Status',
+        run: () => {
+          try {
+            sessionStorage.setItem('hud_voice_muted', '0')
+          } catch {
+            // noop
+          }
+          return ok('Voice feedback unmuted.')
+        },
+      },
+      {
+        id: 'diagnostics',
+        label: 'Open diagnostics',
+        aliases: ['show diagnostics', 'debug overlay'],
+        group: 'Status',
+        run: () => {
+          try {
+            localStorage.setItem('hud_runtime_overlay', '1')
+          } catch {
+            // noop
+          }
+          updatePanel('preflight', { docked: false, minimized: false })
+          raisePanel('preflight')
+          return ok('Diagnostics opened.')
+        },
+      },
 
       // Tier stubs (kept for parity with legacy voice directory)
       { id: 'fire', label: 'Fire (stub)', group: 'Tier 2', run: () => ok('Coming in Tier 2.') },
@@ -706,6 +841,8 @@ export function useHudCommands(): {
   }, [
     addWaypoint,
     attachedPin,
+    flashlightCapability.permission,
+    flashlightCapability.supportState,
     gps.lat,
     gps.lng,
     gps.locationState,
@@ -718,6 +855,37 @@ export function useHudCommands(): {
     state.waypoints,
     updatePanel,
   ])
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    const requiredCommands = [
+      'flashlight on',
+      'flashlight off',
+      'flashlight toggle',
+      'morse toggle',
+      'weather',
+      'zoom in',
+      'zoom out',
+      'center',
+      'night',
+      'bright',
+      'status',
+      'sos',
+    ]
+    const rows = requiredCommands.map((command) => {
+      const hit = commands.find((c) => c.id === command || (c.aliases ?? []).includes(command))
+      return {
+        command,
+        parsed: Boolean(hit),
+        wired: Boolean(hit?.run),
+        runtimeAction: hit ? `dispatch:${hit.id}` : 'none',
+        effect: hit ? 'handler-attached' : 'missing',
+        issue: hit ? '' : 'missing handler',
+        pass: Boolean(hit?.run),
+      }
+    })
+    console.table(rows)
+  }, [commands])
 
   const dispatch = useCallback(
     async (

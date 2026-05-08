@@ -156,6 +156,21 @@ export interface RuntimeContinuitySnapshot {
   recoveryCoordinatorState: RecoveryCoordinatorState
 }
 
+export interface DeploymentIntegritySnapshot {
+  currentBuildId: string
+  latestBuildId: string | null
+  swState: ServiceWorkerStatus
+  cacheGeneration: string
+  cacheCount: number
+  cacheEntryCount: number
+  lastNetworkValidationAt: number | null
+  lastNetworkValidationOk: boolean
+  staleStatus: 'unknown' | 'fresh' | 'stale_detected' | 'recovering'
+  updatePending: boolean
+  recoveryInFlight: boolean
+  reloadAttempted: boolean
+}
+
 export interface RuntimeSnapshot {
   buildId: string
   /** Alias for external consumers that expect buildHash naming. */
@@ -210,6 +225,7 @@ export interface RuntimeSnapshot {
    *  install is currently eligible. Updated on `beforeinstallprompt`,
    *  `appinstalled`, and `display-mode: standalone` matchMedia changes. */
   installMode: InstallMode
+  deploymentIntegrity: DeploymentIntegritySnapshot
 }
 
 export type DeadManTimerState =
@@ -325,6 +341,20 @@ const snapshot: RuntimeSnapshot = {
   wakeWordDetectedAt: null,
   haptics: getHapticsSnapshot(),
   installMode: getInstallMode(),
+  deploymentIntegrity: {
+    currentBuildId: initialBuildId,
+    latestBuildId: null,
+    swState: 'unregistered',
+    cacheGeneration: '',
+    cacheCount: 0,
+    cacheEntryCount: 0,
+    lastNetworkValidationAt: null,
+    lastNetworkValidationOk: false,
+    staleStatus: 'unknown',
+    updatePending: false,
+    recoveryInFlight: false,
+    reloadAttempted: false,
+  },
 }
 
 function pushRolling<T>(arr: T[], item: T, max: number): T[] {
@@ -564,6 +594,20 @@ export function markLastKnownGoodSnapshotTime(ts: number = Date.now()): void {
 export function updatePendingSwUpdate(v: boolean): void {
   if (snapshot.runtimeContinuity.pendingSWUpdate === v) return
   snapshot.runtimeContinuity = { ...snapshot.runtimeContinuity, pendingSWUpdate: v }
+  snapshot.deploymentIntegrity = {
+    ...snapshot.deploymentIntegrity,
+    updatePending: v,
+  }
+  notify()
+}
+
+export function updateDeploymentIntegrity(
+  patch: Partial<DeploymentIntegritySnapshot>,
+): void {
+  snapshot.deploymentIntegrity = {
+    ...snapshot.deploymentIntegrity,
+    ...patch,
+  }
   notify()
 }
 

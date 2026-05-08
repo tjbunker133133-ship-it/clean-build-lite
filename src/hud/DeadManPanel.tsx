@@ -42,6 +42,7 @@ import {
   recordDeadmanDispatchSuccess,
   shouldSkipDeadmanDispatch,
 } from '../runtime/deadmanDispatchLock'
+import { useCockpit } from '../context/CockpitContext'
 
 // CONTRACT-SENSITIVE (threshold dedupe): the firing effect uses
 // `firedAlertsRef.current.has(t.label)` as its idempotency key. Two
@@ -148,6 +149,7 @@ export default function DeadManPanel() {
   // Do NOT "clean up" by deleting these calls.
   useGPS()
   useAppContext()
+  const { updatePanel, raisePanel } = useCockpit()
   const {
     formattedTime, remainingMs, isExpired, isCritical, isWarning,
     isActive, reset, extend, activate, durationMs,
@@ -683,6 +685,17 @@ export default function DeadManPanel() {
               </button>
             </div>
           )}
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              updatePanel('preflight', { docked: false, minimized: false })
+              raisePanel('preflight')
+              setStatusText('OPENING CONTACT CONFIG')
+            }}
+            style={btnStyle('#7dff8a', isMobile)}
+          >
+            OPEN CONTACT CONFIG
+          </button>
 
           {/*
             ── Linked emergency contacts (READ-ONLY) ──

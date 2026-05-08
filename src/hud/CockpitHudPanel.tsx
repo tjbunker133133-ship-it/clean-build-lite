@@ -461,7 +461,22 @@ export default function CockpitHudPanel({
       const committedH = isMobile && !layout.docked && layout.h == null
         ? (sizeRef.current.h ?? minHeight)
         : layout.h
-      if (sizeRef.current.w !== committedW || sizeRef.current.h !== committedH) {
+      const widthDelta = Math.abs(sizeRef.current.w - committedW)
+      const heightDelta = Math.abs((sizeRef.current.h ?? 0) - (committedH ?? 0))
+      const suppressPreflightMobileWidthJitter =
+        isMobile &&
+        panelId === 'preflight' &&
+        !layout.docked &&
+        widthDelta > 0 &&
+        widthDelta < 3 &&
+        heightDelta < 1
+      if (suppressPreflightMobileWidthJitter && import.meta.env.DEV) {
+        logInfo('MOBILE_UI', `preflight-width-jitter-suppressed dw=${widthDelta.toFixed(2)}`)
+      }
+      if (
+        !suppressPreflightMobileWidthJitter &&
+        (sizeRef.current.w !== committedW || sizeRef.current.h !== committedH)
+      ) {
         const nextSize = { w: committedW, h: committedH }
         if (panelId === 'waypoints' && isMobile && layout.h == null && import.meta.env.DEV) {
           const now = Date.now()
@@ -1698,8 +1713,8 @@ export default function CockpitHudPanel({
                       color: accent,
                       cursor: 'pointer',
                       borderRadius: 4,
-                      minHeight: 36,
-                      minWidth: 36,
+                      minHeight: 44,
+                      minWidth: 44,
                       fontSize: touchFontSm(isMobile),
                       fontWeight: 800,
                       opacity: mobilePanelFontScale <= MOBILE_PANEL_FONT_SCALE_MIN + 1e-6 ? 0.35 : 1,
@@ -1724,8 +1739,8 @@ export default function CockpitHudPanel({
                       color: accent,
                       cursor: 'pointer',
                       borderRadius: 4,
-                      minHeight: 36,
-                      minWidth: 36,
+                      minHeight: 44,
+                      minWidth: 44,
                       fontSize: touchFontSm(isMobile),
                       fontWeight: 800,
                       opacity: mobilePanelFontScale >= MOBILE_PANEL_FONT_SCALE_MAX - 1e-6 ? 0.35 : 1,
@@ -1875,7 +1890,7 @@ export default function CockpitHudPanel({
             paddingBottom: isMobile
               ? `max(8px, env(safe-area-inset-bottom, 0px))`
               : undefined,
-            fontSize: isMobile ? `${0.95 * mobilePanelFontScale}em` : undefined,
+            fontSize: isMobile ? `${1.0 * mobilePanelFontScale}em` : undefined,
             flex: '1 1 auto',
             minHeight: 0,
             maxHeight: mobileDensityCollapsed ? 0 : '100%',

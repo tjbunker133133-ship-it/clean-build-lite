@@ -10,18 +10,18 @@
 
 // ── Raw constants (kept so call sites can still reach for the underlying
 // number when they need it, e.g. mid-layout math).
-export const HUD_TOUCH_GAP_MOBILE_SM = 8
+export const HUD_TOUCH_GAP_MOBILE_SM = 9
 export const HUD_TOUCH_GAP_DESKTOP_SM = 6
-export const HUD_TOUCH_GAP_MOBILE_MD = 12
+export const HUD_TOUCH_GAP_MOBILE_MD = 13
 export const HUD_TOUCH_GAP_DESKTOP_MD = 8
-export const HUD_TOUCH_GAP_MOBILE_LG = 16
+export const HUD_TOUCH_GAP_MOBILE_LG = 18
 export const HUD_TOUCH_GAP_DESKTOP_LG = 12
 
 /** Minimum on-screen control height for primary actions (WCAG-ish field target). */
-export const HUD_TOUCH_TARGET_MIN_PX = 48
+export const HUD_TOUCH_TARGET_MIN_PX = 50
 
 /** Body/label text floor when `platform-mobile` / mobile interaction mode is active. */
-export const HUD_FONT_MIN_MOBILE_PX = 14
+export const HUD_FONT_MIN_MOBILE_PX = 15
 
 // ── Canonical token API (matches the spec used by the panel sweep).
 
@@ -42,12 +42,12 @@ export function touchGapLg(isMobile: boolean): number {
 
 /** Body / label text size for subtle helper text (replaces fontSize 10/11). */
 export function touchFontSm(isMobile: boolean): number {
-  return isMobile ? 14 : 11
+  return isMobile ? 15 : 11
 }
 
 /** Primary panel text size (replaces fontSize 12, route stats, etc). */
 export function touchFontMd(isMobile: boolean): number {
-  return isMobile ? 15 : 13
+  return isMobile ? 16 : 13
 }
 
 /** Minimum tap-target height/width for any clickable element. */

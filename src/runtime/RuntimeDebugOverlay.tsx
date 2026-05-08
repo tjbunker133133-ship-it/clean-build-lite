@@ -186,6 +186,39 @@ function Body({ snap, onClose }: { snap: RuntimeSnapshot; onClose: () => void })
         ) : null}
       </Section>
 
+      <Section title="deployment integrity">
+        <Row k="current-build" v={snap.deploymentIntegrity.currentBuildId.slice(0, 19)} />
+        <Row
+          k="latest-build"
+          v={snap.deploymentIntegrity.latestBuildId ? snap.deploymentIntegrity.latestBuildId.slice(0, 42) : 'unknown'}
+        />
+        <Row k="sw-state" v={snap.deploymentIntegrity.swState} color={colorFor(snap.deploymentIntegrity.swState)} />
+        <Row k="cache-gen" v={snap.deploymentIntegrity.cacheGeneration || 'none'} />
+        <Row k="cache-count" v={String(snap.deploymentIntegrity.cacheCount)} />
+        <Row k="cache-entries" v={String(snap.deploymentIntegrity.cacheEntryCount)} />
+        <Row
+          k="last-network-validation"
+          v={
+            snap.deploymentIntegrity.lastNetworkValidationAt
+              ? new Date(snap.deploymentIntegrity.lastNetworkValidationAt).toLocaleTimeString()
+              : 'never'
+          }
+        />
+        <Row
+          k="validation-ok"
+          v={String(snap.deploymentIntegrity.lastNetworkValidationOk)}
+          color={snap.deploymentIntegrity.lastNetworkValidationOk ? '#7dff8a' : '#ffd76b'}
+        />
+        <Row
+          k="stale-status"
+          v={snap.deploymentIntegrity.staleStatus}
+          color={snap.deploymentIntegrity.staleStatus === 'fresh' ? '#7dff8a' : snap.deploymentIntegrity.staleStatus === 'stale_detected' ? '#ff6464' : '#ffd76b'}
+        />
+        <Row k="update-pending" v={String(snap.deploymentIntegrity.updatePending)} />
+        <Row k="recovery-in-flight" v={String(snap.deploymentIntegrity.recoveryInFlight)} />
+        <Row k="reload-attempted" v={String(snap.deploymentIntegrity.reloadAttempted)} />
+      </Section>
+
       <Section title="install mode">
         <Row
           k="standalone"

@@ -41,6 +41,10 @@ const WAKE_WORD = 'hud' as const
 // policy (the gate is reported 'enable' both for direct wake-word
 // utterances and for continuation consumption).
 const WAKE_CONTINUATION_MS = 2500
+const DUPLICATE_TRANSCRIPT_SUPPRESS_MS = 1800
+const DUPLICATE_COMMAND_SUPPRESS_MS = 1200
+const WAKE_ACK_COOLDOWN_MS = 1200
+const VOICE_INTENT_CONFIDENCE_MIN = 0.62
 // Final-transcript sanity bounds. Reject empty/whitespace/single-char
 // finals (common Android Chrome partial-flush garbage) and refuse to
 // consume the continuation window with long, multi-clause speech that
@@ -51,6 +55,11 @@ const SANITY_MAX_CONTINUATION_CHARS = 60
 
 function speak(text: string) {
   if (!('speechSynthesis' in window)) return
+  try {
+    if (sessionStorage.getItem('hud_voice_muted') === '1') return
+  } catch {
+    // ignore storage errors
+  }
   const u = new SpeechSynthesisUtterance(text)
   u.rate = 1
   window.speechSynthesis.cancel()
@@ -85,6 +94,116 @@ function normalize(input: string): string {
   return input.toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim()
 }
 
+function normalizeTranscript(input: string): string {
+  const stripped = input
+    .toLowerCase()
+    .replace(/[.,!?;:'"`~@#$%^&*()_+=\-[\]{}\\/|<>]/g, ' ')
+    .replace(/\b(please|uh|um|like|okay|ok|hey|now|just)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return stripped
+}
+
+function stripWakeWordPrefix(input: string): { commandPart: string; wakeDetected: boolean } {
+  const s = normalizeTranscript(input)
+  const m = s.match(/^(hud(?:\s+hud)*)\b/)
+  if (!m) return { commandPart: s, wakeDetected: false }
+  const rest = s.slice(m[0].length).trim()
+  return { commandPart: rest, wakeDetected: true }
+}
+
+function levenshteinDistance(a: string, b: string): number {
+  const aa = a.trim()
+  const bb = b.trim()
+  if (aa === bb) return 0
+  if (!aa) return bb.length
+  if (!bb) return aa.length
+  const dp = Array.from({ length: aa.length + 1 }, () => new Array<number>(bb.length + 1).fill(0))
+  for (let i = 0; i <= aa.length; i += 1) dp[i][0] = i
+  for (let j = 0; j <= bb.length; j += 1) dp[0][j] = j
+  for (let i = 1; i <= aa.length; i += 1) {
+    for (let j = 1; j <= bb.length; j += 1) {
+      const cost = aa[i - 1] === bb[j - 1] ? 0 : 1
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost)
+    }
+  }
+  return dp[aa.length][bb.length]
+}
+
+function similarityScore(a: string, b: string): number {
+  const aa = normalize(a)
+  const bb = normalize(b)
+  if (!aa || !bb) return 0
+  if (aa === bb) return 1
+  const maxLen = Math.max(aa.length, bb.length)
+  if (maxLen === 0) return 1
+  const dist = levenshteinDistance(aa, bb)
+  return Math.max(0, 1 - dist / maxLen)
+}
+
+type IntentResolution = {
+  command: string | null
+  confidence: number
+  reason: 'exact' | 'synonym' | 'fuzzy' | 'unknown'
+  suggestion: string | null
+}
+
+function resolveIntentFromPhrase(
+  phrase: string,
+  commands: Array<{ id: string; aliases?: string[] }>,
+): IntentResolution {
+  const normalized = normalizeTranscript(phrase)
+  if (!normalized) return { command: null, confidence: 0, reason: 'unknown', suggestion: null }
+
+  const synonymToIntent: Record<string, string> = {
+    bright: 'bright',
+    'bright mode': 'bright',
+    'day mode': 'bright',
+    'normal mode': 'bright',
+    'daylight mode': 'bright',
+    gps: 'center',
+    'center gps': 'center',
+    'center map': 'center',
+    recenter: 'center',
+    'my location': 'center',
+    'night mode': 'night',
+    'low light mode': 'low light',
+    'flashlight on': 'flashlight on',
+    'flashlight off': 'flashlight off',
+    'flashlight toggle': 'flashlight toggle',
+    'torch on': 'flashlight on',
+    'torch off': 'flashlight off',
+    'torch toggle': 'flashlight toggle',
+  }
+  const synonym = synonymToIntent[normalized]
+  if (synonym) return { command: synonym, confidence: 0.95, reason: 'synonym', suggestion: null }
+
+  for (const c of commands) {
+    if (normalize(c.id) === normalized) {
+      return { command: c.id, confidence: 1, reason: 'exact', suggestion: null }
+    }
+    const alias = (c.aliases ?? []).find((a) => normalize(a) === normalized)
+    if (alias) {
+      return { command: c.id, confidence: 0.98, reason: 'exact', suggestion: null }
+    }
+  }
+
+  const candidates: Array<{ cmd: string; score: number }> = []
+  for (const c of commands) {
+    candidates.push({ cmd: c.id, score: similarityScore(normalized, c.id) })
+    for (const a of c.aliases ?? []) candidates.push({ cmd: c.id, score: similarityScore(normalized, a) })
+  }
+  candidates.sort((a, b) => b.score - a.score)
+  const top = candidates[0]
+  if (!top || top.score < 0.58) {
+    return { command: null, confidence: top?.score ?? 0, reason: 'unknown', suggestion: null }
+  }
+  if (top.score < VOICE_INTENT_CONFIDENCE_MIN) {
+    return { command: null, confidence: top.score, reason: 'fuzzy', suggestion: top.cmd }
+  }
+  return { command: top.cmd, confidence: top.score, reason: 'fuzzy', suggestion: null }
+}
+
 const QUICK_COMMAND_GROUPS: Array<{
   group: string
   priority?: boolean
@@ -95,9 +214,9 @@ const QUICK_COMMAND_GROUPS: Array<{
     priority: true,
     items: [
       { label: 'Morse Toggle', cmd: 'morse toggle' },
-      { label: 'Torch Toggle', cmd: 'torch toggle' },
-      { label: 'Torch On', cmd: 'torch on' },
-      { label: 'Torch Off', cmd: 'torch off' },
+      { label: 'Flashlight Toggle', cmd: 'flashlight toggle' },
+      { label: 'Flashlight On', cmd: 'flashlight on' },
+      { label: 'Flashlight Off', cmd: 'flashlight off' },
     ],
   },
   {
@@ -170,6 +289,10 @@ export default function VoicePanel() {
   // continuous mode. The button toggles the same `armed` flag whether
   // continuous mode is on or off.
   const [statusText, setStatusText] = useState('🎤 HUD (tap to start)')
+  const [flashlightCapability, setFlashlightCapability] = useState<{
+    supportState: 'unknown' | 'supported' | 'unsupported'
+    permission: 'unknown' | 'granted' | 'denied'
+  }>({ supportState: 'unknown', permission: 'unknown' })
   const [recoveryNonce, setRecoveryNonce] = useState(0)
   const recognitionRef = useRef<any>(null)
   const armedRef = useRef(false)
@@ -184,15 +307,35 @@ export default function VoicePanel() {
   })
   const uiResetTimerRef = useRef<number | null>(null)
   const lastRecognitionAtRef = useRef<number | null>(null)
+  const lastWakeAckAtRef = useRef<number>(0)
+  const lastFinalTranscriptRef = useRef<{ norm: string; ts: number }>({ norm: '', ts: 0 })
+  const lastDispatchedCommandRef = useRef<{ cmd: string; ts: number }>({ cmd: '', ts: 0 })
   /** Utterance continuity window expiry (`performance.now()` epoch). null
    *  when no bare-wake-word ack is pending. Single-shot: cleared on
    *  consume, timeout, disarm, or SR teardown. */
   const pendingWakeUntilRef = useRef<number | null>(null)
   armedRef.current = armed
-  const parseAndRunRef = useRef<(text: string) => Promise<void>>(async () => {})
+  const parseAndRunRef = useRef<(text: string, confidence?: number) => Promise<void>>(async () => {})
   const supportsRec =
     typeof window !== 'undefined' &&
     !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)
+
+  useEffect(() => {
+    const onFlashlightCapability = (
+      ev: Event,
+    ) => {
+      const detail = (ev as CustomEvent<{
+        supportState?: 'unknown' | 'supported' | 'unsupported'
+        permission?: 'unknown' | 'granted' | 'denied'
+      }>).detail
+      setFlashlightCapability({
+        supportState: detail?.supportState ?? 'unknown',
+        permission: detail?.permission ?? 'unknown',
+      })
+    }
+    window.addEventListener('hud:flashlight-capability', onFlashlightCapability)
+    return () => window.removeEventListener('hud:flashlight-capability', onFlashlightCapability)
+  }, [])
 
   // Mirror support flag into runtime snapshot once on mount.
   useEffect(() => {
@@ -300,8 +443,11 @@ export default function VoicePanel() {
     report(res.message, res.ok)
   }
 
-  const parseAndRun = async (text: string) => {
-    const norm = normalize(text)
+  const parseAndRun = async (text: string, confidence = 1) => {
+    console.log('[VOICE RAW]', text)
+    const norm = normalizeTranscript(text)
+    console.log('[VOICE NORMALIZED]', norm)
+    console.log('[VOICE CONFIDENCE]', confidence)
     if (!norm) return
 
     // Utterance continuity window: a recent bare "HUD" finalization left
@@ -333,7 +479,12 @@ export default function VoicePanel() {
       }
     }
 
-    const effective = consumedContinuation ? `${WAKE_WORD} ${norm}` : norm
+    const wakeSplit = stripWakeWordPrefix(norm)
+    const effective = consumedContinuation
+      ? `${WAKE_WORD} ${norm}`
+      : wakeSplit.wakeDetected
+        ? `${WAKE_WORD} ${wakeSplit.commandPart}`.trim()
+        : norm
 
     // SYSTEM RULE: HUD is the ONLY valid activation token.
     // No aliases, no fuzzy matching, no fallback activation allowed.
@@ -346,6 +497,8 @@ export default function VoicePanel() {
     // never bypassed for arbitrary utterances.
     if (effective !== WAKE_WORD && !effective.startsWith(`${WAKE_WORD} `)) {
       reportPolicyAttempt('voice.wakeWordRequired', 'disable', 'parseAndRun.missing-wake-word')
+      console.log('[VOICE COMMAND]', '')
+      console.log('[VOICE PARSE REJECT]', 'missing_wake_word')
       traceAction('wake_word_activation', 'guard_reject', { reason: 'missing_wake_word' })
       return
     }
@@ -369,7 +522,13 @@ export default function VoicePanel() {
     )
     logInfo('VOICE', `wake-word.detected phrase="${effective.slice(0, 80)}"`)
     traceAction('wake_word_activation', 'state_result', { detected: true, viaContinuation: consumedContinuation })
-    pulseWake()
+    const now = Date.now()
+    if (now - lastWakeAckAtRef.current > WAKE_ACK_COOLDOWN_MS) {
+      pulseWake()
+      lastWakeAckAtRef.current = now
+    } else {
+      logInfo('VOICE', 'wake-ack-suppressed cooldown')
+    }
     setVoiceState('listening')
     updateVoiceState('processing')
     const commandsPart =
@@ -398,14 +557,82 @@ export default function VoicePanel() {
       return
     }
     for (const p of parts) {
+      const intent = resolveIntentFromPhrase(p, commands)
+      console.log('[VOICE COMMAND]', intent.command ?? '')
+      console.log('[VOICE INTENT]', intent)
+      if (!intent.command) {
+        const reason =
+          intent.reason === 'fuzzy' && intent.suggestion
+            ? `Did you mean ${intent.suggestion}?`
+            : 'Unknown command. Try weather, bright mode, center gps, or night mode.'
+        console.log('[VOICE PARSE REJECT]', reason)
+        report(reason, false)
+        continue
+      }
+      if (confidence < VOICE_INTENT_CONFIDENCE_MIN) {
+        const suggestion = intent.suggestion ?? intent.command
+        const msg = `Low confidence. Did you mean ${suggestion}?`
+        console.log('[VOICE PARSE REJECT]', msg)
+        report(msg, false)
+        continue
+      }
+      const dedupeNow = Date.now()
+      if (
+        lastDispatchedCommandRef.current.cmd === intent.command &&
+        dedupeNow - lastDispatchedCommandRef.current.ts < DUPLICATE_COMMAND_SUPPRESS_MS
+      ) {
+        console.log('[VOICE DUPLICATE SUPPRESSED]', intent.command)
+        continue
+      }
+      lastDispatchedCommandRef.current = { cmd: intent.command, ts: dedupeNow }
       // Compose a stable `heard` value per part: "HUD <part>" — preserves
       // the wake word in the structured log even when multiple commands
       // are chained via "then".
-      await dispatchAndReport(p, 'voice', `${WAKE_WORD} ${p}`)
+      await dispatchAndReport(intent.command, 'voice', `${WAKE_WORD} ${p}`)
     }
     if (armedRef.current) updateVoiceState('listening')
   }
   parseAndRunRef.current = parseAndRun
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    const samples = [
+      'HUD weather',
+      'HUD bright',
+      'HUD bright mode',
+      'HUD center GPS',
+      'HUD zoom in',
+      'HUD recenter',
+      'HUD night mode',
+    ]
+    const rows = samples.map((s) => {
+      const stripped = stripWakeWordPrefix(s)
+      const intent = resolveIntentFromPhrase(stripped.commandPart, commands)
+      const expected =
+        s === 'HUD weather'
+          ? 'weather'
+          : s === 'HUD bright'
+            ? 'bright'
+            : s === 'HUD bright mode'
+              ? 'bright'
+              : s === 'HUD center GPS'
+                ? 'center'
+                : s === 'HUD zoom in'
+                  ? 'zoom in'
+                  : s === 'HUD recenter'
+                    ? 'center'
+                    : 'night'
+      return {
+        sample: s,
+        wakeDetected: stripped.wakeDetected,
+        intent: intent.command ?? 'none',
+        confidence: Number(intent.confidence.toFixed(3)),
+        matchedAction: intent.command ?? intent.suggestion ?? 'none',
+        pass: intent.command === expected,
+      }
+    })
+    console.table(rows)
+  }, [commands])
 
   useEffect(() => {
     if (!armed || !supportsRec) return
@@ -498,10 +725,17 @@ export default function VoicePanel() {
       //      escalate backoff after a real chunk arrived)
       let finalText = ''
       let interimText = ''
+      let finalConfidence: number | null = null
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const result = e.results[i]
         const txt = result?.[0]?.transcript ?? ''
-        if (result?.isFinal) finalText += ` ${txt}`
+        if (result?.isFinal) {
+          finalText += ` ${txt}`
+          const conf = typeof result?.[0]?.confidence === 'number' ? Number(result[0].confidence) : null
+          if (conf != null && Number.isFinite(conf)) {
+            finalConfidence = finalConfidence == null ? conf : Math.max(finalConfidence, conf)
+          }
+        }
         else interimText += ` ${txt}`
       }
       finalText = finalText.trim()
@@ -522,11 +756,25 @@ export default function VoicePanel() {
         })
       }
       if (finalText.length >= SANITY_MIN_FINAL_LEN) {
+        const finalNorm = normalizeTranscript(finalText)
+        const now = Date.now()
+        const duplicate =
+          finalNorm.length > 0 &&
+          finalNorm === lastFinalTranscriptRef.current.norm &&
+          now - lastFinalTranscriptRef.current.ts < DUPLICATE_TRANSCRIPT_SUPPRESS_MS
+        if (duplicate) {
+          console.log('[VOICE DUPLICATE SUPPRESSED]', {
+            transcript: finalNorm,
+            windowMs: DUPLICATE_TRANSCRIPT_SUPPRESS_MS,
+          })
+          return
+        }
+        lastFinalTranscriptRef.current = { norm: finalNorm, ts: now }
         // Final-transcript sanity filter is enforced inside the result
         // handler so SR-emitted single-char / whitespace finalizations
         // (common Android Chrome partial-flush garbage) cannot consume
         // the continuation window or trigger the parser.
-        void parseAndRunRef.current(finalText)
+        void parseAndRunRef.current(finalText, finalConfidence ?? 1)
       }
     }
     // Safety: any recognition error (incl. permission denial mid-session)
@@ -808,6 +1056,17 @@ export default function VoicePanel() {
     setStatusText((t) => (t.includes('listening') ? '🎤 HUD (tap to start)' : '🎤 HUD listening'))
   }
 
+  const getCommandAvailability = (cmd: string): string => {
+    if (cmd.startsWith('flashlight')) {
+      if (flashlightCapability.permission === 'denied') return 'permission required'
+      if (flashlightCapability.supportState === 'unsupported') return 'unsupported'
+      if (flashlightCapability.supportState === 'supported') return 'available'
+      return 'inactive'
+    }
+    const registered = commands.some((c) => c.id === cmd || (c.aliases ?? []).includes(cmd))
+    return registered ? 'available' : 'partially wired'
+  }
+
   return (
     <HudPanel
       panelId="voice"
@@ -969,7 +1228,7 @@ export default function VoicePanel() {
                         letterSpacing: '0.04em',
                       }}
                     >
-                      {item.label}
+                      {item.label} - {getCommandAvailability(item.cmd)}
                     </button>
                   ))}
                 </div>
@@ -991,7 +1250,7 @@ export default function VoicePanel() {
               <strong>TIER 1</strong> Status: status, time, battery, signal, elevation.
             </div>
             <div>
-              <strong>TIER 1</strong> SOS: sos, emergency, rescue, morse yes/no/toggle, torch on/off/toggle.
+              <strong>TIER 1</strong> SOS: sos, emergency, rescue, morse yes/no/toggle, flashlight on/off/toggle.
             </div>
             <div>
               <strong>TIER 1</strong> Corridor: corridor, corridor status.
