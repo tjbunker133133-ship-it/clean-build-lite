@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { useMapContext } from '../context/MapContext'
 import HudPanel from './HudPanel'
 import { usePanelData } from '../context/PanelDataContext'
+import { getDeviceProfile } from '../runtime/deviceProfile'
+import { touchFontSm, touchFontMd } from './tokens'
 
 function distMi(
   lat1: number,
@@ -73,16 +75,46 @@ export default function ElevationReadout() {
 
     const sample = () => {
       const c = map.getCenter()
+
+      // UI fallback parity with the voice "elevation" command: when the
+      // Open-Elevation network call returned null (well-known API
+      // flakiness — CORS, 503, timeout) the panel previously rendered
+      // "— ft" while the voice command still reported a real value via
+      // the local map terrain DEM. We mirror that primary source here so
+      // the UI recovers as soon as the map sample callback runs.
+      let terrainMeters: number | null = null
+      try {
+        const m = (map as unknown as {
+          queryTerrainElevation?: (c: unknown) => number | null
+        }).queryTerrainElevation?.(c)
+        if (m != null && Number.isFinite(m)) terrainMeters = m
+      } catch {
+        // optional API; absence is normal when terrain DEM is not loaded
+      }
+
+      if (
+        !panel.panelsLocationBlocked &&
+        panel.elevationMeters == null &&
+        terrainMeters != null
+      ) {
+        const ft = terrainMeters * 3.28084
+        const rounded = Math.round(ft)
+        setMain(`${rounded.toLocaleString('en-US')} ft`)
+        setBand(bandForFt(ft))
+      }
+
       const baseFt =
         panel.elevationMeters != null
           ? Math.round(panel.elevationMeters * 3.28084)
-          : Math.round(
-              (1200 +
-                Math.sin(c.lat * 0.12) * 400 +
-                Math.cos(c.lng * 0.1) * 300 +
-                (c.lat + c.lng) * 3) *
-                3.28084,
-            )
+          : terrainMeters != null
+            ? Math.round(terrainMeters * 3.28084)
+            : Math.round(
+                (1200 +
+                  Math.sin(c.lat * 0.12) * 400 +
+                  Math.cos(c.lng * 0.1) * 300 +
+                  (c.lat + c.lng) * 3) *
+                  3.28084,
+              )
 
       const p = prev.current
       if (p) {
@@ -116,7 +148,7 @@ export default function ElevationReadout() {
       map.off('moveend', sample)
       map.off('idle', sample)
     }
-  }, [map, panel.elevationMeters])
+  }, [map, panel.elevationMeters, panel.panelsLocationBlocked])
 
   const color =
     band === 'low'
@@ -126,6 +158,10 @@ export default function ElevationReadout() {
         : band === 'high'
           ? '#c6b79d'
           : '#9fa9a7'
+
+  const isMobile = getDeviceProfile().interactionMode === 'mobile'
+  const fontSm = touchFontSm(isMobile)
+  const fontMd = touchFontMd(isMobile)
 
   return (
     <HudPanel
@@ -139,7 +175,7 @@ export default function ElevationReadout() {
       {panel.panelsLocationBlocked && (
         <div
           style={{
-            fontSize: 10,
+            fontSize: fontSm,
             color: '#f0b4bf',
             textAlign: 'center',
             marginBottom: 6,
@@ -165,16 +201,16 @@ export default function ElevationReadout() {
           gap: 2,
           fontFamily: 'var(--font-mono, ui-monospace, monospace)',
           fontWeight: 700,
-          fontSize: 12,
+          fontSize: fontMd,
           color,
         }}
       >
-        <div style={{ fontSize: 14, fontWeight: 700 }}>{main}</div>
-        <div style={{ fontSize: 10, opacity: 0.95, whiteSpace: 'nowrap' }}>
+        <div style={{ fontSize: isMobile ? 18 : 14, fontWeight: 700 }}>{main}</div>
+        <div style={{ fontSize: fontSm, opacity: 0.95, whiteSpace: 'nowrap' }}>
           {trend} · {grade}
         </div>
         {panel.elevationError && !panel.panelsLocationBlocked && (
-          <div style={{ fontSize: 9, opacity: 0.85, color: '#e7c29a' }}>{panel.elevationError}</div>
+          <div style={{ fontSize: fontSm, opacity: 0.85, color: '#e7c29a' }}>{panel.elevationError}</div>
         )}
       </div>
     </HudPanel>

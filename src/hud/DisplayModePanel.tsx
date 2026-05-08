@@ -2,6 +2,8 @@ import type { CSSProperties } from 'react'
 import HudPanel from './HudPanel'
 import { useCockpit } from '../context/CockpitContext'
 import type { ScreenHueMode } from '../types/cockpit'
+import { getDeviceProfile } from '../runtime/deviceProfile'
+import { touchFontSm, touchGapMd, touchMinTarget } from './tokens'
 
 // ⚠️ LOCKED SYSTEM — Behavior Freeze Active
 // Any change to interaction, layout, display modes, or layers requires explicit approval.
@@ -15,6 +17,10 @@ const HUE_BUTTONS: { mode: ScreenHueMode; label: string; hint: string }[] = [
 export default function DisplayModePanel() {
   const { prefs, setScreenHue, setDisplayTuning } = useCockpit()
   const active = prefs.screen_hue
+  const isMobile = getDeviceProfile().interactionMode === 'mobile'
+  const fontSm = touchFontSm(isMobile)
+  const gapMd = touchGapMd(isMobile)
+  const tapMin = touchMinTarget(isMobile)
   // 🔒 CONTRACT: Display mode calibration is locked.
   // - Red Ops color + contrast must remain unchanged
   // - Low Light minimum must remain readable
@@ -58,7 +64,7 @@ export default function DisplayModePanel() {
       initialWidth={280}
       minHeight={150}
     >
-      <div style={{ display: 'grid', gap: 8 }}>
+      <div style={{ display: 'grid', gap: gapMd }}>
         {HUE_BUTTONS.map(({ mode, label, hint }) => {
           const on = active === mode
           return (
@@ -68,7 +74,7 @@ export default function DisplayModePanel() {
               data-no-drag
               onClick={() => setScreenHue(mode)}
               style={{
-                minHeight: 46,
+                minHeight: Math.max(tapMin, 46),
                 borderRadius: 8,
                 border: on
                   ? '1px solid rgba(199,206,198,0.72)'
@@ -81,29 +87,29 @@ export default function DisplayModePanel() {
                 boxShadow: on ? '0 0 10px rgba(199,206,198,0.2)' : 'none',
               }}
             >
-              <div style={{ fontSize: 11, letterSpacing: '0.12em', fontWeight: 700 }}>
+              <div style={{ fontSize: fontSm, letterSpacing: '0.12em', fontWeight: 700 }}>
                 {label}
               </div>
-              <div style={{ fontSize: 10, opacity: 0.85 }}>{hint}</div>
+              <div style={{ fontSize: fontSm, opacity: 0.85 }}>{hint}</div>
             </button>
           )
         })}
       </div>
       <div style={{ marginTop: 10, borderTop: '1px solid rgba(199,206,198,0.2)', paddingTop: 10 }}>
-        <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+        <div style={{ display: 'flex', gap: gapMd, marginBottom: gapMd }}>
           <button
             type="button"
             data-no-drag
             onClick={applyNightPreset}
             style={{
               flex: 1,
-              minHeight: 34,
+              minHeight: tapMin,
               borderRadius: 6,
               border: '1px solid rgba(199,206,198,0.45)',
               background: 'rgba(199,206,198,0.14)',
               color: '#d8ded8',
               cursor: 'pointer',
-              fontSize: 10,
+              fontSize: fontSm,
               letterSpacing: '0.08em',
             }}
           >
@@ -115,13 +121,13 @@ export default function DisplayModePanel() {
             onClick={resetCurrentMode}
             style={{
               flex: 1,
-              minHeight: 34,
+              minHeight: tapMin,
               borderRadius: 6,
               border: '1px solid rgba(199,206,198,0.26)',
               background: 'rgba(10,12,13,0.82)',
               color: 'var(--cockpit-panel-subtle)',
               cursor: 'pointer',
-              fontSize: 10,
+              fontSize: fontSm,
               letterSpacing: '0.08em',
             }}
           >
@@ -129,8 +135,8 @@ export default function DisplayModePanel() {
           </button>
         </div>
         {active === 'low_light' && (
-          <div style={{ display: 'grid', gap: 8 }}>
-            <label style={{ fontSize: 10, color: 'var(--cockpit-panel-subtle)', display: 'grid', gap: 4 }}>
+          <div style={{ display: 'grid', gap: gapMd }}>
+            <label style={{ fontSize: fontSm, color: 'var(--cockpit-panel-subtle)', display: 'grid', gap: 4 }}>
               LOW HUD BRIGHTNESS ({prefs.low_hud_brightness.toFixed(2)})
               <input
                 type="range"
@@ -143,7 +149,7 @@ export default function DisplayModePanel() {
                 style={sliderStyle}
               />
             </label>
-            <label style={{ fontSize: 10, color: 'var(--cockpit-panel-subtle)', display: 'grid', gap: 4 }}>
+            <label style={{ fontSize: fontSm, color: 'var(--cockpit-panel-subtle)', display: 'grid', gap: 4 }}>
               LOW MAP BRIGHTNESS ({prefs.low_map_brightness.toFixed(2)})
               <input
                 type="range"
@@ -159,8 +165,8 @@ export default function DisplayModePanel() {
           </div>
         )}
         {active === 'bright_day' && (
-          <div style={{ display: 'grid', gap: 8 }}>
-            <label style={{ fontSize: 10, color: 'var(--cockpit-panel-subtle)', display: 'grid', gap: 4 }}>
+          <div style={{ display: 'grid', gap: gapMd }}>
+            <label style={{ fontSize: fontSm, color: 'var(--cockpit-panel-subtle)', display: 'grid', gap: 4 }}>
               BRIGHT HUD BRIGHTNESS ({prefs.bright_hud_brightness.toFixed(2)})
               <input
                 type="range"
@@ -173,7 +179,7 @@ export default function DisplayModePanel() {
                 style={sliderStyle}
               />
             </label>
-            <label style={{ fontSize: 10, color: 'var(--cockpit-panel-subtle)', display: 'grid', gap: 4 }}>
+            <label style={{ fontSize: fontSm, color: 'var(--cockpit-panel-subtle)', display: 'grid', gap: 4 }}>
               BRIGHT MAP BRIGHTNESS ({prefs.bright_map_brightness.toFixed(2)})
               <input
                 type="range"
@@ -189,8 +195,8 @@ export default function DisplayModePanel() {
           </div>
         )}
         {active === 'red_tactical' && (
-          <div style={{ display: 'grid', gap: 8 }}>
-            <label style={{ fontSize: 10, color: 'var(--cockpit-panel-subtle)', display: 'grid', gap: 4 }}>
+          <div style={{ display: 'grid', gap: gapMd }}>
+            <label style={{ fontSize: fontSm, color: 'var(--cockpit-panel-subtle)', display: 'grid', gap: 4 }}>
               RED HUE SHIFT ({prefs.red_hue_rotate} deg)
               <input
                 type="range"
@@ -203,7 +209,7 @@ export default function DisplayModePanel() {
                 style={sliderStyle}
               />
             </label>
-            <label style={{ fontSize: 10, color: 'var(--cockpit-panel-subtle)', display: 'grid', gap: 4 }}>
+            <label style={{ fontSize: fontSm, color: 'var(--cockpit-panel-subtle)', display: 'grid', gap: 4 }}>
               RED SATURATION ({prefs.red_saturation.toFixed(2)})
               <input
                 type="range"
@@ -216,7 +222,7 @@ export default function DisplayModePanel() {
                 style={sliderStyle}
               />
             </label>
-            <label style={{ fontSize: 10, color: 'var(--cockpit-panel-subtle)', display: 'grid', gap: 4 }}>
+            <label style={{ fontSize: fontSm, color: 'var(--cockpit-panel-subtle)', display: 'grid', gap: 4 }}>
               RED HUD BRIGHTNESS ({prefs.red_brightness.toFixed(2)})
               <input
                 type="range"

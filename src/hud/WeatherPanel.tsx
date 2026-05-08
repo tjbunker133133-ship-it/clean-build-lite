@@ -1,6 +1,8 @@
 import HudPanel from './HudPanel'
 import { usePanelData } from '../context/PanelDataContext'
 import { useGPS } from '../hooks/useGPS'
+import { getDeviceProfile } from '../runtime/deviceProfile'
+import { touchFontSm, touchFontMd, touchGapMd, touchMinTarget } from './tokens'
 
 export default function WeatherPanel() {
   const gps = useGPS()
@@ -14,6 +16,11 @@ export default function WeatherPanel() {
 
   const coordsReady = userLocation != null && !panelsLocationBlocked
   const hasData = !!weather && !('error' in weather)
+  const isMobile = getDeviceProfile().interactionMode === 'mobile'
+  const fontSm = touchFontSm(isMobile)
+  const fontMd = touchFontMd(isMobile)
+  const gapMd = touchGapMd(isMobile)
+  const tapMin = touchMinTarget(isMobile)
 
   return (
     <HudPanel
@@ -23,9 +30,9 @@ export default function WeatherPanel() {
       initialWidth={300}
       minHeight={170}
     >
-      <div style={{ display: 'grid', gap: 8 }}>
+      <div style={{ display: 'grid', gap: gapMd }}>
         {panelsLocationBlocked && (
-          <p style={{ margin: 0, fontSize: 12, color: '#f0b4bf', lineHeight: 1.45 }}>
+          <p style={{ margin: 0, fontSize: fontMd, color: '#f0b4bf', lineHeight: 1.45 }}>
             Enable location to use weather and elevation features
           </p>
         )}
@@ -48,7 +55,7 @@ export default function WeatherPanel() {
           >
             {hasData ? `${weather.temperature}${weather.unit}` : '--'}
           </div>
-          <div style={{ fontSize: 12, color: 'var(--cockpit-panel-subtle)' }}>
+          <div style={{ fontSize: fontMd, color: 'var(--cockpit-panel-subtle)' }}>
             {weatherLoading
               ? 'Updating weather...'
               : hasData
@@ -57,10 +64,10 @@ export default function WeatherPanel() {
                   ? 'Loading…'
                   : 'Waiting for location...'}
           </div>
-          <div style={{ fontSize: 11, color: 'var(--cockpit-panel-subtle)', marginTop: 3 }}>
+          <div style={{ fontSize: fontSm, color: 'var(--cockpit-panel-subtle)', marginTop: 3 }}>
             {hasData ? weather.location : 'Location: --'}
           </div>
-          <div style={{ fontSize: 11, color: 'var(--cockpit-panel-subtle)', marginTop: 4 }}>
+          <div style={{ fontSize: fontSm, color: 'var(--cockpit-panel-subtle)', marginTop: 4 }}>
             Wind:{' '}
             {hasData
               ? `${Math.round(weather.windSpeed)} ${weather.windUnit}`
@@ -81,13 +88,13 @@ export default function WeatherPanel() {
             void refreshPanelData()
           }}
           style={{
-            minHeight: 36,
+            minHeight: tapMin,
             borderRadius: 8,
             border: '1px solid rgba(199,206,198,0.35)',
             background: coordsReady ? 'rgba(199,206,198,0.14)' : 'rgba(199,206,198,0.06)',
             color: coordsReady ? '#d6ddd6' : 'rgba(214,221,214,0.45)',
             cursor: coordsReady ? 'pointer' : 'not-allowed',
-            fontSize: 11,
+            fontSize: fontSm,
             letterSpacing: '0.08em',
           }}
         >

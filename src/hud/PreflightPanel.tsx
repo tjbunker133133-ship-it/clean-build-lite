@@ -15,6 +15,17 @@ import { resetAppState } from '../utils/resetApp'
 import { forceUpdateApp } from '../utils/forceUpdate'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 import { updatePermission } from '../runtime/runtimeSnapshot'
+import { touchFontSm, touchFontMd, touchGapMd, touchGapSm, touchMinTarget } from './tokens'
+import {
+  fetchEmergencyContacts,
+  createEmergencyContact,
+  deleteEmergencyContact,
+  type EmergencyContact,
+} from '../lib/emergencyContacts'
+import { traceAction } from '../runtime/actionTrace'
+import { useCockpit } from '../context/CockpitContext'
+import { clampMobileToReachableViewport, isPanelReachableInViewport } from '../lib/mobilePanelHelpers'
+import { cockpitViewport } from '../lib/viewport'
 
 type CheckState = 'pass' | 'warn' | 'fail'
 type ManualCheckKey =
@@ -89,6 +100,7 @@ function readRapidEndpoint(): string {
 }
 
 export default function PreflightPanel() {
+  const { panels, updatePanel, raisePanel } = useCockpit()
   const gps = useGPS()
   const [online, setOnline] = useState(navigator.onLine)
   const [geoPerm, setGeoPerm] = useState<PermissionState | 'unknown'>('unknown')
@@ -108,6 +120,22 @@ export default function PreflightPanel() {
     deadmanRenew: false,
     sosDryRun: false,
   })
+  // Single source of truth for backend contacts in this panel. The list
+  // drives the readiness rows + the editor list. Status is set to
+  // 'unavailable' only when the Supabase fetch genuinely fails (network
+  // error, table missing, RLS denial, etc.) — empty arrays are 'ok'.
+  const [contacts, setContacts] = useState<EmergencyContact[]>([])
+  const [contactsStatus, setContactsStatus] = useState<'loading' | 'ok' | 'unavailable'>('loading')
+  const [contactForm, setContactForm] = useState<{ name: string; email: string; relationship: string }>({
+    name: '',
+    email: '',
+    relationship: '',
+  })
+  const [contactBusy, setContactBusy] = useState(false)
+  const [contactError, setContactError] = useState<string | null>(null)
+  const [lastContactDiagSig, setLastContactDiagSig] = useState('')
+  const [lastEligibilityDiagSig, setLastEligibilityDiagSig] = useState('')
+  const [lastVisibilityDiagSig, setLastVisibilityDiagSig] = useState('')
 
   useEffect(() => {
     try {
@@ -119,6 +147,64 @@ export default function PreflightPanel() {
       // noop
     }
   }, [])
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    const sig = `${contactsStatus}:${contacts.length}:${contactError ?? ''}`
+    if (sig === lastContactDiagSig) return
+    setLastContactDiagSig(sig)
+    console.info('[HUD DEV] contact-hydration', {
+      status: contactsStatus,
+      hydratedCount: contacts.length,
+      validationReason: contactError ?? null,
+    })
+  }, [contactsStatus, contacts.length, contactError, lastContactDiagSig])
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    const profile = getDeviceProfile()
+    const layout = panels.preflight
+    const { vw, vh } = cockpitViewport()
+    const pos = { x: layout?.x ?? 0, y: layout?.y ?? 0 }
+    const size = { w: layout?.w ?? 320, h: layout?.h ?? 300 }
+    const reachable = isPanelReachableInViewport(pos, size, { vw, vh }, 36)
+    const sig = `${profile.interactionMode}:${Boolean(layout)}:${layout?.docked ?? false}:${layout?.minimized ?? false}:${reachable}:${layout?.z ?? 0}`
+    if (sig === lastVisibilityDiagSig) return
+    setLastVisibilityDiagSig(sig)
+    console.info('[HUD DEV] emergency-panel-visibility', {
+      panel: 'preflight',
+      interactionMode: profile.interactionMode,
+      mounted: Boolean(layout),
+      docked: layout?.docked ?? null,
+      minimized: layout?.minimized ?? null,
+      reachable,
+      z: layout?.z ?? null,
+    })
+  }, [panels.preflight, lastVisibilityDiagSig])
+
+  useEffect(() => {
+    const profile = getDeviceProfile()
+    if (profile.interactionMode !== 'mobile') return
+    const layout = panels.preflight
+    if (!layout || layout.docked) return
+    const { vw, vh } = cockpitViewport()
+    const reachable = clampMobileToReachableViewport(
+      { x: layout.x, y: layout.y },
+      { w: layout.w, h: layout.h ?? 300 },
+      { vw, vh },
+      36,
+    )
+    if (Math.abs(reachable.x - layout.x) <= 0.5 && Math.abs(reachable.y - layout.y) <= 0.5) return
+    updatePanel('preflight', { x: reachable.x, y: reachable.y })
+    if (import.meta.env.DEV) {
+      console.info('[HUD DEV] emergency-panel-recovery', {
+        panel: 'preflight',
+        reason: 'offscreen_or_unreachable',
+        from: { x: layout.x, y: layout.y },
+        to: reachable,
+      })
+    }
+  }, [panels.preflight, updatePanel])
 
   useEffect(() => {
     try {
@@ -145,6 +231,36 @@ export default function PreflightPanel() {
     setIsStandalone(getDeviceProfile().isStandalone)
   }, [recheckTick])
 
+  // Load backend contacts once on mount. No polling, no timer. Refresh on
+  // explicit operator action (after add/delete). Failures collapse to
+  // 'unavailable' — never crash the HUD.
+  useEffect(() => {
+    if (import.meta.env.DEV) {
+      console.info('[HUD DEV] emergency-config-panel-mounted', {
+        panel: 'preflight',
+        interactionMode: getDeviceProfile().interactionMode,
+      })
+    }
+    let alive = true
+    void fetchEmergencyContacts()
+      .then(({ data, error }) => {
+        if (!alive) return
+        if (error) {
+          setContactsStatus('unavailable')
+          return
+        }
+        setContacts(data)
+        setContactsStatus('ok')
+      })
+      .catch(() => {
+        if (!alive) return
+        setContactsStatus('unavailable')
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
+
   useEffect(() => {
     let alive = true
     void getPermissionSnapshot().then((snapshot) => {
@@ -161,7 +277,7 @@ export default function PreflightPanel() {
     }
   }, [recheckTick])
 
-  const savedContactsCount = useMemo(() => {
+  const legacySavedContactsCount = useMemo(() => {
     try {
       const raw =
         localStorage.getItem('titanium_saved_contacts') ??
@@ -272,8 +388,11 @@ export default function PreflightPanel() {
       },
       {
         label: 'Emergency Contacts',
-        state: savedContactsCount > 0 ? 'pass' : 'warn',
-        detail: `${savedContactsCount} saved`,
+        state: contactsStatus === 'ok' && contacts.length > 0 ? 'pass' : 'warn',
+        detail:
+          contactsStatus === 'unavailable'
+            ? 'Backend unavailable'
+            : `${contacts.length} loaded`,
         weight: 1.2,
         critical: true,
       },
@@ -291,7 +410,8 @@ export default function PreflightPanel() {
     orientationPerm,
     cameraPerm,
     online,
-    savedContactsCount,
+    contactsStatus,
+    contacts.length,
     speechSupported,
     recheckTick,
   ])
@@ -319,7 +439,7 @@ export default function PreflightPanel() {
     gps.locationState === 'granted' && gps.lat != null && gps.lng != null
   const hardGates = [
     { label: 'Rescue endpoint configured', pass: !!endpoint },
-    { label: 'Emergency contact loaded', pass: savedContactsCount > 0 },
+    { label: 'Emergency contact loaded', pass: contactsStatus === 'ok' && contacts.length > 0 },
     { label: 'GPS permission granted', pass: geoPerm === 'granted' },
     { label: 'GPS lock acquired', pass: gpsLock },
     { label: 'Deadman renew verified', pass: manual.deadmanRenew },
@@ -328,9 +448,100 @@ export default function PreflightPanel() {
   const hardGatePass = hardGates.every((g) => g.pass)
   const goHold = hardGatePass && score >= 80 ? 'GO' : 'HOLD'
   const goHoldColor = goHold === 'GO' ? '#7dff8a' : '#ff6b87'
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    const sig = `${contactsStatus}:${contacts.length}:${Boolean(endpoint)}`
+    if (sig === lastEligibilityDiagSig) return
+    setLastEligibilityDiagSig(sig)
+    console.info('[HUD DEV] rescue-eligibility-state', {
+      contactsStatus,
+      hydratedContacts: contacts.length,
+      endpointConfigured: Boolean(endpoint),
+      eligible:
+        contactsStatus === 'ok' &&
+        contacts.length > 0 &&
+        Boolean(endpoint),
+    })
+  }, [contactsStatus, contacts.length, endpoint, lastEligibilityDiagSig])
   const runAutoRecheck = () => {
     setRecheckTick((v) => v + 1)
     setLastRecheckAt(Date.now())
+  }
+
+  // Operator actions on the backend contact roster. Both handlers gate on
+  // contactBusy to prevent overlapping requests and update local state
+  // optimistically (or refetch) so the readiness rows stay in sync.
+  const reloadContacts = async (): Promise<void> => {
+    const { data, error } = await fetchEmergencyContacts()
+    if (error) {
+      setContactsStatus('unavailable')
+      return
+    }
+    setContacts(data)
+    setContactsStatus('ok')
+  }
+
+  const handleAddContact = async () => {
+    traceAction('emergency_contact_add', 'handler_enter')
+    if (contactBusy) {
+      traceAction('emergency_contact_add', 'guard_reject', { reason: 'busy' })
+      return
+    }
+    const name = contactForm.name.trim()
+    const email = contactForm.email.trim()
+    const relationship = contactForm.relationship.trim()
+    if (!name || !email) {
+      setContactError('Name and email required')
+      traceAction('emergency_contact_add', 'guard_reject', { reason: 'validation_missing_fields' })
+      return
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setContactError('Invalid email format')
+      traceAction('emergency_contact_add', 'guard_reject', { reason: 'validation_invalid_email' })
+      return
+    }
+    setContactBusy(true)
+    setContactError(null)
+    traceAction('emergency_contact_add', 'async_start')
+    const { error } = await createEmergencyContact({
+      contact_name: name,
+      email,
+      relationship: relationship || null,
+      // First contact added becomes priority 1 (primary); subsequent get 2.
+      priority: contacts.length === 0 ? 1 : 2,
+    })
+    if (error) {
+      setContactError(error.message)
+      traceAction('emergency_contact_add', 'failure', { reason: 'backend_error' })
+      setContactBusy(false)
+      return
+    }
+    setContactForm({ name: '', email: '', relationship: '' })
+    await reloadContacts()
+    traceAction('emergency_contact_add', 'async_complete', { hydratedCount: contacts.length + 1 })
+    setContactBusy(false)
+  }
+
+  const handleDeleteContact = async (id: string) => {
+    traceAction('emergency_contact_remove', 'handler_enter')
+    if (contactBusy) {
+      traceAction('emergency_contact_remove', 'guard_reject', { reason: 'busy' })
+      return
+    }
+    setContactBusy(true)
+    setContactError(null)
+    traceAction('emergency_contact_remove', 'async_start')
+    const { error } = await deleteEmergencyContact(id)
+    if (error) {
+      setContactError(error.message)
+      traceAction('emergency_contact_remove', 'failure', { reason: 'backend_error' })
+      setContactBusy(false)
+      return
+    }
+    setContacts((prev) => prev.filter((c) => c.id !== id))
+    traceAction('emergency_contact_remove', 'async_complete', { removed: true })
+    setContactBusy(false)
   }
 
   const requestAllPermissions = async () => {
@@ -370,25 +581,68 @@ export default function PreflightPanel() {
     }
   }
 
+  const isMobile = getDeviceProfile().interactionMode === 'mobile'
+  const fontSm = touchFontSm(isMobile)
+  const fontMd = touchFontMd(isMobile)
+  const gapMd = touchGapMd(isMobile)
+  const gapSm = touchGapSm(isMobile)
+  const tapMin = touchMinTarget(isMobile)
   const permissionButtonStyle: CSSProperties = {
-    minHeight: 38,
+    minHeight: tapMin,
     borderRadius: 8,
     border: '1px solid rgba(199,206,198,0.35)',
     background: 'rgba(199,206,198,0.12)',
     color: '#e2e8e2',
     cursor: 'pointer',
-    fontSize: 10,
+    fontSize: fontSm,
     letterSpacing: '0.06em',
     fontWeight: 700,
   }
 
   useEffect(() => {
-    console.log('[BUILD]', buildId)
+    if (import.meta.env.DEV) console.log('[BUILD]', buildId)
   }, [buildId])
 
   return (
     <HudPanel panelId="preflight" title="Preflight Test" initialPos={{ x: 16, y: 180 }} initialWidth={320}>
-      <div style={{ display: 'grid', gap: 8, fontSize: 11 }}>
+      <div style={{ display: 'grid', gap: gapMd, fontSize: fontSm }}>
+        {isMobile && (
+          <button
+            type="button"
+            data-no-drag
+            onClick={() => {
+              const { vw, vh } = cockpitViewport()
+              const next = clampMobileToReachableViewport(
+                { x: panels.preflight?.x ?? 16, y: panels.preflight?.y ?? 72 },
+                { w: panels.preflight?.w ?? 320, h: panels.preflight?.h ?? 320 },
+                { vw, vh },
+                36,
+              )
+              updatePanel('preflight', { docked: false, minimized: false, x: next.x, y: next.y })
+              raisePanel('preflight')
+              if (import.meta.env.DEV) {
+                console.info('[HUD DEV] emergency-panel-recovery', {
+                  panel: 'preflight',
+                  reason: 'operator_reachability_action',
+                  to: next,
+                })
+              }
+            }}
+            style={{
+              minHeight: tapMin,
+              borderRadius: 8,
+              border: '1px solid rgba(125,255,138,0.45)',
+              background: 'rgba(125,255,138,0.14)',
+              color: '#d8f8dd',
+              cursor: 'pointer',
+              fontSize: fontSm,
+              letterSpacing: '0.08em',
+              fontWeight: 700,
+            }}
+          >
+            ENSURE CONTACT PANEL IS VISIBLE
+          </button>
+        )}
         <div
           style={{
             display: 'flex',
@@ -426,13 +680,13 @@ export default function PreflightPanel() {
           data-no-drag
           onClick={runAutoRecheck}
           style={{
-            minHeight: 38,
+            minHeight: tapMin,
             borderRadius: 8,
             border: '1px solid rgba(125,255,138,0.45)',
             background: 'rgba(125,255,138,0.14)',
             color: '#d8f8dd',
             cursor: 'pointer',
-            fontSize: 11,
+            fontSize: fontSm,
             letterSpacing: '0.08em',
             fontWeight: 700,
           }}
@@ -444,20 +698,20 @@ export default function PreflightPanel() {
           data-no-drag
           onClick={() => void requestAllPermissions()}
           style={{
-            minHeight: 38,
+            minHeight: tapMin,
             borderRadius: 8,
             border: '1px solid rgba(255,209,102,0.45)',
             background: 'rgba(255,209,102,0.14)',
             color: '#ffe6b3',
             cursor: 'pointer',
-            fontSize: 11,
+            fontSize: fontSm,
             letterSpacing: '0.08em',
             fontWeight: 700,
           }}
         >
           {requestingPerms ? 'REQUESTING PERMISSIONS…' : 'REQUEST ALL DEVICE PERMISSIONS'}
         </button>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: gapSm }}>
           <button
             type="button"
             data-no-drag
@@ -541,7 +795,7 @@ export default function PreflightPanel() {
           </button>
         </div>
         {lastRecheckAt != null && (
-          <div style={{ fontSize: 10, color: '#9ea7a0' }}>
+          <div style={{ fontSize: fontSm, color: '#9ea7a0' }}>
             Last recheck: {new Date(lastRecheckAt).toLocaleTimeString()}
           </div>
         )}
@@ -549,7 +803,7 @@ export default function PreflightPanel() {
           style={{
             display: 'grid',
             gap: 2,
-            fontSize: 10,
+            fontSize: fontSm,
             color: '#9ea7a0',
             padding: '6px 8px',
             borderRadius: 8,
@@ -567,6 +821,9 @@ export default function PreflightPanel() {
             Build: <strong style={{ color: '#d6ddd6' }}>{buildId}</strong>
           </div>
           <div>
+            Legacy local contacts: <strong style={{ color: '#d6ddd6' }}>{legacySavedContactsCount}</strong>
+          </div>
+          <div>
             Last optimized:{' '}
             <strong style={{ color: '#d6ddd6' }}>
               {deviceTuneMeta?.ts ? new Date(deviceTuneMeta.ts).toLocaleString() : 'not recorded'}
@@ -581,14 +838,14 @@ export default function PreflightPanel() {
               style={{
                 display: 'grid',
                 gridTemplateColumns: '1fr auto',
-                gap: 6,
+                gap: gapSm,
                 padding: '5px 4px',
                 borderBottom: '1px solid rgba(199,206,198,0.08)',
               }}
             >
               <div>
                 <div style={{ color: '#d6ddd6' }}>{check.label}</div>
-                <div style={{ color: '#9ea7a0', fontSize: 10 }}>{check.detail}</div>
+                <div style={{ color: '#9ea7a0', fontSize: fontSm }}>{check.detail}</div>
               </div>
               <div style={{ color: stateColor(check.state), fontWeight: 700, alignSelf: 'center' }}>
                 {check.state === 'pass' ? 'PASS' : check.state === 'warn' ? 'WARN' : 'FAIL'}
@@ -597,7 +854,213 @@ export default function PreflightPanel() {
           ))}
         </div>
 
-        <div style={{ fontSize: 10, color: '#9ea7a0', letterSpacing: '0.08em' }}>HARD GATE CHECKS (REQUIRED)</div>
+        <div style={{ fontSize: fontSm, color: '#9ea7a0', letterSpacing: '0.08em' }}>BACKEND CONTACTS</div>
+        <div style={{ border: '1px solid rgba(199,206,198,0.16)', borderRadius: 8, padding: 6, display: 'grid', gap: gapSm }}>
+          {contactsStatus === 'loading' && (
+            <div style={{ color: '#9ea7a0', fontSize: fontSm, padding: '4px 4px' }}>Loading…</div>
+          )}
+          {contactsStatus === 'unavailable' && (
+            <div style={{ color: stateColor('warn'), fontSize: fontSm, padding: '4px 4px' }}>
+              Backend unavailable — contacts cannot be loaded
+            </div>
+          )}
+          {contactsStatus === 'ok' && contacts.length === 0 && (
+            <div style={{ color: '#9ea7a0', fontSize: fontSm, padding: '4px 4px' }}>
+              No contacts on file
+            </div>
+          )}
+          {contactsStatus === 'ok' && contacts.length > 0 && (
+            <div style={{ display: 'grid', gap: 2 }}>
+              {contacts.map((c) => (
+                <div
+                  key={c.id}
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1fr auto',
+                    gap: gapSm,
+                    padding: '5px 4px',
+                    borderBottom: '1px solid rgba(199,206,198,0.08)',
+                  }}
+                >
+                  <div>
+                    <div style={{ color: '#d6ddd6' }}>
+                      {c.contact_name}
+                      {(c.priority ?? 1) === 1 ? <span style={{ color: '#9ea7a0' }}> · primary</span> : null}
+                    </div>
+                    <div style={{ color: '#9ea7a0', fontSize: fontSm }}>
+                      {c.email}
+                      {c.relationship ? ` · ${c.relationship}` : ''}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    data-no-drag
+                    disabled={contactBusy}
+                    onClick={() => void handleDeleteContact(c.id)}
+                    style={{
+                      minHeight: tapMin,
+                      borderRadius: 6,
+                      border: '1px solid rgba(255,107,135,0.45)',
+                      background: 'rgba(255,107,135,0.12)',
+                      color: '#ffd5dd',
+                      cursor: contactBusy ? 'wait' : 'pointer',
+                      fontSize: fontSm,
+                      letterSpacing: '0.08em',
+                      fontWeight: 700,
+                      padding: '0 10px',
+                    }}
+                  >
+                    REMOVE
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* ── Add-contact form (operator-driven, gated by contactBusy) ── */}
+          <div style={{ display: 'grid', gap: gapSm, paddingTop: 4 }}>
+            <input
+              type="text"
+              data-no-drag
+              placeholder="Contact name"
+              value={contactForm.name}
+              onChange={(e) => setContactForm((f) => ({ ...f, name: e.target.value }))}
+              disabled={contactBusy || contactsStatus === 'unavailable'}
+              style={{
+                minHeight: tapMin,
+                borderRadius: 6,
+                border: '1px solid rgba(199,206,198,0.28)',
+                background: 'rgba(10,12,13,0.8)',
+                color: '#d3dad3',
+                padding: '0 10px',
+                fontSize: fontMd,
+              }}
+            />
+            <input
+              type="email"
+              data-no-drag
+              placeholder="Email"
+              value={contactForm.email}
+              onChange={(e) => setContactForm((f) => ({ ...f, email: e.target.value }))}
+              disabled={contactBusy || contactsStatus === 'unavailable'}
+              style={{
+                minHeight: tapMin,
+                borderRadius: 6,
+                border: '1px solid rgba(199,206,198,0.28)',
+                background: 'rgba(10,12,13,0.8)',
+                color: '#d3dad3',
+                padding: '0 10px',
+                fontSize: fontMd,
+              }}
+            />
+            <input
+              type="text"
+              data-no-drag
+              placeholder="Relationship (optional)"
+              value={contactForm.relationship}
+              onChange={(e) => setContactForm((f) => ({ ...f, relationship: e.target.value }))}
+              disabled={contactBusy || contactsStatus === 'unavailable'}
+              style={{
+                minHeight: tapMin,
+                borderRadius: 6,
+                border: '1px solid rgba(199,206,198,0.28)',
+                background: 'rgba(10,12,13,0.8)',
+                color: '#d3dad3',
+                padding: '0 10px',
+                fontSize: fontMd,
+              }}
+            />
+            <button
+              type="button"
+              data-no-drag
+              onClick={() => void handleAddContact()}
+              disabled={contactBusy || contactsStatus === 'unavailable'}
+              style={{
+                minHeight: tapMin,
+                borderRadius: 8,
+                border: '1px solid rgba(125,255,138,0.45)',
+                background: 'rgba(125,255,138,0.14)',
+                color: '#d8f8dd',
+                cursor: contactBusy ? 'wait' : 'pointer',
+                fontSize: fontSm,
+                letterSpacing: '0.08em',
+                fontWeight: 700,
+              }}
+            >
+              {contactBusy ? 'SAVING…' : 'ADD CONTACT'}
+            </button>
+            {contactError && (
+              <div style={{ color: stateColor('fail'), fontSize: fontSm }}>{contactError}</div>
+            )}
+          </div>
+
+          {/* ── Readiness indicators driven by the live contact list ── */}
+          {(() => {
+            const count = contacts.length
+            const hasPrimary = contacts.some((c) => (c.priority ?? 1) === 1)
+            const escalation = count >= 2
+            type Row = { label: string; state: CheckState; detail: string }
+            const rows: Row[] = (() => {
+              if (contactsStatus === 'loading') {
+                return [
+                  { label: 'Emergency contacts configured', state: 'warn', detail: 'Loading…' },
+                  { label: 'Primary contact available', state: 'warn', detail: 'Loading…' },
+                  { label: 'Rescue escalation available', state: 'warn', detail: 'Loading…' },
+                ]
+              }
+              if (contactsStatus === 'unavailable') {
+                return [
+                  { label: 'Backend unavailable', state: 'warn', detail: 'Supabase fetch failed' },
+                  { label: 'Primary contact available', state: 'warn', detail: 'Cannot verify (backend unavailable)' },
+                  { label: 'Rescue escalation available', state: 'warn', detail: 'Cannot verify (backend unavailable)' },
+                ]
+              }
+              return [
+                {
+                  label: count > 0 ? 'Emergency contacts configured' : 'No emergency contacts configured',
+                  state: count > 0 ? 'pass' : 'warn',
+                  detail: count > 0 ? `${count} on file` : 'Add at least one above',
+                },
+                {
+                  label: 'Primary contact available',
+                  state: hasPrimary ? 'pass' : 'warn',
+                  detail: hasPrimary ? 'Priority 1 set' : 'No priority-1 contact',
+                },
+                {
+                  label: 'Rescue escalation available',
+                  state: escalation ? 'pass' : 'warn',
+                  detail: escalation ? '2+ contacts (chain ready)' : 'Need 2+ contacts',
+                },
+              ]
+            })()
+            return (
+              <div style={{ display: 'grid', gap: 2, paddingTop: 4 }}>
+                {rows.map((row) => (
+                  <div
+                    key={row.label}
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '1fr auto',
+                      gap: gapSm,
+                      padding: '5px 4px',
+                      borderBottom: '1px solid rgba(199,206,198,0.08)',
+                    }}
+                  >
+                    <div>
+                      <div style={{ color: '#d6ddd6' }}>{row.label}</div>
+                      <div style={{ color: '#9ea7a0', fontSize: fontSm }}>{row.detail}</div>
+                    </div>
+                    <div style={{ color: stateColor(row.state), fontWeight: 700, alignSelf: 'center' }}>
+                      {row.state === 'pass' ? 'PASS' : row.state === 'warn' ? 'WARN' : 'FAIL'}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )
+          })()}
+        </div>
+
+        <div style={{ fontSize: fontSm, color: '#9ea7a0', letterSpacing: '0.08em' }}>HARD GATE CHECKS (REQUIRED)</div>
         <div style={{ maxHeight: 140, overflowY: 'auto', border: '1px solid rgba(199,206,198,0.16)', borderRadius: 8, padding: 6 }}>
           {hardGates.map((gate) => (
             <div
@@ -605,7 +1068,7 @@ export default function PreflightPanel() {
               style={{
                 display: 'grid',
                 gridTemplateColumns: '1fr auto',
-                gap: 6,
+                gap: gapSm,
                 padding: '5px 4px',
                 borderBottom: '1px solid rgba(199,206,198,0.08)',
               }}
@@ -618,10 +1081,10 @@ export default function PreflightPanel() {
           ))}
         </div>
 
-        <div style={{ fontSize: 10, color: '#9ea7a0', letterSpacing: '0.08em' }}>MANUAL CHECKS</div>
-        <div style={{ display: 'grid', gap: 6 }}>
+        <div style={{ fontSize: fontSm, color: '#9ea7a0', letterSpacing: '0.08em' }}>MANUAL CHECKS</div>
+        <div style={{ display: 'grid', gap: gapSm }}>
           {manualRows.map((row) => (
-            <label key={row.key} style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#d6ddd6' }}>
+            <label key={row.key} style={{ display: 'flex', alignItems: 'center', gap: gapMd, color: '#d6ddd6', minHeight: tapMin, fontSize: fontMd }}>
               <input
                 type="checkbox"
                 checked={manual[row.key]}
@@ -637,7 +1100,7 @@ export default function PreflightPanel() {
             paddingTop: 10,
             borderTop: '1px solid rgba(199,206,198,0.16)',
             display: 'grid',
-            gap: 6,
+            gap: gapSm,
           }}
         >
           <button
@@ -645,13 +1108,13 @@ export default function PreflightPanel() {
             data-no-drag
             onClick={() => void forceUpdateApp()}
             style={{
-              minHeight: 36,
+              minHeight: tapMin,
               borderRadius: 8,
               border: '1px solid rgba(125,209,255,0.45)',
               background: 'rgba(125,209,255,0.12)',
               color: '#d8eefc',
               cursor: 'pointer',
-              fontSize: 10,
+              fontSize: fontSm,
               letterSpacing: '0.08em',
               fontWeight: 700,
             }}
@@ -663,13 +1126,13 @@ export default function PreflightPanel() {
             data-no-drag
             onClick={() => void resetAppState()}
             style={{
-              minHeight: 36,
+              minHeight: tapMin,
               borderRadius: 8,
               border: '1px solid rgba(255,107,135,0.4)',
               background: 'rgba(255,107,135,0.12)',
               color: '#ffd5dd',
               cursor: 'pointer',
-              fontSize: 10,
+              fontSize: fontSm,
               letterSpacing: '0.08em',
               fontWeight: 700,
             }}

@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import HudPanel from './HudPanel'
 import { usePanelData } from '../context/PanelDataContext'
+import { getDeviceProfile } from '../runtime/deviceProfile'
+import { touchFontSm } from './tokens'
 
 function formatClock(now: Date, timeZone: string): string {
   return new Intl.DateTimeFormat('en-US', {
@@ -35,6 +37,8 @@ export default function ClockPanel() {
   }, [])
 
   const now = new Date()
+  const isMobile = getDeviceProfile().interactionMode === 'mobile'
+  const fontSm = touchFontSm(isMobile)
 
   return (
     <HudPanel
@@ -47,7 +51,7 @@ export default function ClockPanel() {
       {panelsLocationBlocked && (
         <div
           style={{
-            fontSize: 10,
+            fontSize: fontSm,
             color: '#f0b4bf',
             textAlign: 'center',
             marginBottom: 6,
@@ -75,7 +79,7 @@ export default function ClockPanel() {
         style={{
           textAlign: 'center',
           fontFamily: 'var(--font-ui, system-ui)',
-          fontSize: 10,
+          fontSize: fontSm,
           letterSpacing: '0.14em',
           color: 'var(--cockpit-panel-subtle)',
           textTransform: 'uppercase',
@@ -87,7 +91,7 @@ export default function ClockPanel() {
         style={{
           textAlign: 'center',
           fontFamily: 'var(--font-ui, system-ui)',
-          fontSize: 9,
+          fontSize: isMobile ? 14 : 9,
           letterSpacing: '0.12em',
           color: 'var(--cockpit-panel-subtle)',
           textTransform: 'uppercase',

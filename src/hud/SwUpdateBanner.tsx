@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import { getDeviceProfile } from '../runtime/deviceProfile'
+import { touchFontSm, touchGapMd, touchMinTarget } from './tokens'
 
 type SwUpdateEventDetail = {
   activate?: () => void
@@ -20,6 +22,11 @@ export default function SwUpdateBanner() {
 
   if (!activate) return null
 
+  const isMobile = getDeviceProfile().interactionMode === 'mobile'
+  const fontSm = touchFontSm(isMobile)
+  const gapMd = touchGapMd(isMobile)
+  const tapMin = touchMinTarget(isMobile)
+
   return (
     <div
       style={{
@@ -32,11 +39,11 @@ export default function SwUpdateBanner() {
         border: '1px solid rgba(125,255,138,0.5)',
         background: 'rgba(10,16,12,0.92)',
         color: '#d7f6de',
-        padding: '8px 10px',
+        padding: '10px 14px',
         display: 'flex',
         alignItems: 'center',
-        gap: 8,
-        fontSize: 11,
+        gap: gapMd,
+        fontSize: fontSm,
         letterSpacing: '0.06em',
       }}
     >
@@ -45,14 +52,14 @@ export default function SwUpdateBanner() {
         type="button"
         onClick={() => activate()}
         style={{
-          minHeight: 34,
+          minHeight: tapMin,
           borderRadius: 8,
           border: '1px solid rgba(125,255,138,0.55)',
           background: 'rgba(125,255,138,0.18)',
           color: '#e7ffe9',
           fontWeight: 700,
-          fontSize: 11,
-          padding: '0 10px',
+          fontSize: fontSm,
+          padding: '0 14px',
           cursor: 'pointer',
         }}
       >

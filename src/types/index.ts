@@ -7,6 +7,11 @@ export interface Waypoint {
   label: string
   type: WaypointType
   createdAt: number
+  /** Operator tap before snap — present only when `source === 'snapped'`. */
+  rawLat?: number
+  rawLng?: number
+  source?: 'manual' | 'snapped'
+  snapDistanceMeters?: number
 }
 
 export type LayerType = 'streets' | 'satellite' | 'topo' | 'outdoor'
@@ -21,6 +26,10 @@ export interface AppState {
   clearLabelAfterDrop: boolean
   showMapLabels: boolean
   showMapDistances: boolean
+  /** Default OFF — preview-only trail snap assist (Phase 1). */
+  snapToTrailEnabled: boolean
+  /** Ephemeral — not restored from storage; MapCanvas sets from MapLibre style + zoom. */
+  trailSnapAssistCapable: boolean
   deadManTimeLeft: number
   deadManActive: boolean
 }
@@ -38,6 +47,8 @@ export type AppAction =
   | { type: 'SET_CLEAR_LABEL_AFTER_DROP'; payload: boolean }
   | { type: 'SET_SHOW_MAP_LABELS'; payload: boolean }
   | { type: 'SET_SHOW_MAP_DISTANCES'; payload: boolean }
+  | { type: 'SET_SNAP_TO_TRAIL'; payload: boolean }
+  | { type: 'SET_TRAIL_SNAP_ASSIST_CAPABLE'; payload: boolean }
   | { type: 'SET_DEAD_MAN_TIME'; payload: number }
   | { type: 'RESET_DEAD_MAN' }
   | { type: 'SET_DEAD_MAN_ACTIVE'; payload: boolean }

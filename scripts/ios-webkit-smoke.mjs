@@ -1,6 +1,6 @@
 import { chromium, webkit } from 'playwright'
 
-const URL = 'https://clean-build-lite-xn62.vercel.app'
+const URL = 'https://hilarious-trifle-921329.netlify.app'
 
 async function run() {
   const browser = await webkit.launch({ headless: true })

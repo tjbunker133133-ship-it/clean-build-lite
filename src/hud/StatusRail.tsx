@@ -16,6 +16,8 @@ import {
 } from '../lib/corridor'
 import { useMapContext } from '../context/MapContext'
 import { getDeviceProfile } from '../runtime/deviceProfile'
+import { emitHaptic } from '../runtime/haptics'
+import { touchFontSm, touchFontMd, touchGapMd, touchMinTarget } from './tokens'
 
 type BatteryManagerLike = { level: number } | null
 
@@ -79,6 +81,11 @@ export default function StatusRail() {
     if (battery) return `${Math.round(battery.level * 100)}%`
     return getDeviceProfile().isIOS ? 'N/A' : '--'
   }, [battery])
+  const isMobile = getDeviceProfile().interactionMode === 'mobile'
+  const fontSm = touchFontSm(isMobile)
+  const fontMd = touchFontMd(isMobile)
+  const gapMd = touchGapMd(isMobile)
+  const tapMin = touchMinTarget(isMobile)
   const wxAge = weatherAgeMin == null ? '--' : `${weatherAgeMin}m`
   const runtimeGuards = typeof window !== 'undefined' && !!(window as any).__hudRuntimeGuards
   const buildStampRaw =
@@ -172,7 +179,7 @@ export default function StatusRail() {
     }
     const breach = corridor.severity >= 6
     setShowCorridorBanner(breach)
-    if (breach && navigator.vibrate) navigator.vibrate([120, 80, 120])
+    if (breach) emitHaptic('criticalAlert', 'corridor.breach')
   }, [corridor, corridorArmed])
 
   return (
@@ -192,7 +199,7 @@ export default function StatusRail() {
             background: 'rgba(60,10,22,0.82)',
             boxShadow: '0 0 26px rgba(255,68,102,0.42)',
             fontFamily: 'var(--font-mono, monospace)',
-            fontSize: 11,
+            fontSize: fontSm,
             letterSpacing: '0.08em',
             color: '#ffd8df',
           }}
@@ -209,7 +216,7 @@ export default function StatusRail() {
           zIndex: 5000,
           pointerEvents: 'none',
           display: 'flex',
-          gap: 8,
+          gap: gapMd,
           flexWrap: 'wrap',
           maxWidth: 'min(96vw, 980px)',
           justifyContent: 'center',
@@ -223,7 +230,7 @@ export default function StatusRail() {
             : 'rgba(10,12,13,0.6)',
           backdropFilter: 'blur(10px)',
           fontFamily: 'var(--font-mono, monospace)',
-          fontSize: 10,
+          fontSize: fontSm,
           letterSpacing: '0.08em',
           color: '#b8c1b9',
         }}
@@ -236,13 +243,13 @@ export default function StatusRail() {
               disabled={requestingGeo}
               style={{
                 pointerEvents: 'auto',
-                minHeight: 26,
+                minHeight: tapMin,
                 borderRadius: 999,
                 border: '1px solid rgba(125,255,138,0.45)',
                 background: 'rgba(125,255,138,0.16)',
                 color: '#d8f6de',
-                padding: '0 10px',
-                fontSize: 10,
+                padding: '0 14px',
+                fontSize: fontSm,
                 letterSpacing: '0.08em',
                 cursor: requestingGeo ? 'wait' : 'pointer',
               }}
@@ -256,13 +263,13 @@ export default function StatusRail() {
                   onClick={openSystemLocationSettings}
                   style={{
                     pointerEvents: 'auto',
-                    minHeight: 26,
+                    minHeight: tapMin,
                     borderRadius: 999,
                     border: '1px solid rgba(125,255,138,0.5)',
                     background: 'rgba(125,255,138,0.14)',
                     color: '#d8f6de',
-                    padding: '0 10px',
-                    fontSize: 10,
+                    padding: '0 14px',
+                    fontSize: fontSm,
                     letterSpacing: '0.08em',
                     cursor: 'pointer',
                   }}
@@ -274,13 +281,13 @@ export default function StatusRail() {
                   onClick={openPermissionHelp}
                   style={{
                     pointerEvents: 'auto',
-                    minHeight: 26,
+                    minHeight: tapMin,
                     borderRadius: 999,
                     border: '1px solid rgba(255,107,135,0.55)',
                     background: 'rgba(255,80,100,0.2)',
                     color: '#ffd0d8',
-                    padding: '0 10px',
-                    fontSize: 10,
+                    padding: '0 14px',
+                    fontSize: fontSm,
                     letterSpacing: '0.08em',
                     cursor: 'pointer',
                   }}
@@ -331,29 +338,29 @@ export default function StatusRail() {
               background: 'rgba(8,12,14,0.96)',
               border: '1px solid rgba(125,255,138,0.55)',
               borderRadius: 12,
-              padding: 16,
+              padding: isMobile ? 16 : 16,
               color: '#d8e3d8',
               display: 'grid',
-              gap: 10,
+              gap: Math.max(gapMd, 10),
               fontFamily: 'var(--font-mono, monospace)',
             }}
           >
-            <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.08em', color: '#7dff8a' }}>
+            <div style={{ fontSize: fontMd, fontWeight: 800, letterSpacing: '0.08em', color: '#7dff8a' }}>
               OPEN SETTINGS MANUALLY
             </div>
-            <div style={{ fontSize: 11, color: '#b8c4b8', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
+            <div style={{ fontSize: fontSm, color: '#b8c4b8', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
               {settingsFallback}
             </div>
             <button
               type="button"
               onClick={() => setSettingsFallback(null)}
               style={{
-                minHeight: 36,
+                minHeight: tapMin,
                 borderRadius: 8,
                 border: '1px solid rgba(125,255,138,0.45)',
                 background: 'rgba(125,255,138,0.14)',
                 color: '#d8f6de',
-                fontSize: 11,
+                fontSize: fontSm,
                 letterSpacing: '0.08em',
                 cursor: 'pointer',
               }}

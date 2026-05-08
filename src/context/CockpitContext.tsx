@@ -21,6 +21,7 @@ import {
   SNAP_PX,
 } from '../types/cockpit'
 import { cockpitViewport } from '../lib/viewport'
+import { clampMobileToReachableViewport, sanitizeMobilePanelRect } from '../lib/mobilePanelHelpers'
 import { emitPanelCommit } from '../diag/devEvents'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 import { enforcePolicyAttempt, getCurrentPolicyMode, reportPolicyAttempt } from '../runtime/devicePolicy'
@@ -174,7 +175,22 @@ function loadState(): StoredState | null {
     if (!raw) return null
     const o = JSON.parse(raw) as Partial<StoredState> | null
     if (!o || o.v !== LAYOUT_VERSION) return null
-    const panels = o.panels && typeof o.panels === 'object' ? (o.panels as PanelMap) : {}
+    let panels = o.panels && typeof o.panels === 'object' ? (o.panels as PanelMap) : {}
+    if (scope === 'mobile') {
+      const { vw, vh } = cockpitViewport()
+      const sanitized: PanelMap = {}
+      const changes: Array<{ id: string; reason: string | null }> = []
+      for (const [id, panel] of Object.entries(panels)) {
+        if (!panel) continue
+        const out = sanitizeMobilePanelRect(panel, { vw, vh })
+        sanitized[id] = out.panel
+        if (out.changed) changes.push({ id, reason: out.reason })
+      }
+      panels = sanitized
+      if (import.meta.env.DEV && changes.length > 0) {
+        console.info('[HUD DEV] mobile-persistence-sanitize', { count: changes.length, changes })
+      }
+    }
     const prefs =
       o.prefs && typeof o.prefs === 'object'
         ? ({ ...PREFS_DEFAULT, ...(o.prefs as Partial<CockpitPrefs>) } as CockpitPrefs)
@@ -196,7 +212,22 @@ function loadState(): StoredState | null {
         updatePersistenceHealth('error')
         return null
       }
-      const panels = o.panels && typeof o.panels === 'object' ? (o.panels as PanelMap) : {}
+      let panels = o.panels && typeof o.panels === 'object' ? (o.panels as PanelMap) : {}
+      if (scope === 'mobile') {
+        const { vw, vh } = cockpitViewport()
+        const sanitized: PanelMap = {}
+        const changes: Array<{ id: string; reason: string | null }> = []
+        for (const [id, panel] of Object.entries(panels)) {
+          if (!panel) continue
+          const out = sanitizeMobilePanelRect(panel, { vw, vh })
+          sanitized[id] = out.panel
+          if (out.changed) changes.push({ id, reason: out.reason })
+        }
+        panels = sanitized
+        if (import.meta.env.DEV && changes.length > 0) {
+          console.info('[HUD DEV] mobile-persistence-sanitize-lkg', { count: changes.length, changes })
+        }
+      }
       const prefs =
         o.prefs && typeof o.prefs === 'object'
           ? ({ ...PREFS_DEFAULT, ...(o.prefs as Partial<CockpitPrefs>) } as CockpitPrefs)
@@ -757,9 +788,38 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
 
   const snapCoord = useCallback((n: number) => snap(n), [])
 
-  const raisePanel = useCallback((_id: string) => {
-    // Stable layering by design: no panel focus raise.
-  }, [])
+  const raisePanel = useCallback((id: string) => {
+    // Mobile-only z-order promotion keeps active panel predictably topmost
+    // during one-handed use while preserving desktop's static layering model.
+    if (getDeviceProfile().interactionMode !== 'mobile') return
+    setPanels((prev) => {
+      const cur = prev[id]
+      if (!cur) return prev
+      const currentMax = Math.max(400, ...Object.values(prev).map((p) => p.z))
+      if (cur.z >= currentMax) return prev
+      const nextZValue = currentMax + 1
+      nextZ.current = Math.max(nextZ.current, nextZValue + 1)
+      if (import.meta.env.DEV && typeof window !== 'undefined') {
+        const w = window as Window & {
+          __HUD_Z_CHURN_DIAG__?: { count: number; startedAt: number; lastLogAt: number }
+        }
+        const now = Date.now()
+        const diag = w.__HUD_Z_CHURN_DIAG__
+        if (!diag || now - diag.startedAt > 3000) {
+          w.__HUD_Z_CHURN_DIAG__ = { count: 1, startedAt: now, lastLogAt: diag?.lastLogAt ?? 0 }
+        } else {
+          diag.count += 1
+          if (diag.count >= 10 && now - diag.lastLogAt > 3000) {
+            diag.lastLogAt = now
+            console.info('[HUD DEV] z-index-churn', { promotionsInWindow: diag.count, windowMs: now - diag.startedAt })
+          }
+        }
+      }
+      const next = { ...prev, [id]: { ...cur, z: nextZValue } }
+      persist(next, prefs)
+      return next
+    })
+  }, [persist, prefs])
 
   const updatePanel = useCallback(
     (id: string, patch: Partial<CockpitPanelRect>) => {
@@ -786,9 +846,30 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
             docked: patch.docked,
             dockSide: patch.dockSide,
           } as CockpitPanelRect)
-        const nextPanel = { ...cur, ...patch }
+        let nextPanel = { ...cur, ...patch }
         if (nextPanel.docked) {
           nextPanel.w = DOCKED_PANEL_WIDTH_PX
+        }
+        if (getDeviceProfile().interactionMode === 'mobile' && !nextPanel.docked) {
+          const { vw, vh } = cockpitViewport()
+          const estimatedH = panelHeightGuess(id, nextPanel)
+          const clamped = clampMobileToReachableViewport(
+            { x: nextPanel.x, y: nextPanel.y },
+            { w: nextPanel.w, h: estimatedH },
+            { vw, vh },
+            36,
+          )
+          if (Math.abs(clamped.x - nextPanel.x) > 0.5 || Math.abs(clamped.y - nextPanel.y) > 0.5) {
+            if (import.meta.env.DEV) {
+              console.info('[HUD DEV] mobile-open-reachability-clamp', {
+                panelId: id,
+                source: 'updatePanel',
+                from: { x: nextPanel.x, y: nextPanel.y },
+                to: clamped,
+              })
+            }
+            nextPanel = { ...nextPanel, x: clamped.x, y: clamped.y }
+          }
         }
         const unchanged =
           nearlyEqual(cur.x, nextPanel.x) &&
@@ -809,7 +890,10 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
           ts: Date.now(),
         })
         const merged = { ...prev, [id]: nextPanel }
-        const next = normalizeNoOverlapLayout(merged, panelGapPx(prefs))
+        const next =
+          getDeviceProfile().interactionMode === 'mobile'
+            ? merged
+            : normalizeNoOverlapLayout(merged, panelGapPx(prefs))
         persist(next, prefs)
         return next
       })

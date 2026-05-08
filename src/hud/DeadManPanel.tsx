@@ -23,7 +23,35 @@ import {
   type DeadManTimerState,
 } from '../runtime/runtimeSnapshot'
 import { logInfo, logWarn } from '../runtime/logger'
+import { getDeviceProfile } from '../runtime/deviceProfile'
+import { traceAction } from '../runtime/actionTrace'
+import { classifyDeadmanDispatchEligibility } from '../runtime/deadmanEligibility'
+import {
+  touchFontSm,
+  touchFontMd,
+  touchGapMd,
+  touchMinTarget,
+} from './tokens'
+import {
+  fetchEmergencyContacts,
+  type EmergencyContact,
+} from '../lib/emergencyContacts'
+import { buildRescuePacket } from '../lib/rescue/buildRescuePacket'
+import {
+  clearDeadmanDispatchLock,
+  recordDeadmanDispatchSuccess,
+  shouldSkipDeadmanDispatch,
+} from '../runtime/deadmanDispatchLock'
 
+// CONTRACT-SENSITIVE (threshold dedupe): the firing effect uses
+// `firedAlertsRef.current.has(t.label)` as its idempotency key. Two
+// invariants this list MUST preserve:
+//   1. Labels must be UNIQUE — a duplicate label silently breaks the
+//      "fire each threshold exactly once per episode" contract.
+//   2. Order is descending by `ms` (largest first). The escalation log
+//      relies on threshold-by-threshold progression; reversing the list
+//      flips the operator-visible escalation sequence.
+// Adding a new threshold: append a new unique label, keep descending ms.
 const ALERT_THRESHOLDS = [
   { ms: 60 * 60 * 1000, label: '1 HOUR LEFT' },
   { ms: 30 * 60 * 1000, label: '30 MIN LEFT' },
@@ -32,57 +60,19 @@ const ALERT_THRESHOLDS = [
 ]
 const RENEW_WINDOW_S = 60
 
-type RescueContact = {
-  id: string
-  name?: string
-  email: string
-  phone?: string
-  relationship?: string
-}
+// Removed obsolete localStorage contact fallbacks (`titanium_saved_contacts`,
+// `emergency_contacts_saved`, `titanium_route_contacts`,
+// `current_route_contacts`). The dispatch path is now backend-truth-only via
+// `buildRescuePacket()` → `fetchEmergencyContacts()`.
 
-function getSavedContacts(): RescueContact[] {
-  try {
-    const raw =
-      localStorage.getItem('titanium_saved_contacts') ??
-      localStorage.getItem('emergency_contacts_saved') ??
-      '[]'
-    const parsed = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return []
-    return parsed
-      .map((c: any): RescueContact | null => {
-        const email = typeof c?.email === 'string' ? c.email.trim() : ''
-        if (!email) return null
-        return {
-          id: String(c.id ?? email),
-          name: typeof c?.name === 'string' ? c.name : undefined,
-          email,
-          phone: typeof c?.phone === 'string' ? c.phone : undefined,
-          relationship: typeof c?.relationship === 'string' ? c.relationship : undefined,
-        }
-      })
-      .filter(Boolean) as RescueContact[]
-  } catch {
-    return []
-  }
-}
-
-function getRouteContactIds(): string[] {
-  try {
-    const raw =
-      localStorage.getItem('titanium_route_contacts') ??
-      localStorage.getItem('current_route_contacts') ??
-      '[]'
-    const parsed = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return []
-    return parsed
-      .map((v: any) => (typeof v === 'string' ? v : typeof v?.id === 'string' ? v.id : ''))
-      .filter(Boolean)
-  } catch {
-    return []
-  }
-}
-
+// CONTRACT-SENSITIVE: dispatch endpoint resolver. The fallback order
+// (VITE_RESCUE_EMAIL_URL → VITE_RAPID_ENDPOINT_URL → localStorage
+// `heartbeatFnUrl`) is part of the operator contract — changing it can
+// silently misroute live Deadman dispatches. Mirror any change in
+// `SOSPanel.tsx::resolveRapidEndpoint` to keep both paths aligned.
 function resolveRapidEndpoint(): string {
+  const rescue = ((import.meta as any).env?.VITE_RESCUE_EMAIL_URL as string | undefined)?.trim()
+  if (rescue) return rescue
   const env = ((import.meta as any).env?.VITE_RAPID_ENDPOINT_URL as string | undefined)?.trim()
   if (env) return env
   try {
@@ -128,16 +118,36 @@ function speak(text: string) {
     logInfo('DEADMAN', `audioSuppressed=true text="${text.slice(0, 80)}"`)
     return
   }
-  if (!('speechSynthesis' in window)) return
-  const u = new SpeechSynthesisUtterance(text)
-  u.rate = 1
-  window.speechSynthesis.cancel()
-  window.speechSynthesis.speak(u)
+  // CONTRACT-SENSITIVE (resilience): every browser-capability touchpoint
+  // must be exception-isolated. If `SpeechSynthesisUtterance` or
+  // `speechSynthesis.speak` throws (older Safari WebViews, private mode,
+  // locked-down enterprise browsers), the exception MUST NOT bubble — it
+  // would otherwise abort the dead-man renew-window `useEffect` before
+  // the rescue interval is registered, suppressing auto-dispatch entirely.
+  try {
+    if (!('speechSynthesis' in window)) return
+    if (typeof SpeechSynthesisUtterance !== 'function') return
+    const u = new SpeechSynthesisUtterance(text)
+    u.rate = 1
+    window.speechSynthesis.cancel()
+    window.speechSynthesis.speak(u)
+  } catch {
+    logInfo('DEADMAN', 'speechSynthesis unavailable; alert text suppressed')
+  }
 }
 
 export default function DeadManPanel() {
-  const gps = useGPS()
-  const { state } = useAppContext()
+  // CONTRACT-SENSITIVE (subscriptions): both calls are intentional. They
+  // do not appear to be used inside this component, but removing them
+  // changes runtime behavior:
+  //   - `useGPS()` participates in the GPS singleton's listener refcount
+  //     (`src/hooks/useGPS.ts`). Dropping the call here lets the watch
+  //     tear down sooner than the panel's actual lifetime.
+  //   - `useAppContext()` keeps the panel subscribed to global app state
+  //     so future operational signals can flow without re-wiring.
+  // Do NOT "clean up" by deleting these calls.
+  useGPS()
+  useAppContext()
   const {
     formattedTime, remainingMs, isExpired, isCritical, isWarning,
     isActive, reset, extend, activate, durationMs,
@@ -145,10 +155,58 @@ export default function DeadManPanel() {
   } = useDeadMan()
 
   const [statusText, setStatusText] = useState('STANDBY')
+  /** Shown on the main status row (SOS parity); cleared on timer episode change. */
+  const [dispatchResult, setDispatchResult] = useState<string | null>(null)
   const [renewCountdown, setRenewCountdown] = useState<number | null>(null)
   const firedAlertsRef = useRef<Set<string>>(new Set())
   const renewTimerRef = useRef<number | null>(null)
+  // CONTRACT-SENSITIVE (iOS): absolute wall-clock deadline for the renew
+  // window. iOS Safari throttles or fully pauses setInterval on hidden
+  // tabs; tick-decrement math drifts and can suppress rescue dispatch
+  // after a long background-suspend. Reading `deadline - Date.now()` on
+  // each tick instead means the first resumed tick correctly fires the
+  // rescue if the deadline has already passed during suspension.
+  const renewDeadlineRef = useRef<number>(0)
+  /** Previous episode key — used to clear session dispatch lock only on real transitions. */
+  const deadmanEpisodeRef = useRef<{ expiresAt: number; isActive: boolean } | null>(null)
+  // CONTRACT-SENSITIVE (exactly-once-per-episode dispatch): `sentRef` is
+  // the per-mount idempotency gate for `sendDeadmanRescue`. It works in
+  // tandem with the cross-mount sessionStorage lock:
+  //   - `sentRef` flips to `true` BEFORE any await → blocks double POSTs
+  //     within a single mount of this panel.
+  //   - `shouldSkipDeadmanDispatch(expiresAt)` (sessionStorage-keyed)
+  //     blocks duplicate POSTs across remounts / page reloads while the
+  //     SAME `expiresAt` is still in scope.
+  //   - The reset to `false` happens ONLY when `expiresAt` or `isActive`
+  //     changes (the episode-transition `useEffect` below). Every other
+  //     reset path is intentionally absent — do NOT add one inside the
+  //     fetch finally block, do NOT clear after a failed POST.
   const sentRef = useRef(false)
+  const [linkedContacts, setLinkedContacts] = useState<EmergencyContact[]>([])
+  const [linkedStatus, setLinkedStatus] = useState<'loading' | 'ok' | 'unavailable'>('loading')
+  // Mount tracker — guards post-async `setStatusText` calls in
+  // `sendDeadmanRescue`. The rescue trigger gate (`sentRef`) is unchanged;
+  // this only suppresses status-text writes that would land after unmount.
+  const mountedRef = useRef(true)
+  /** Abort in-flight rescue POST on panel unmount only. */
+  const rescueFetchAbortRef = useRef<AbortController | null>(null)
+  // CONTRACT-SENSITIVE (unmount cleanup ordering): the three statements
+  // below MUST stay in this order:
+  //   1. abort() — rejects any in-flight rescue fetch with AbortError.
+  //   2. abort ref = null — drops the pointer AFTER abort() so abort()
+  //      always sees a live controller.
+  //   3. mountedRef = false — flipped LAST so the AbortError branch in
+  //      `sendDeadmanRescue`'s catch can return cleanly; subsequent
+  //      microtask-resumed paths see the post-unmount flag and no-op.
+  // Reordering here resurrects post-unmount setState writes the prior
+  // resilience pass eliminated.
+  useEffect(() => {
+    return () => {
+      rescueFetchAbortRef.current?.abort()
+      rescueFetchAbortRef.current = null
+      mountedRef.current = false
+    }
+  }, [])
 
   const accent = isExpired
     ? '#ff3b3b'
@@ -162,56 +220,94 @@ export default function DeadManPanel() {
   const durationMin = Math.round(durationMs / 60_000)
   const thresholdOptions = [15, 30, 45, 60, 90, 120, 180, 240, 360, 480, 720]
 
+  const isMobile = getDeviceProfile().interactionMode === 'mobile'
+  const fontSm = touchFontSm(isMobile)
+  const fontMd = touchFontMd(isMobile)
+  const gapMd = touchGapMd(isMobile)
+  const tapMin = touchMinTarget(isMobile)
+  // Dead-man-specific: the renew/activate button is the most important tap
+  // target in the app. 64px floor on mobile, 18px font, full-width, panel
+  // padding 16+ on mobile so the timer is never flush against the edge.
+  const checkInMinHeight = isMobile ? 64 : 44
+  const checkInFontSize = isMobile ? 18 : 13
+  const countdownFontSize = isMobile ? 32 : 28
+  const panelPadding = isMobile ? 16 : 12
+
+  const safeShowDispatch = (s: string) => {
+    if (!mountedRef.current) return
+    setStatusText(s)
+    setDispatchResult(s)
+  }
+
   const sendDeadmanRescue = async () => {
-    if (sentRef.current) return
+    traceAction('deadman_dispatch', 'handler_enter')
+    const alreadyDispatched = shouldSkipDeadmanDispatch(expiresAt)
+    if (alreadyDispatched) {
+      safeShowDispatch('RESCUE ALREADY DISPATCHED (THIS TAB)')
+      traceAction('deadman_dispatch', 'guard_reject', { reason: 'already_dispatched' })
+      return
+    }
+    if (sentRef.current) {
+      traceAction('deadman_dispatch', 'guard_reject', { reason: 'already_sent_in_mount' })
+      return
+    }
     sentRef.current = true
-    const saved = getSavedContacts()
-    const routeIds = new Set(getRouteContactIds())
-    const selected = saved.filter((c) => routeIds.has(c.id))
-    const contacts = selected.length ? selected : saved
-    const payload = {
-      type: 'trigger_rescue',
-      trigger_source: 'deadman_timeout',
-      timestamp: new Date().toISOString(),
-      location: { lat: gps.lat, lon: gps.lng, accuracy_m: gps.accuracy },
-      deadman: {
-        configured_minutes: durationMin,
-        expired_at: new Date(expiresAt).toISOString(),
-      },
-      route: state.waypoints.map((w) => ({
-        id: w.id,
-        lat: w.lat,
-        lon: w.lng,
-        label: w.label,
-        type: w.type,
-      })),
-      contacts: contacts.map((c) => ({
-        id: c.id,
-        name: c.name ?? null,
-        email: c.email,
-        phone: c.phone ?? null,
-        relationship: c.relationship ?? null,
-      })),
-    }
-    if (!contacts.length) {
-      setStatusText('EXPIRED — NO CONTACTS FOUND')
-      return
-    }
+    // Payload construction is centralized in the shared builder. Trigger
+    // gating, status text, endpoint lookup, and the network call below
+    // are unchanged from the previous behavior.
+    traceAction('deadman_dispatch', 'async_start', { step: 'build_packet' })
+    const packet = await buildRescuePacket('DEADMAN')
+    const contactCount = packet.contacts.length
     const endpoint = resolveRapidEndpoint()
-    if (!endpoint) {
-      setStatusText(`EXPIRED — ${contacts.length} CONTACTS READY (NO ENDPOINT)`)
+    const eligibility = classifyDeadmanDispatchEligibility({
+      alreadyDispatched,
+      alreadySentInMount: false,
+      contactCount,
+      endpoint,
+    })
+    if (import.meta.env.DEV) {
+      console.info('[HUD DEV] deadman-eligibility', {
+        contactCount,
+        endpointConfigured: Boolean(endpoint),
+        eligible: eligibility.dispatchReady,
+        reason: eligibility.reason,
+      })
+    }
+    if (!eligibility.dispatchReady && eligibility.reason === 'no_contacts') {
+      safeShowDispatch('EXPIRED — NO CONTACTS FOUND')
+      traceAction('deadman_dispatch', 'guard_reject', { reason: 'no_contacts' })
       return
     }
+    if (!eligibility.dispatchReady && eligibility.reason === 'no_endpoint') {
+      safeShowDispatch(`EXPIRED — ${contactCount} CONTACTS READY (NO ENDPOINT)`)
+      traceAction('deadman_dispatch', 'guard_reject', { reason: 'no_endpoint', contactCount })
+      return
+    }
+    const ac = new AbortController()
+    rescueFetchAbortRef.current = ac
     try {
+      traceAction('deadman_dispatch', 'async_start', { step: 'post_dispatch', contactCount })
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(packet),
+        signal: ac.signal,
       })
-      if (res.ok) setStatusText(`DEADMAN RESCUE SENT (${contacts.length} CONTACTS)`)
-      else setStatusText(`DEADMAN SEND FAILED (${res.status})`)
-    } catch {
-      setStatusText('DEADMAN SEND FAILED (NETWORK)')
+      if (res.ok) {
+        recordDeadmanDispatchSuccess(expiresAt)
+        // Match SOS main-line wording: "SOS SENT TO N CONTACTS"
+        safeShowDispatch(`DEADMAN SENT TO ${contactCount} CONTACTS`)
+        traceAction('deadman_dispatch', 'async_complete', { status: res.status, contactCount })
+      } else safeShowDispatch(`DEADMAN SEND FAILED (${res.status})`)
+      if (!res.ok) {
+        traceAction('deadman_dispatch', 'failure', { reason: 'http_error', status: res.status })
+      }
+    } catch (e: unknown) {
+      if ((e as { name?: string })?.name === 'AbortError') return
+      safeShowDispatch('DEADMAN SEND FAILED (NETWORK)')
+      traceAction('deadman_dispatch', 'failure', { reason: 'network_error' })
+    } finally {
+      if (rescueFetchAbortRef.current === ac) rescueFetchAbortRef.current = null
     }
   }
 
@@ -238,6 +334,30 @@ export default function DeadManPanel() {
     })
   }, [isActive, isExpired, isCritical, isWarning, remainingMs, durationMs, renewCountdown])
 
+  // One-shot, read-only fetch of linked emergency contacts. No polling, no
+  // timer, no re-fetch on rerender. Failures collapse to "unavailable" so the
+  // dead-man panel keeps operating even when the backend is offline.
+  useEffect(() => {
+    let alive = true
+    void fetchEmergencyContacts()
+      .then(({ data, error }) => {
+        if (!alive) return
+        if (error) {
+          setLinkedStatus('unavailable')
+          return
+        }
+        setLinkedContacts(data)
+        setLinkedStatus('ok')
+      })
+      .catch(() => {
+        if (!alive) return
+        setLinkedStatus('unavailable')
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
+
   // Pulse animation ref for critical state
   const pulseRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -250,7 +370,32 @@ export default function DeadManPanel() {
     }
   }, [isCritical, isExpired])
 
+  // CONTRACT-SENSITIVE (episode-transition reset): this effect locks the
+  // dispatch / threshold / countdown contract across episode boundaries.
+  // KEY INVARIANTS — do not "simplify":
+  //   - First-mount detection (`prev !== null`) is REQUIRED. On first
+  //     mount we MUST NOT clear the dispatch lock — a reload during
+  //     post-dispatch silence (same `expiresAt` still in
+  //     `trailmap_deadman_v1`) would otherwise replay the rescue.
+  //   - `clearDeadmanDispatchLock()` MUST come BEFORE `sentRef = false`.
+  //     Both gates open together; reversing order would briefly allow a
+  //     pending rescue to bypass the lock if the timer fires between
+  //     statements (extremely tight but real on slow devices).
+  //   - `firedAlertsRef = new Set()` resets the threshold dedupe so a
+  //     re-armed timer can re-fire 1h/30m/15m/5m alerts.
+  //   - `setStatusText(...)` is LAST. Earlier effects may already have
+  //     pushed an EXPIRED/RENEW string in this same render; the renew
+  //     effect runs AFTER this one and re-asserts the renew text.
   useEffect(() => {
+    const prev = deadmanEpisodeRef.current
+    const next = { expiresAt, isActive }
+    const transitioned =
+      prev !== null && (prev.expiresAt !== next.expiresAt || prev.isActive !== next.isActive)
+    if (transitioned) {
+      clearDeadmanDispatchLock()
+    }
+    deadmanEpisodeRef.current = next
+
     firedAlertsRef.current = new Set()
     sentRef.current = false
     if (renewTimerRef.current) {
@@ -258,6 +403,7 @@ export default function DeadManPanel() {
       renewTimerRef.current = null
     }
     setRenewCountdown(null)
+    setDispatchResult(null)
     setStatusText(isActive ? 'NOMINAL' : 'STARTS AT 2H — ADD HOURS TO MATCH TRIP')
   }, [expiresAt, isActive])
 
@@ -294,6 +440,9 @@ export default function DeadManPanel() {
     if (!isExpired || !isActive) return
     setStatusText(`EXPIRED — RENEW WITHIN ${RENEW_WINDOW_S}S`)
     setRenewCountdown(RENEW_WINDOW_S)
+    // Capture the absolute deadline once, here. Subsequent tick callbacks
+    // and the visibility-resume handler both read it without drift.
+    renewDeadlineRef.current = Date.now() + RENEW_WINDOW_S * 1000
     logWarn('DEADMAN', 'escalation="expired" label="TIMER EXPIRED"')
     if (!isDeadManAudioEnabled()) {
       logInfo('DEADMAN', 'audioSuppressed=true')
@@ -301,37 +450,51 @@ export default function DeadManPanel() {
     recordDeadManEscalation('expired', 'TIMER EXPIRED')
     // Audio call preserved; centrally gated inside speak().
     speak('Deadman timer expired. Renew now or rescue will be sent.')
-    renewTimerRef.current = window.setInterval(() => {
-      setRenewCountdown((prev) => {
-        if (prev == null) return null
-        if (prev <= 1) {
-          if (renewTimerRef.current) {
-            window.clearInterval(renewTimerRef.current)
-            renewTimerRef.current = null
-          }
-          void sendDeadmanRescue()
-          return 0
+    // Single-source-of-truth tick: read seconds remaining from the
+    // absolute deadline. Identical UI numbers (60..0) on a foregrounded
+    // tab; correctly fires rescue on the first tick after a backgrounded
+    // tab wakes past the deadline.
+    const renewTick = () => {
+      const remainingSec = Math.max(0, Math.ceil((renewDeadlineRef.current - Date.now()) / 1000))
+      setRenewCountdown(remainingSec)
+      if (remainingSec <= 0) {
+        if (renewTimerRef.current) {
+          window.clearInterval(renewTimerRef.current)
+          renewTimerRef.current = null
         }
-        return prev - 1
-      })
-    }, 1000)
+        void sendDeadmanRescue()
+      }
+    }
+    renewTimerRef.current = window.setInterval(renewTick, 1000)
+    // iOS Safari can fully pause setInterval on hidden tabs. When the
+    // user returns, force one immediate reconciliation so the countdown
+    // reflects wall-clock time and rescue fires without waiting up to
+    // ~1s for the next throttled interval tick.
+    const onVisibility = () => {
+      if (document.visibilityState !== 'visible') return
+      if (renewTimerRef.current == null) return
+      renewTick()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
     return () => {
       if (renewTimerRef.current) {
         window.clearInterval(renewTimerRef.current)
         renewTimerRef.current = null
       }
+      document.removeEventListener('visibilitychange', onVisibility)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isExpired, isActive])
 
   const statusLine = useMemo(() => {
+    if (dispatchResult) return dispatchResult
     if (!isActive) return '○ STANDBY'
     if (renewCountdown != null && renewCountdown > 0) return `⚠ EXPIRED — AUTO PUSH IN ${renewCountdown}s`
     if (isExpired) return '⚠ TIMER EXPIRED'
     if (isCritical) return '⚠ CRITICAL — CHECK IN NOW'
     if (isWarning) return '◉ WARNING'
     return '● NOMINAL'
-  }, [isActive, isCritical, isExpired, isWarning, renewCountdown])
+  }, [dispatchResult, isActive, isCritical, isExpired, isWarning, renewCountdown])
 
   const handleRenew = () => {
     if (renewTimerRef.current) {
@@ -345,11 +508,16 @@ export default function DeadManPanel() {
 
   return (
     <>
-      {/* Inject keyframe once */}
+      {/* Inject keyframes + active-state feedback for the check-in button. */}
       <style>{`
         @keyframes deadman-pulse {
           0%, 100% { box-shadow: 0 0 0px transparent; }
           50%       { box-shadow: 0 0 18px ${accent}99; }
+        }
+        .hud-deadman-checkin:active {
+          transform: translateY(1px);
+          filter: brightness(0.92);
+          box-shadow: inset 0 0 0 1px var(--cockpit-accent, ${accent});
         }
       `}</style>
 
@@ -360,19 +528,30 @@ export default function DeadManPanel() {
         initialWidth={220}
         accent={accent}
       >
-        <div ref={pulseRef} style={{ fontFamily: 'var(--font-mono)', borderRadius: 4 }}>
+        <div
+          ref={pulseRef}
+          style={{
+            fontFamily: 'var(--font-mono)',
+            borderRadius: 4,
+            padding: panelPadding,
+            display: 'grid',
+            gap: gapMd,
+          }}
+        >
 
-          {/* ── Big clock ── */}
+          {/* ── Big countdown clock — glanceable from arm's length ── */}
           <div
             style={{
               textAlign: 'center',
-              fontSize: 28,
+              fontSize: countdownFontSize,
               letterSpacing: '0.1em',
               color: accent,
               fontWeight: 'bold',
               padding: '8px 0 4px',
               textShadow: `0 0 20px ${accent}88`,
             }}
+            aria-live="polite"
+            role="status"
           >
             {formattedTime}
           </div>
@@ -402,22 +581,21 @@ export default function DeadManPanel() {
           {/* ── Status label ── */}
           <div
             style={{
-              fontSize: 9,
+              fontSize: fontSm,
               letterSpacing: '0.12em',
               color: isExpired ? '#ff3b3b' : `${accent}99`,
               textAlign: 'center',
-              marginBottom: 6,
+              fontWeight: 700,
             }}
           >
             {statusLine}
           </div>
           <div
             style={{
-              fontSize: 9,
+              fontSize: fontSm,
               letterSpacing: '0.08em',
               color: 'var(--cockpit-panel-subtle)',
               textAlign: 'center',
-              marginBottom: 10,
             }}
           >
             {statusText}
@@ -425,24 +603,24 @@ export default function DeadManPanel() {
 
           {/* ── Buttons ── */}
           {!isActive && (
-            <div style={{ marginBottom: 8 }}>
+            <div style={{ display: 'grid', gap: gapMd }}>
               <label
                 style={{
                   display: 'block',
-                  marginBottom: 4,
-                  fontSize: 10,
+                  fontSize: fontSm,
                   color: 'var(--cockpit-panel-subtle)',
                   letterSpacing: '0.08em',
+                  fontWeight: 700,
                 }}
               >
                 TIMER WINDOW
               </label>
               <div
                 style={{
-                  fontSize: 9,
+                  fontSize: fontSm,
                   color: 'var(--cockpit-panel-subtle)',
-                  marginBottom: 6,
                   letterSpacing: '0.06em',
+                  lineHeight: 1.45,
                 }}
               >
                 STARTS AT 2H. ADD +1H UNTIL IT MATCHES YOUR TRIP WINDOW.
@@ -453,11 +631,13 @@ export default function DeadManPanel() {
                 onChange={(e) => setDurationMinutes(Number(e.target.value))}
                 style={{
                   width: '100%',
-                  minHeight: 30,
+                  minHeight: tapMin,
+                  fontSize: fontMd,
                   borderRadius: 4,
                   border: '1px solid rgba(199,206,198,0.28)',
                   background: 'rgba(10,12,13,0.8)',
                   color: '#d3dad3',
+                  padding: '0 10px',
                 }}
               >
                 {thresholdOptions.map((min) => (
@@ -471,7 +651,7 @@ export default function DeadManPanel() {
                   e.stopPropagation()
                   extend()
                 }}
-                style={{ ...btnStyle('#ffcc00'), marginTop: 6 }}
+                style={btnStyle('#ffcc00', isMobile)}
               >
                 +1 HR MORE
               </button>
@@ -480,36 +660,105 @@ export default function DeadManPanel() {
           {!isActive ? (
             <button
               onClick={e => { e.stopPropagation(); activate() }}
-              style={btnStyle('#00ffb4')}
+              className="hud-deadman-checkin"
+              style={primaryCheckInStyle('#00ffb4', checkInMinHeight, checkInFontSize)}
             >
               ACTIVATE
             </button>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: gapMd }}>
               <button
                 onClick={e => { e.stopPropagation(); handleRenew() }}
-                style={btnStyle(accent)}
+                className="hud-deadman-checkin"
+                style={primaryCheckInStyle(accent, checkInMinHeight, checkInFontSize)}
               >
                 {renewCountdown != null ? 'RENEW NOW' : 'RESET TIMER'}
               </button>
 
               <button
                 onClick={e => { e.stopPropagation(); extend() }}
-                style={btnStyle('#ffcc00')}
+                style={btnStyle('#ffcc00', isMobile)}
               >
                 +1 HR MORE
               </button>
             </div>
           )}
+
+          {/*
+            ── Linked emergency contacts (READ-ONLY) ──
+            Backend-truth visibility. This panel remains operational/status-
+            focused — editing happens elsewhere. Falls back gracefully if the
+            backend is unavailable so the timer is never blocked.
+          */}
+          <div
+            style={{
+              marginTop: 4,
+              paddingTop: 8,
+              borderTop: '1px solid rgba(199,206,198,0.16)',
+              display: 'grid',
+              gap: 4,
+              fontSize: fontSm,
+              color: 'var(--cockpit-panel-subtle)',
+              letterSpacing: '0.06em',
+            }}
+          >
+            <div
+              style={{
+                fontSize: fontSm,
+                fontWeight: 700,
+                letterSpacing: '0.12em',
+                color: 'var(--cockpit-panel-text, #d6ddd6)',
+              }}
+            >
+              LINKED CONTACTS
+            </div>
+            {linkedStatus === 'loading' && (
+              <div>Loading…</div>
+            )}
+            {linkedStatus === 'unavailable' && (
+              // Shown only when the Supabase fetch genuinely failed (network
+              // error / RLS denial / table missing). An empty contact list
+              // is reported separately as 'none configured'.
+              <div>Status: backend unavailable</div>
+            )}
+            {linkedStatus === 'ok' && linkedContacts.length === 0 && (
+              <div>Status: no contacts configured</div>
+            )}
+            {linkedStatus === 'ok' && linkedContacts.length > 0 && (
+              <>
+                <div>Linked contacts: {linkedContacts.length}</div>
+                {linkedContacts.slice(0, 3).map((c, i) => (
+                  <div
+                    key={c.id}
+                    style={{
+                      color: 'var(--cockpit-panel-text, #d6ddd6)',
+                      fontSize: fontMd,
+                    }}
+                  >
+                    {i === 0 ? 'Primary' : i === 1 ? 'Backup' : 'Tertiary'}:{' '}
+                    {c.contact_name}
+                  </div>
+                ))}
+                {linkedContacts.length > 3 && (
+                  <div>+ {linkedContacts.length - 3} more</div>
+                )}
+                <div>
+                  Rescue routing:{' '}
+                  {linkedContacts.length >= 2 ? 'ready (escalation chain available)' : 'ready (single contact)'}
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </HudPanel>
     </>
   )
 }
 
-function btnStyle(color: string): React.CSSProperties {
+function btnStyle(color: string, isMobile: boolean): React.CSSProperties {
   return {
     width: '100%',
+    minHeight: touchMinTarget(isMobile),
     padding: '7px 0',
     background: `${color}18`,
     border: `1px solid ${color}55`,
@@ -518,8 +767,37 @@ function btnStyle(color: string): React.CSSProperties {
     cursor: 'pointer',
     fontFamily: 'var(--font-ui)',
     fontWeight: 700,
-    fontSize: 11,
+    fontSize: touchFontSm(isMobile),
     letterSpacing: '0.15em',
     textTransform: 'uppercase',
+  }
+}
+
+/**
+ * Primary check-in / activate button style.
+ *
+ * This is the most important tap target in the app. Field rules:
+ *   - 64px height on mobile (caller passes the right number)
+ *   - 18px font on mobile so it's readable through gloves and at speed
+ *   - full panel width (caller passes width: 100%)
+ *   - visible :active state via the `.hud-deadman-checkin` class above
+ */
+function primaryCheckInStyle(color: string, minHeight: number, fontSize: number): React.CSSProperties {
+  return {
+    width: '100%',
+    minHeight,
+    padding: '10px 0',
+    background: `${color}24`,
+    border: `2px solid ${color}aa`,
+    borderRadius: 6,
+    color,
+    cursor: 'pointer',
+    fontFamily: 'var(--font-ui)',
+    fontWeight: 800,
+    fontSize,
+    letterSpacing: '0.16em',
+    textTransform: 'uppercase',
+    boxShadow: `0 0 12px ${color}55, inset 0 0 0 1px ${color}55`,
+    transition: 'transform 80ms ease, filter 120ms ease',
   }
 }

@@ -1,9 +1,16 @@
 import type { CSSProperties } from 'react'
 import HudPanel from './HudPanel'
 import { useCockpit } from '../context/CockpitContext'
+import { getDeviceProfile } from '../runtime/deviceProfile'
+import { touchFontSm, touchGapMd, touchGapSm, touchMinTarget } from './tokens'
 
 export default function PresetPanel() {
   const { setScreenHue, setDisplayTuning, updatePanel, applyDeviceOptimization, devicePreset } = useCockpit()
+  const isMobile = getDeviceProfile().interactionMode === 'mobile'
+  const fontSm = touchFontSm(isMobile)
+  const gapMd = touchGapMd(isMobile)
+  const gapSm = touchGapSm(isMobile)
+  const tapMin = touchMinTarget(isMobile)
 
   const applyNightPatrol = () => {
     setScreenHue('low_light')
@@ -112,6 +119,17 @@ export default function PresetPanel() {
     setDisplayTuning({ panel_gap_px: 10 })
   }
 
+  const btn: CSSProperties = {
+    minHeight: tapMin,
+    borderRadius: 8,
+    border: '1px solid rgba(199,206,198,0.32)',
+    background: 'rgba(199,206,198,0.14)',
+    color: '#d6ddd6',
+    cursor: 'pointer',
+    fontSize: fontSm,
+    letterSpacing: '0.08em',
+  }
+
   return (
     <HudPanel
       panelId="presets"
@@ -120,53 +138,53 @@ export default function PresetPanel() {
       initialWidth={260}
       minHeight={150}
     >
-      <div style={{ display: 'grid', gap: 8 }}>
-        <button type="button" data-no-drag onClick={applyNightPatrol} style={btnStyle()}>
+      <div style={{ display: 'grid', gap: gapMd }}>
+        <button type="button" data-no-drag onClick={applyNightPatrol} style={btn}>
           NIGHT PATROL
         </button>
-        <button type="button" data-no-drag onClick={applyDayNav} style={btnStyle()}>
+        <button type="button" data-no-drag onClick={applyDayNav} style={btn}>
           DAY NAV
         </button>
-        <button type="button" data-no-drag onClick={applyRecon} style={btnStyle()}>
+        <button type="button" data-no-drag onClick={applyRecon} style={btn}>
           RECON
         </button>
       </div>
       <div
         style={{
           marginTop: 10,
-          paddingTop: 8,
+          paddingTop: gapMd,
           borderTop: '1px solid rgba(199,206,198,0.2)',
           display: 'grid',
-          gap: 8,
+          gap: gapMd,
         }}
       >
-        <div style={{ fontSize: 10, letterSpacing: '0.1em', color: '#a8b2aa' }}>
+        <div style={{ fontSize: fontSm, letterSpacing: '0.1em', color: '#a8b2aa' }}>
           DEVICE TUNING
         </div>
-        <button type="button" data-no-drag onClick={applyIPhonePreset} style={btnStyle()}>
+        <button type="button" data-no-drag onClick={applyIPhonePreset} style={btn}>
           IPHONE
         </button>
-        <button type="button" data-no-drag onClick={applyAndroidPreset} style={btnStyle()}>
+        <button type="button" data-no-drag onClick={applyAndroidPreset} style={btn}>
           ANDROID
         </button>
-        <button type="button" data-no-drag onClick={applyTabletPreset} style={btnStyle()}>
+        <button type="button" data-no-drag onClick={applyTabletPreset} style={btn}>
           TABLET
         </button>
-        <button type="button" data-no-drag onClick={applyWindowsPreset} style={btnStyle()}>
+        <button type="button" data-no-drag onClick={applyWindowsPreset} style={btn}>
           WINDOWS
         </button>
-        <button type="button" data-no-drag onClick={applyDeviceOptimization} style={btnStyle()}>
+        <button type="button" data-no-drag onClick={applyDeviceOptimization} style={btn}>
           OPTIMIZE THIS DEVICE ({devicePreset.toUpperCase()})
         </button>
-        <div style={{ display: 'grid', gap: 6, marginTop: 4 }}>
-          <div style={{ fontSize: 10, letterSpacing: '0.1em', color: '#a8b2aa' }}>
+        <div style={{ display: 'grid', gap: gapSm, marginTop: 4 }}>
+          <div style={{ fontSize: fontSm, letterSpacing: '0.1em', color: '#a8b2aa' }}>
             PANEL SPACING
           </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button type="button" data-no-drag onClick={setEdgeConnectSpacing} style={{ ...btnStyle(), flex: 1 }}>
+          <div style={{ display: 'flex', gap: gapMd }}>
+            <button type="button" data-no-drag onClick={setEdgeConnectSpacing} style={{ ...btn, flex: 1 }}>
               EDGE CONNECT
             </button>
-            <button type="button" data-no-drag onClick={setComfortSpacing} style={{ ...btnStyle(), flex: 1 }}>
+            <button type="button" data-no-drag onClick={setComfortSpacing} style={{ ...btn, flex: 1 }}>
               COMFORT GAP
             </button>
           </div>
@@ -174,17 +192,4 @@ export default function PresetPanel() {
       </div>
     </HudPanel>
   )
-}
-
-function btnStyle(): CSSProperties {
-  return {
-    minHeight: 38,
-    borderRadius: 8,
-    border: '1px solid rgba(199,206,198,0.32)',
-    background: 'rgba(199,206,198,0.14)',
-    color: '#d6ddd6',
-    cursor: 'pointer',
-    fontSize: 11,
-    letterSpacing: '0.08em',
-  }
 }

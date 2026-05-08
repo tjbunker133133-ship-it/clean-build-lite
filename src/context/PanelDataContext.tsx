@@ -79,11 +79,16 @@ export function PanelDataProvider({ children }: { children: ReactNode }) {
   }, [userLocation?.lat, userLocation?.lng])
 
   const runDataFetch = useCallback(async (includeWeather: boolean) => {
-    console.log('[PANEL DATA INPUT]', {
-      lat: gps.lat,
-      lng: gps.lng,
-      source: gps.source,
-    })
+    if (import.meta.env.DEV) {
+      // DEV-only: leaks raw GPS coordinates. MUST stay gated — production
+      // operator consoles, screen recordings, and shared debug sessions
+      // must not surface fix coordinates here.
+      console.log('[PANEL DATA INPUT]', {
+        lat: gps.lat,
+        lng: gps.lng,
+        source: gps.source,
+      })
+    }
     const lat = userLocation?.lat
     const lng = userLocation?.lng
     if (lat == null || lng == null) {
@@ -116,11 +121,14 @@ export function PanelDataProvider({ children }: { children: ReactNode }) {
       ])
       if (gen !== refreshGenRef.current) return
 
+      // Open-Elevation is flaky (timeouts, 503, empty results). A null response
+      // during a combined weather refresh must NOT clear last-known-good
+      // elevation — that caused the UI to jump from valid ft to "— ft"
+      // whenever weather updated while the elevation lookup failed transiently.
       if (elM != null) {
         setElevationMeters((prev) => (prev === elM ? prev : elM))
         setElevationError((prev) => (prev === null ? prev : null))
       } else {
-        setElevationMeters((prev) => (prev === null ? prev : null))
         setElevationError((prev) => (prev === 'Elevation unavailable' ? prev : 'Elevation unavailable'))
       }
 
@@ -136,7 +144,7 @@ export function PanelDataProvider({ children }: { children: ReactNode }) {
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') return
       if (gen !== refreshGenRef.current) return
-      setElevationMeters((prev) => (prev === null ? prev : null))
+      // Preserve elevation on fetch failure — same rationale as null branch above.
       setElevationError((prev) => {
         const next = e instanceof Error ? e.message : 'Elevation fetch failed'
         return prev === next ? prev : next

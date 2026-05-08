@@ -16,9 +16,11 @@
     "smoke": "npm run verify"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.105.3",
     "maplibre-gl": "^5.0.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
+    "resend": "^6.12.3",
     "vite-plugin-pwa": "^1.2.0"
   },
   "devDependencies": {

@@ -1,7 +1,12 @@
+import { traceAction } from '../runtime/actionTrace'
 let isResetting = false
 
 export async function resetAppState() {
-  if (isResetting) return
+  traceAction('reset_app', 'handler_enter')
+  if (isResetting) {
+    traceAction('reset_app', 'guard_reject', { reason: 'already_resetting' })
+    return
+  }
   isResetting = true
 
   try {
@@ -10,8 +15,13 @@ export async function resetAppState() {
     const confirmed = window.confirm(
       'Reset app and reload? This will clear all saved data and restart setup.',
     )
-    if (!confirmed) return
+    if (!confirmed) {
+      traceAction('reset_app', 'guard_reject', { reason: 'operator_cancelled' })
+      isResetting = false
+      return
+    }
 
+    traceAction('reset_app', 'async_start', { step: 'storage_clear' })
     localStorage.clear()
     sessionStorage.clear()
 
@@ -29,14 +39,23 @@ export async function resetAppState() {
       for (const reg of regs) {
         await reg.unregister()
       }
+      traceAction('reset_app', 'async_complete', { step: 'sw_unregister', registrations: regs.length })
     }
 
     console.log('[APP RESET] Completed')
+    traceAction('reset_app', 'state_result', { cleared: true })
   } catch (err) {
     console.warn('[APP RESET ERROR]', err)
+    traceAction('reset_app', 'failure', {
+      reason: 'reset_failed',
+      message: (err as Error)?.message ?? 'unknown',
+    })
+    isResetting = false
+    return
   }
 
   window.setTimeout(() => {
+    traceAction('reset_app', 'runtime_effect', { reloadRequested: true })
     window.location.reload()
   }, 300)
 }

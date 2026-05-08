@@ -31,6 +31,7 @@ const StatusRail = lazy(() => import('./hud/StatusRail'))
 const PresetPanel = lazy(() => import('./hud/PresetPanel'))
 const SOSPanel = lazy(() => import('./hud/SOSPanel'))
 const PreflightPanel = lazy(() => import('./hud/PreflightPanel'))
+const InstallHelperBanner = lazy(() => import('./hud/InstallHelperBanner'))
 
 export default function App() {
   return (
@@ -69,6 +70,9 @@ export default function App() {
           <ScanlineOverlay />
           <PermissionPromptOverlay />
           <SwUpdateBanner />
+          <Suspense fallback={null}>
+            <InstallHelperBanner />
+          </Suspense>
 
           <CockpitHudShell>
             <CockpitKeyboard />

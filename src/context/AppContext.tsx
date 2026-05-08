@@ -24,6 +24,8 @@ const initialState: AppState = {
   clearLabelAfterDrop: true,
   showMapLabels: true,
   showMapDistances: true,
+  snapToTrailEnabled: false,
+  trailSnapAssistCapable: false,
   deadManTimeLeft: DEAD_MAN_DURATION,
   deadManActive: true,
 }
@@ -88,6 +90,8 @@ function appReducer(state: AppState, action: AppAction): AppState {
       return { ...state, showMapLabels: action.payload }
     case 'SET_SHOW_MAP_DISTANCES':
       return { ...state, showMapDistances: action.payload }
+    case 'SET_SNAP_TO_TRAIL':
+      return { ...state, snapToTrailEnabled: action.payload }
     case 'SET_DEAD_MAN_TIME':
       return { ...state, deadManTimeLeft: action.payload }
     case 'RESET_DEAD_MAN':
@@ -113,6 +117,8 @@ interface AppContextValue {
   setClearLabelAfterDrop: (clear: boolean) => void
   setShowMapLabels: (show: boolean) => void
   setShowMapDistances: (show: boolean) => void
+  setSnapToTrail: (enabled: boolean) => void
+  setTrailSnapAssistCapable: (capable: boolean) => void
   setDeadManTime: (t: number) => void
   resetDeadMan: () => void
 }
@@ -135,7 +141,7 @@ function sanitizeWaypoint(raw: unknown): Waypoint | null {
   if (typeof item.lat !== 'number' || !Number.isFinite(item.lat)) return null
   if (typeof item.createdAt !== 'number' || !Number.isFinite(item.createdAt)) return null
   if (!isWaypointType(item.type)) return null
-  return {
+  const base: Waypoint = {
     id: item.id,
     lng: item.lng,
     lat: item.lat,
@@ -143,6 +149,13 @@ function sanitizeWaypoint(raw: unknown): Waypoint | null {
     type: item.type,
     createdAt: item.createdAt,
   }
+  if (typeof item.rawLat === 'number' && Number.isFinite(item.rawLat)) base.rawLat = item.rawLat
+  if (typeof item.rawLng === 'number' && Number.isFinite(item.rawLng)) base.rawLng = item.rawLng
+  if (item.source === 'manual' || item.source === 'snapped') base.source = item.source
+  if (typeof item.snapDistanceMeters === 'number' && Number.isFinite(item.snapDistanceMeters)) {
+    base.snapDistanceMeters = item.snapDistanceMeters
+  }
+  return base
 }
 
 function loadInitialState(): AppState {
@@ -166,6 +179,11 @@ function loadInitialState(): AppState {
       clearLabelAfterDrop: typeof parsed.clearLabelAfterDrop === 'boolean' ? parsed.clearLabelAfterDrop : initialState.clearLabelAfterDrop,
       showMapLabels: typeof parsed.showMapLabels === 'boolean' ? parsed.showMapLabels : initialState.showMapLabels,
       showMapDistances: typeof parsed.showMapDistances === 'boolean' ? parsed.showMapDistances : initialState.showMapDistances,
+      snapToTrailEnabled:
+        typeof parsed.snapToTrailEnabled === 'boolean'
+          ? parsed.snapToTrailEnabled
+          : initialState.snapToTrailEnabled,
+      trailSnapAssistCapable: false,
       deadManTimeLeft:
         typeof parsed.deadManTimeLeft === 'number' && Number.isFinite(parsed.deadManTimeLeft)
           ? Math.max(0, Math.min(72 * 3600, Math.round(parsed.deadManTimeLeft)))
@@ -246,6 +264,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     dispatch({ type: 'SET_SHOW_MAP_DISTANCES', payload: show })
   }, [])
 
+  const setSnapToTrail = useCallback((enabled: boolean) => {
+    dispatch({ type: 'SET_SNAP_TO_TRAIL', payload: enabled })
+  }, [])
+
+  const setTrailSnapAssistCapable = useCallback((capable: boolean) => {
+    dispatch({ type: 'SET_TRAIL_SNAP_ASSIST_CAPABLE', payload: capable })
+  }, [])
+
   const setDeadManTime = useCallback((t: number) => {
     dispatch({ type: 'SET_DEAD_MAN_TIME', payload: t })
   }, [])
@@ -277,6 +303,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setClearLabelAfterDrop,
       setShowMapLabels,
       setShowMapDistances,
+      setSnapToTrail,
+      setTrailSnapAssistCapable,
       setDeadManTime,
       resetDeadMan,
     }),
@@ -294,6 +322,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setClearLabelAfterDrop,
       setShowMapLabels,
       setShowMapDistances,
+      setSnapToTrail,
+      setTrailSnapAssistCapable,
       setDeadManTime,
       resetDeadMan,
     ],

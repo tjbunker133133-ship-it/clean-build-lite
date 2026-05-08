@@ -27,6 +27,7 @@ import {
   getCommandVerifier,
   installBuiltinCommandVerifiers,
 } from '../runtime/commandExecution'
+import { traceAction } from '../runtime/actionTrace'
 
 /**
  * Single source of truth for HUD commands.
@@ -639,6 +640,18 @@ export function useHudCommands(): {
           return ok('Voice panel opened.')
         },
       },
+      {
+        id: 'contacts panel',
+        label: 'Open emergency contacts panel',
+        aliases: ['open contacts', 'open emergency contacts', 'preflight panel'],
+        paletteVisible: true,
+        group: 'Panels',
+        run: () => {
+          updatePanel('preflight', { docked: false, minimized: false })
+          raisePanel('preflight')
+          return ok('Emergency contacts panel opened.')
+        },
+      },
 
       // Weather
       {
@@ -663,8 +676,13 @@ export function useHudCommands(): {
           const w = await fetchWeather(gps.lat, gps.lng)
           window.dispatchEvent(new CustomEvent('hud:weather-refresh'))
           if ('error' in w) return fail(`Unable to get weather: ${w.error}`)
+          // Force explicit "miles per hour" for TTS pronunciation. Some
+          // engines (notably iOS Safari / WebKit) mishandle the "mph" /
+          // "mp/h" abbreviations and produce "meters per hour" — the
+          // explicit phrase is unambiguous across all engines and
+          // matches US imperial field defaults.
           return ok(
-            `Current weather for ${w.location}: ${w.condition}, ${w.temperature} ${w.unit.replace('°', 'degrees ')}, wind ${Math.round(w.windSpeed)} ${w.windUnit}.`,
+            `Current weather for ${w.location}: ${w.condition}, ${w.temperature} ${w.unit.replace('°', 'degrees ')}, wind ${Math.round(w.windSpeed)} miles per hour.`,
           )
         },
       },
@@ -713,6 +731,7 @@ export function useHudCommands(): {
       // Phase 1: requested. Execution entry exists from this point on,
       // even for empty / unknown phrases, so failure modes are visible.
       const execId = reportCommandStarted({ source, transcript: heard, normalized: norm })
+      traceAction(`command:${norm || 'empty'}`, 'handler_enter', { source })
 
       const finalize = (
         result: CommandResult,
@@ -740,6 +759,7 @@ export function useHudCommands(): {
       }
 
       if (!norm) {
+        traceAction('command:empty', 'guard_reject', { reason: 'empty_command' })
         reportCommandRejected(execId, 'invalid_state', 'Empty command.')
         return finalize(fail('Empty command.'), { id: null, alias: null }, 'empty')
       }
@@ -759,6 +779,7 @@ export function useHudCommands(): {
       })
 
       if (!found) {
+        traceAction(`command:${norm}`, 'guard_reject', { reason: 'unknown_command' })
         reportCommandRejected(execId, 'missing_handler', `Unknown command: ${norm}.`)
         return finalize(
           fail(`Unknown command: ${norm}.`),
@@ -771,12 +792,14 @@ export function useHudCommands(): {
       markCommandResolving(execId, found.id)
 
       try {
+        traceAction(`command:${found.id}`, 'async_start', { source, alias: matchedAlias })
         const result = await found.run({ source })
 
         if (!result.ok) {
           // Handler-reported failure: classify reason from message.
           const reason = classifyFailureFromMessage(result.message)
           reportCommandFailure(execId, reason, result.message)
+          traceAction(`command:${found.id}`, 'failure', { reason, message: result.message })
           return finalize(
             result,
             { id: found.id, alias: matchedAlias },
@@ -792,6 +815,10 @@ export function useHudCommands(): {
           reportCommandSuccess(execId, {
             verification: 'unverified_ok',
             message: result.message,
+          })
+          traceAction(`command:${found.id}`, 'state_result', {
+            ok: true,
+            verification: 'unverified_ok',
           })
         } else {
           // Race verifier vs 1500 ms timeout; the runtime snapshot is the
@@ -816,8 +843,15 @@ export function useHudCommands(): {
                   verification: 'verified',
                   message: result.message,
                 })
+                traceAction(`command:${found.id}`, 'async_complete', {
+                  verification: 'verified',
+                })
               } else {
                 reportCommandFailure(execId, vr.reason, result.message)
+                traceAction(`command:${found.id}`, 'failure', {
+                  reason: vr.reason,
+                  phase: 'verification',
+                })
               }
             },
             (err) => {
@@ -829,14 +863,23 @@ export function useHudCommands(): {
                 'verification_failed',
                 (err as Error)?.message ?? 'verifier threw',
               )
+              traceAction(`command:${found.id}`, 'failure', {
+                reason: 'verification_failed',
+                phase: 'verification_throw',
+              })
             },
           )
         }
 
+        traceAction(`command:${found.id}`, 'state_result', { ok: true, message: result.message })
         return finalize(result, { id: found.id, alias: matchedAlias }, 'ok')
       } catch (err) {
         const message = (err as Error).message ?? 'unknown error'
         reportCommandFailure(execId, 'invalid_state', `Command failed: ${message}.`)
+        traceAction(`command:${found.id}`, 'failure', {
+          reason: 'handler_throw',
+          message,
+        })
         return finalize(
           fail(`Command failed: ${message}.`),
           { id: found.id, alias: matchedAlias },

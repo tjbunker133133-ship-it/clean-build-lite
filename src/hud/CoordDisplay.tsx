@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import type { MapMouseEvent } from 'maplibre-gl'
 import { useMapContext } from '../context/MapContext'
 import HudPanel from './HudPanel'
+import { getDeviceProfile } from '../runtime/deviceProfile'
+import { touchFontMd } from './tokens'
 
 export default function CoordDisplay() {
   const { map } = useMapContext()
@@ -51,6 +53,9 @@ export default function CoordDisplay() {
     }
   }, [map])
 
+  const isMobile = getDeviceProfile().interactionMode === 'mobile'
+  const fontMd = touchFontMd(isMobile)
+
   return (
     <HudPanel
       panelId="coords"
@@ -65,7 +70,7 @@ export default function CoordDisplay() {
           color: '#c7cec6',
           borderRadius: 6,
           fontFamily: 'monospace',
-          fontSize: 12,
+          fontSize: fontMd,
         }}
       >
         {ready

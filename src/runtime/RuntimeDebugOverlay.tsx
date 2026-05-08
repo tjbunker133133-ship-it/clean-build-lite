@@ -186,6 +186,21 @@ function Body({ snap, onClose }: { snap: RuntimeSnapshot; onClose: () => void })
         ) : null}
       </Section>
 
+      <Section title="install mode">
+        <Row
+          k="standalone"
+          v={String(snap.installMode.standalone)}
+          color={snap.installMode.standalone ? '#7dff8a' : '#ffd76b'}
+        />
+        <Row k="platform" v={snap.installMode.platform} />
+        <Row
+          k="eligible"
+          v={String(snap.installMode.eligible)}
+          color={snap.installMode.eligible ? '#7dff8a' : 'rgba(220,230,220,0.6)'}
+        />
+        <Row k="prompt-available" v={String(snap.installMode.promptAvailable)} />
+      </Section>
+
       <Section title="voice">
         <Row
           k="wakeWordDetectedAt"

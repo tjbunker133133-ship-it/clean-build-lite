@@ -15,7 +15,7 @@
  * Cockpit context, so it cannot influence app render behavior.
  */
 
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
   type PanelCommitEvent,
@@ -23,6 +23,7 @@ import {
   subscribePanelCommit,
   subscribeSystemNav,
 } from './devEvents'
+import { getRuntimeSnapshot, subscribeRuntimeSnapshot, type RuntimeSnapshot } from '../runtime/runtimeSnapshot'
 import { getDeviceEnvironment } from '../utils/device'
 
 const PANEL_LOG_MAX = 8
@@ -43,6 +44,18 @@ type ViewportState = {
   h: number
   isMobile: boolean
   isCompact: boolean
+}
+
+/** Aggregate soak counters — DEV panel only; derived from runtime snapshot diffs (no production hooks). */
+type SoakCounters = {
+  voiceRecoveringEnters: number
+  voiceResumedEvents: number
+  lifecycleResumeHints: number
+  policyViolationAdds: number
+  networkTransitionsSeen: number
+  hapticAttemptsDelta: number
+  standaloneToggles: number
+  orientationEvents: number
 }
 
 function readOpen(): boolean {
@@ -107,6 +120,17 @@ const DevTestPanel: React.FC = () => {
 
   const [panelLog, setPanelLog] = useState<PanelCommitEvent[]>([])
   const [navLog, setNavLog] = useState<SystemNavEvent[]>([])
+  const [soak, setSoak] = useState<SoakCounters>({
+    voiceRecoveringEnters: 0,
+    voiceResumedEvents: 0,
+    lifecycleResumeHints: 0,
+    policyViolationAdds: 0,
+    networkTransitionsSeen: 0,
+    hapticAttemptsDelta: 0,
+    standaloneToggles: 0,
+    orientationEvents: 0,
+  })
+  const snapPrevRef = useRef<RuntimeSnapshot | null>(null)
 
   useEffect(() => {
     if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return
@@ -152,12 +176,66 @@ const DevTestPanel: React.FC = () => {
         isCompact: env.isCompactLayout,
       })
     }
+    const onOrient = (): void => {
+      setSoak((s) => ({ ...s, orientationEvents: s.orientationEvents + 1 }))
+      onResize()
+    }
     window.addEventListener('resize', onResize)
-    window.addEventListener('orientationchange', onResize)
+    window.addEventListener('orientationchange', onOrient)
     return () => {
       window.removeEventListener('resize', onResize)
-      window.removeEventListener('orientationchange', onResize)
+      window.removeEventListener('orientationchange', onOrient)
     }
+  }, [])
+
+  /** Long-session soak: transition detects only — O(1) per snapshot notify, no console. */
+  useEffect(() => {
+    return subscribeRuntimeSnapshot((snap) => {
+      const prev = snapPrevRef.current
+      snapPrevRef.current = snap
+      if (!prev) return
+
+      setSoak((s) => {
+        const next: SoakCounters = { ...s }
+        let changed = false
+        const touch = (patch: Partial<SoakCounters>): void => {
+          Object.assign(next, patch)
+          changed = true
+        }
+
+        if (snap.voice.state === 'recovering' && prev.voice.state !== 'recovering') {
+          touch({ voiceRecoveringEnters: next.voiceRecoveringEnters + 1 })
+        }
+        if (
+          snap.runtimeContinuity.voiceRecoveryState === 'resumed' &&
+          prev.runtimeContinuity.voiceRecoveryState !== 'resumed'
+        ) {
+          touch({ voiceResumedEvents: next.voiceResumedEvents + 1 })
+        }
+        const hiddenLike = ['hidden', 'background', 'suspended'].includes(
+          prev.runtimeContinuity.appLifecycleState,
+        )
+        if (hiddenLike && snap.runtimeContinuity.appLifecycleState === 'resuming') {
+          touch({ lifecycleResumeHints: next.lifecycleResumeHints + 1 })
+        }
+        const pv = snap.policy.violationCount - prev.policy.violationCount
+        if (pv > 0) {
+          touch({ policyViolationAdds: next.policyViolationAdds + pv })
+        }
+        const nt = snap.network.transitions.length - prev.network.transitions.length
+        if (nt > 0) {
+          touch({ networkTransitionsSeen: next.networkTransitionsSeen + nt })
+        }
+        const ha = snap.haptics.attemptCount - prev.haptics.attemptCount
+        if (ha > 0) {
+          touch({ hapticAttemptsDelta: next.hapticAttemptsDelta + ha })
+        }
+        if (snap.installMode.standalone !== prev.installMode.standalone) {
+          touch({ standaloneToggles: next.standaloneToggles + 1 })
+        }
+        return changed ? next : s
+      })
+    })
   }, [])
 
   useEffect(() => {
@@ -190,6 +268,19 @@ const DevTestPanel: React.FC = () => {
 
   const clearPanelLog = useCallback(() => setPanelLog([]), [])
   const clearNavLog = useCallback(() => setNavLog([]), [])
+  const clearSoak = useCallback(() => {
+    setSoak({
+      voiceRecoveringEnters: 0,
+      voiceResumedEvents: 0,
+      lifecycleResumeHints: 0,
+      policyViolationAdds: 0,
+      networkTransitionsSeen: 0,
+      hapticAttemptsDelta: 0,
+      standaloneToggles: 0,
+      orientationEvents: 0,
+    })
+    snapPrevRef.current = getRuntimeSnapshot()
+  }, [])
 
   if (!open) {
     return (
@@ -273,6 +364,26 @@ const DevTestPanel: React.FC = () => {
             )
           })
         )}
+      </section>
+
+      <section style={sectionStyle}>
+        <div style={sectionHeaderStyle}>
+          <span style={labelStyle}>SOAK (aggregate)</span>
+          <button type="button" onClick={clearSoak} style={clearBtnStyle}>
+            reset
+          </button>
+        </div>
+        <div style={rowStyle}>voice→recovering: {soak.voiceRecoveringEnters}</div>
+        <div style={rowStyle}>voice resumed: {soak.voiceResumedEvents}</div>
+        <div style={rowStyle}>lifecycle resume: {soak.lifecycleResumeHints}</div>
+        <div style={rowStyle}>policy Δ: {soak.policyViolationAdds}</div>
+        <div style={rowStyle}>net flips: {soak.networkTransitionsSeen}</div>
+        <div style={rowStyle}>haptic attempts Δ: {soak.hapticAttemptsDelta}</div>
+        <div style={rowStyle}>standalone toggle: {soak.standaloneToggles}</div>
+        <div style={rowStyle}>orientation: {soak.orientationEvents}</div>
+        <div style={{ ...mutedStyle, marginTop: 2 }}>
+          Drag-acquire timing: use [MOBILE_UI] logs · memory: use DevTools
+        </div>
       </section>
 
       <section style={sectionStyle}>

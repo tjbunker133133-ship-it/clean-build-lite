@@ -81,12 +81,19 @@ export async function fetchWeather(
 
     const timeZone = typeof data.timezone === 'string' ? data.timezone : undefined
 
+    // US imperial unit normalization. We explicitly request
+    // `windspeed_unit=mph` from Open-Meteo, but the API returns the unit
+    // STRING as the literal "mp/h" (with the slash). Several TTS engines
+    // mispronounce that token (heard as "meters per hour" on iOS Safari
+    // / WebKit). We override to a canonical "mph" string here so both
+    // the panel render and the voice formatter agree on the same unit
+    // and TTS engines speak it cleanly.
     const out = {
       temperature: Math.round(Number(data.current_weather.temperature ?? 0)),
       windSpeed: Number(data.current_weather.windspeed ?? 0),
       condition: weatherDescription(Number(data.current_weather.weathercode ?? -1)),
       unit: String(data.current_weather_units?.temperature ?? '°F'),
-      windUnit: String(data.current_weather_units?.windspeed ?? 'mph'),
+      windUnit: 'mph',
       location,
       weatherCode: Number(data.current_weather.weathercode ?? -1),
       updatedAt: Date.now(),
@@ -107,7 +114,10 @@ export async function fetchWeather(
       const cached = localStorage.getItem(WEATHER_CACHE_KEY)
       if (cached) {
         const c = JSON.parse(cached)
-        return { ...c, condition: `${c.condition} (cached)` }
+        // Cache entries written prior to the windUnit normalization may
+        // still contain the raw "mp/h" API value; force "mph" on read so
+        // legacy caches do not resurface the TTS pronunciation issue.
+        return { ...c, condition: `${c.condition} (cached)`, windUnit: 'mph' }
       }
     } catch {
       // ignore cache parse failures

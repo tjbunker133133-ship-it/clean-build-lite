@@ -1,9 +1,14 @@
 import { useMapContext } from '../context/MapContext'
 import { useGPS } from '../hooks/useGPS'
+import { getDeviceProfile } from '../runtime/deviceProfile'
+import { touchFontSm, touchMinTarget } from './tokens'
 
 export default function TrackingControl() {
   const { map } = useMapContext()
   const gps = useGPS()
+  const isMobile = getDeviceProfile().interactionMode === 'mobile'
+  const fontSm = touchFontSm(isMobile)
+  const tapMin = touchMinTarget(isMobile)
 
   const handleRecenter = () => {
     if (!map) return
@@ -28,13 +33,16 @@ export default function TrackingControl() {
       <button
         onClick={handleRecenter}
         style={{
-          padding: '8px 12px',
+          minHeight: tapMin,
+          minWidth: tapMin,
+          padding: '10px 14px',
           background: '#00E5FF',
           color: '#000',
           border: 'none',
           borderRadius: 6,
           cursor: 'pointer',
           fontWeight: 'bold',
+          fontSize: fontSm,
         }}
       >
         Recenter

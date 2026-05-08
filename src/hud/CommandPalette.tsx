@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useHudCommands } from '../hooks/useHudCommands'
+import { getDeviceProfile } from '../runtime/deviceProfile'
+import { touchFontMd, touchGapSm, touchMinTarget } from './tokens'
 
 export default function CommandPalette() {
   const [open, setOpen] = useState(false)
@@ -35,6 +37,11 @@ export default function CommandPalette() {
 
   if (!open) return null
 
+  const isMobile = getDeviceProfile().interactionMode === 'mobile'
+  const fontMd = touchFontMd(isMobile)
+  const gapSm = touchGapSm(isMobile)
+  const tapMin = touchMinTarget(isMobile)
+
   return (
     <div
       style={{
@@ -68,15 +75,16 @@ export default function CommandPalette() {
           placeholder="Type a command..."
           style={{
             width: '100%',
-            minHeight: 42,
+            minHeight: Math.max(tapMin, 42),
             borderRadius: 8,
             border: '1px solid rgba(199,206,198,0.3)',
             background: 'rgba(14,16,17,0.9)',
             color: '#d9e1d9',
             padding: '0 12px',
+            fontSize: fontMd,
           }}
         />
-        <div style={{ marginTop: 10, display: 'grid', gap: 6, maxHeight: 360, overflowY: 'auto' }}>
+        <div style={{ marginTop: 10, display: 'grid', gap: gapSm, maxHeight: 360, overflowY: 'auto' }}>
           {filtered.map((c) => (
             <button
               key={c.id}
@@ -85,15 +93,15 @@ export default function CommandPalette() {
                 setOpen(false)
               }}
               style={{
-                minHeight: 38,
+                minHeight: tapMin,
                 borderRadius: 8,
                 border: '1px solid rgba(199,206,198,0.22)',
                 background: 'rgba(12,14,15,0.85)',
                 color: '#b6c1b8',
                 textAlign: 'left',
-                padding: '0 10px',
+                padding: '0 12px',
                 cursor: 'pointer',
-                fontSize: 12,
+                fontSize: fontMd,
               }}
             >
               {c.label}

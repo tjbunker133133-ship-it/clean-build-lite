@@ -29,7 +29,7 @@
  *   3. Run `tsc --noEmit && npm run build`.
  */
 
-export const DEAD_MAN_AUDIO_ENABLED = false
+export const DEAD_MAN_AUDIO_ENABLED = true
 
 export function isDeadManAudioEnabled(): boolean {
   return DEAD_MAN_AUDIO_ENABLED

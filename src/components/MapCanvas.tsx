@@ -5,7 +5,7 @@ import { useMapContext } from '../context/MapContext'
 import { useAppContext } from '../context/AppContext'
 import { useCockpit } from '../context/CockpitContext'
 import { useGPS } from '../hooks/useGPS'
-import type { LayerType } from '../types'
+import type { LayerType, Waypoint } from '../types'
 import {
   getStyleUrl,
   type MapStyleKey,
@@ -15,6 +15,15 @@ import {
   validatedEmergencyFallbackStyle,
 } from '../lib/mapStyles'
 import { tier1Debug } from '../lib/tier1DebugLog'
+import {
+  __probeStyleForTrailLayersForTests,
+  __resetSnapCapabilityDevLogForTests,
+  createTrailSnapPreviewGate,
+  findNearestTrailCandidate,
+  isSnapAvailable,
+  MAX_SNAP_RADIUS_M,
+  MIN_SNAP_ZOOM,
+} from '../lib/snapToTrail'
 import { hudObsMark, hudObsMeasure } from '../diag/hudObs'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 
@@ -220,6 +229,7 @@ export default function MapCanvas() {
     setPendingType,
     setNextWaypointLabel,
     selectWaypoint,
+    setTrailSnapAssistCapable,
   } = useAppContext()
   const {
     activeLayer,
@@ -228,7 +238,21 @@ export default function MapCanvas() {
     nextWaypointLabel,
     keepWaypointToolArmed,
     clearLabelAfterDrop,
+    snapToTrailEnabled,
   } = state
+
+  const snapToTrailEnabledRef = useRef(false)
+  snapToTrailEnabledRef.current = snapToTrailEnabled
+  const snapPreviewGateRef = useRef(createTrailSnapPreviewGate())
+  /** Latest sync fn so window-level events (pageshow/visibilitychange) can ping capability without re-binding map listeners. */
+  const snapAssistSyncRef = useRef<(() => void) | null>(null)
+  const snapPreviewCleanupRef = useRef<(() => void) | null>(null)
+
+  function clearTrailSnapPreview() {
+    snapPreviewCleanupRef.current?.()
+    snapPreviewCleanupRef.current = null
+    snapPreviewGateRef.current.unlock()
+  }
 
   const { panels } = useCockpit()
   const waypointDropBlockedRef = useRef(false)
@@ -254,6 +278,12 @@ export default function MapCanvas() {
   const currentStyleRef = useRef<string | null>(null)
   const setStatusRef = useRef(setStatus)
   setStatusRef.current = setStatus
+  const devResizeDiagRef = useRef({
+    viewportTriggers: 0,
+    mapResizeCalls: 0,
+    resizeSuppressedSameBounds: 0,
+    loggedAt: 0,
+  })
 
   const persistViewport = (map: maplibregl.Map) => {
     try {
@@ -367,9 +397,17 @@ export default function MapCanvas() {
         const rw = Math.round(r.width)
         const rh = Math.round(r.height)
         if (rw < 2 || rh < 2) return
-        if (rw === lastRw && rh === lastRh) return
+        if (rw === lastRw && rh === lastRh) {
+          if (import.meta.env.DEV) {
+            devResizeDiagRef.current.resizeSuppressedSameBounds += 1
+          }
+          return
+        }
         lastRw = rw
         lastRh = rh
+        if (import.meta.env.DEV) {
+          devResizeDiagRef.current.mapResizeCalls += 1
+        }
         map.resize()
       } catch {
         /* ignore */
@@ -560,7 +598,7 @@ export default function MapCanvas() {
           void tryApplyInitialOperationalCenter()
         }
         scheduleResize()
-        scheduleResize()
+        syncSnapAssistCapability()
         // Safari fallback: do not wait exclusively for `idle`.
         window.setTimeout(() => {
           if (cancelled) return
@@ -588,6 +626,58 @@ export default function MapCanvas() {
       map.on('idle', onIdle)
       map.on('data', onData)
 
+      // CONTRACT-SENSITIVE (trail snap): capability state must re-evaluate
+      // across `styledata` transitions, zoom changes, post-`idle`,
+      // BFCache restore (`pageshow`), and tab visibility (iOS suspend/resume).
+      // Listener registration is idempotent — `lastSnapCapable` dedup ensures
+      // setState is only called when the capability boolean actually flips.
+      let lastSnapCapable: boolean | null = null
+      const syncSnapAssistCapability = () => {
+        if (cancelled || !map) return
+        const next = isSnapAvailable(map)
+        if (next === lastSnapCapable) return
+        lastSnapCapable = next
+        setTrailSnapAssistCapable(next)
+      }
+      snapAssistSyncRef.current = syncSnapAssistCapability
+      map.on('zoom', syncSnapAssistCapability)
+      map.on('zoomend', syncSnapAssistCapability)
+      map.on('styledata', syncSnapAssistCapability)
+      map.on('idle', syncSnapAssistCapability)
+
+      /**
+       * DEV-ONLY one-shot diagnostic — `window.__hudSnapDiag()` returns the
+       * live capability snapshot (zoom, style id/name, layer counts, rejection
+       * reasons, and final capability). Resets the dedupe key so the next
+       * capability change always logs. Production builds skip this entirely.
+       */
+      if (import.meta.env.DEV && typeof window !== 'undefined') {
+        ;(window as unknown as { __hudSnapDiag?: () => unknown }).__hudSnapDiag = () => {
+          if (!map) return { error: 'no map' }
+          let zoom: number | null = null
+          try { zoom = map.getZoom() } catch { /* ignore */ }
+          let styleLoaded = false
+          try { styleLoaded = Boolean(map.isStyleLoaded?.()) } catch { /* ignore */ }
+          let probe: ReturnType<typeof __probeStyleForTrailLayersForTests> | null = null
+          try { probe = __probeStyleForTrailLayersForTests(map) } catch { /* ignore */ }
+          const available = isSnapAvailable(map)
+          const snap = {
+            available,
+            zoom,
+            minSnapZoom: MIN_SNAP_ZOOM,
+            zoomOK: zoom != null && zoom >= MIN_SNAP_ZOOM,
+            styleLoaded,
+            activeLayer: activeLayerRef.current,
+            currentStyleUrl: currentStyleRef.current,
+            probe,
+          }
+          try { console.info('[hud-snap-diag]', snap) } catch { /* ignore */ }
+          __resetSnapCapabilityDevLogForTests()
+          syncSnapAssistCapability()
+          return snap
+        }
+      }
+
       // Some browsers (notably mobile) can hard-break WebGL; force recovery.
       ;(map as any).on?.('webglcontextlost', () => {
         setStaticFallbackVisible(true)
@@ -597,6 +687,10 @@ export default function MapCanvas() {
 
       const placeWaypoint = (e: any, source: 'click' | 'touch'): boolean => {
         if (!map) return false
+        // CONTRACT-SENSITIVE (trail snap): while a preview is open, ignore
+        // further map taps — operator must use explicit buttons. Never queue
+        // multiple previews; gate ensures no duplicate placement from stacked gestures.
+        if (snapPreviewGateRef.current.isLocked()) return false
         // MapLibre native coordinates only (no unproject / client pixel math).
         const ll = e?.lngLat ?? e?.latlng
         if (!ll || typeof ll.lat !== 'number' || typeof ll.lng !== 'number') return false
@@ -623,12 +717,132 @@ export default function MapCanvas() {
             : type === 'rest'
               ? 'REST'
               : type.toUpperCase()
+        const label = manualLabel || `${autoBase}-${nextIdx}`
+        const makeId = () => `wp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+
+        const commitWaypoint = (wp: Waypoint): boolean => {
+          try {
+            addWaypoint(wp)
+          } catch (err) {
+            console.error('[MapCanvas] waypoint add failed', err)
+            return false
+          }
+          setDebugClickRef.current({ lat: wp.lat, lng: wp.lng })
+          if (!keepArmedRef.current) setPendingType('default')
+          if (clearLabelAfterDropRef.current && manualLabel) setNextWaypointLabel('')
+          return true
+        }
+
+        // CONTRACT-SENSITIVE (trail snap): preview-only path. When OFF or
+        // unavailable, this block is skipped — behavior matches pre-snap
+        // byte-for-byte. Failure to find a candidate must fall through to raw.
+        // Snap failure / gate failure never blocks placement; only explicit
+        // preview confirmation writes snapped coordinates.
+        if (snapToTrailEnabledRef.current && isSnapAvailable(map)) {
+          const cand = findNearestTrailCandidate(map, {
+            lat,
+            lng,
+            radiusMeters: MAX_SNAP_RADIUS_M,
+          })
+          if (cand) {
+            clearTrailSnapPreview()
+            if (!snapPreviewGateRef.current.tryLock()) return false
+
+            const rawEl = document.createElement('div')
+            rawEl.style.cssText =
+              'width:14px;height:14px;border-radius:50%;background:#fb923c;border:2px solid #fff;box-shadow:0 0 6px rgba(0,0,0,0.5)'
+            const snapEl = document.createElement('div')
+            snapEl.style.cssText =
+              'width:14px;height:14px;border-radius:50%;background:#5eead4;border:2px solid #fff;box-shadow:0 0 6px rgba(0,0,0,0.5)'
+
+            const rawMarker = new maplibregl.Marker({ element: rawEl })
+              .setLngLat([lng, lat])
+              .addTo(map)
+            const snapMarker = new maplibregl.Marker({ element: snapEl })
+              .setLngLat([cand.snappedLng, cand.snappedLat])
+              .addTo(map)
+
+            const bar = document.createElement('div')
+            bar.setAttribute('data-trail-snap-preview', '1')
+            bar.style.cssText =
+              'position:absolute;bottom:28px;left:50%;transform:translateX(-50%);z-index:10000;display:flex;gap:10px;align-items:center;padding:10px 12px;border-radius:10px;background:rgba(8,12,18,0.92);border:1px solid rgba(94,234,212,0.45);pointer-events:auto'
+            const mkBtn = (text: string, primary: boolean) => {
+              const b = document.createElement('button')
+              b.type = 'button'
+              b.setAttribute('data-no-drag', '1')
+              b.textContent = text
+              b.style.cssText = [
+                'cursor:pointer',
+                'font-weight:800',
+                'letter-spacing:0.06em',
+                'font-size:11px',
+                'padding:10px 14px',
+                'border-radius:8px',
+                primary
+                  ? 'border:1px solid rgba(94,234,212,0.7);background:rgba(94,234,212,0.15);color:#ccfbf1'
+                  : 'border:1px solid rgba(148,163,184,0.5);background:rgba(30,41,59,0.6);color:#e2e8f0',
+              ].join(';')
+              return b
+            }
+            const btnSnap = mkBtn('Use Snapped', true)
+            const btnRaw = mkBtn('Use Raw', false)
+            bar.appendChild(btnSnap)
+            bar.appendChild(btnRaw)
+            map.getContainer().appendChild(bar)
+
+            const finish = (mode: 'snapped' | 'raw') => {
+              clearTrailSnapPreview()
+              lastDropAtRef.current = Date.now()
+              if (mode === 'snapped') {
+                commitWaypoint({
+                  id: makeId(),
+                  lng: cand.snappedLng,
+                  lat: cand.snappedLat,
+                  rawLat: lat,
+                  rawLng: lng,
+                  source: 'snapped',
+                  snapDistanceMeters: cand.distanceMeters,
+                  label,
+                  type,
+                  createdAt: Date.now(),
+                })
+              } else {
+                commitWaypoint({
+                  id: makeId(),
+                  lng,
+                  lat,
+                  label,
+                  type,
+                  createdAt: Date.now(),
+                })
+              }
+            }
+            btnSnap.addEventListener('click', (ev) => {
+              ev.preventDefault()
+              ev.stopPropagation()
+              finish('snapped')
+            })
+            btnRaw.addEventListener('click', (ev) => {
+              ev.preventDefault()
+              ev.stopPropagation()
+              finish('raw')
+            })
+
+            snapPreviewCleanupRef.current = () => {
+              rawMarker.remove()
+              snapMarker.remove()
+              bar.remove()
+            }
+            return true
+          }
+        }
+
         try {
           addWaypoint({
-            id: `wp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+            id: makeId(),
             lng,
             lat,
-            label: manualLabel || `${autoBase}-${nextIdx}`,
+            label,
             type,
             createdAt: Date.now(),
           })
@@ -708,33 +922,84 @@ export default function MapCanvas() {
 
     const vv = window.visualViewport
     const onVisualViewportChange = () => {
+      if (import.meta.env.DEV) {
+        const diag = devResizeDiagRef.current
+        diag.viewportTriggers += 1
+        const now = Date.now()
+        if (now - diag.loggedAt >= 2500) {
+          const noisyViewport = diag.viewportTriggers >= 18
+          const noisyResize = diag.mapResizeCalls >= 12
+          if (noisyViewport || noisyResize) {
+            console.info('[HUD DEV] viewport-resize-churn', {
+              viewportTriggers: diag.viewportTriggers,
+              mapResizeCalls: diag.mapResizeCalls,
+              resizeSuppressedSameBounds: diag.resizeSuppressedSameBounds,
+              windowSize: { w: window.innerWidth, h: window.innerHeight },
+              visualViewport: {
+                w: Math.round(window.visualViewport?.width ?? window.innerWidth),
+                h: Math.round(window.visualViewport?.height ?? window.innerHeight),
+              },
+            })
+          }
+          diag.viewportTriggers = 0
+          diag.mapResizeCalls = 0
+          diag.resizeSuppressedSameBounds = 0
+          diag.loggedAt = now
+        }
+      }
       scheduleResize()
     }
     vv?.addEventListener('resize', onVisualViewportChange)
     vv?.addEventListener('scroll', onVisualViewportChange)
     window.addEventListener('orientationchange', onVisualViewportChange)
 
+    /**
+     * CONTRACT-SENSITIVE (trail snap, iOS): On tab visibility resume, resize the
+     * WebGL canvas *and* re-run snap capability (single `visibilitychange`
+     * listener — deduped with resize path). BFCache restore uses `pageshow`
+     * below because it does not always pair with `visibilitychange`.
+     */
     const onVisibilityChange = function onVisibilityChange() {
       if (document.hidden) return
       if (document.visibilityState !== 'visible') return
       if (cancelled) return
       if (!map) return
-      try {
-        map.resize()
-      } catch {
-        /* ignore */
-      }
+      scheduleResize()
+      const fn = snapAssistSyncRef.current
+      if (typeof fn === 'function') fn()
     }
     document.addEventListener('visibilitychange', onVisibilityChange)
+
+    /**
+     * CONTRACT-SENSITIVE (trail snap, iOS): BFCache restore (`pageshow` with
+     * `persisted=true`) does NOT re-fire `style.load` / `styledata`, so a
+     * stale `false` set during navigation away can stick.
+     */
+    const onSnapAssistPageshow = () => {
+      const fn = snapAssistSyncRef.current
+      if (typeof fn === 'function') fn()
+    }
+    window.addEventListener('pageshow', onSnapAssistPageshow)
 
     initMap()
 
     return () => {
       setMapReady(false)
+      setTrailSnapAssistCapable(false)
+      clearTrailSnapPreview()
       vv?.removeEventListener('resize', onVisualViewportChange)
       vv?.removeEventListener('scroll', onVisualViewportChange)
       window.removeEventListener('orientationchange', onVisualViewportChange)
       document.removeEventListener('visibilitychange', onVisibilityChange)
+      window.removeEventListener('pageshow', onSnapAssistPageshow)
+      if (import.meta.env.DEV && typeof window !== 'undefined') {
+        try {
+          delete (window as unknown as { __hudSnapDiag?: unknown }).__hudSnapDiag
+        } catch {
+          /* ignore */
+        }
+      }
+      snapAssistSyncRef.current = null
       roRef.current?.disconnect()
       roRef.current = null
       if (resizeRafRef.current != null) {
@@ -773,7 +1038,7 @@ export default function MapCanvas() {
       }
       map = null
     }
-  }, [setMap, addWaypoint, setPendingType, setNextWaypointLabel, selectWaypoint])
+  }, [setMap, addWaypoint, setPendingType, setNextWaypointLabel, selectWaypoint, setTrailSnapAssistCapable])
 
   // React to layer preset changes (streets / topo / outdoor / satellite)
   useEffect(() => {

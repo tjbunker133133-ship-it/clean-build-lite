@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { useMapContext } from '../context/MapContext'
 import { useGPS } from '../hooks/useGPS'
+import { getDeviceProfile } from '../runtime/deviceProfile'
+import { touchFontSm, touchMinTarget } from './tokens'
 
 // ⚠️ LOCKED SYSTEM — Behavior Freeze Active
 // Any change to interaction, layout, display modes, or layers requires explicit approval.
@@ -40,6 +42,10 @@ export default function FollowControl() {
     })
   }, [follow, map, gps.locationState, gps.lat, gps.lng])
 
+  const isMobile = getDeviceProfile().interactionMode === 'mobile'
+  const fontSm = touchFontSm(isMobile)
+  const tapMin = touchMinTarget(isMobile)
+
   return (
     <div
       style={{
@@ -52,13 +58,16 @@ export default function FollowControl() {
       <button
         onClick={() => setFollow((f) => !f)}
         style={{
-          padding: '8px 12px',
+          minHeight: tapMin,
+          minWidth: tapMin,
+          padding: '10px 14px',
           background: follow ? '#00E5FF' : '#222',
           color: follow ? '#000' : '#fff',
           border: 'none',
           borderRadius: 6,
           cursor: 'pointer',
           fontWeight: 'bold',
+          fontSize: fontSm,
         }}
       >
         {follow ? 'FOLLOW ON' : 'FOLLOW OFF'}

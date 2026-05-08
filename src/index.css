@@ -242,14 +242,67 @@ html.platform-android .cockpit-panel button:hover {
   transform: none;
 }
 
+/*
+ * MOBILE FIELD UX — single source of truth lives in `src/hud/tokens.ts`.
+ *
+ *   - 14px text floor      → `touchFontSm(true)` / `HUD_FONT_MIN_MOBILE_PX`
+ *   - 48px tap-target floor → `touchMinTarget(true)` / `HUD_TOUCH_TARGET_MIN_PX`
+ *
+ * Inline panel styles are written against those token helpers; the CSS rules
+ * below act as a defense-in-depth backstop (panels we haven't reached yet,
+ * third-party HudPanel internals, browser-injected form controls, etc.) so
+ * the mobile floor is enforced even when a panel forgets to call the helper.
+ */
 html.platform-mobile .cockpit-panel {
   border-radius: 10px !important;
+  font-size: 14px;
+  line-height: 1.45;
 }
 
+/* Panel stack: minimum vertical rhythm between major blocks */
+html.platform-mobile .cockpit-panel .panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Field HUD: 48×48px minimum touch targets (gloved / one-thumb operation) */
 html.platform-mobile .cockpit-panel button,
-html.platform-mobile .cockpit-panel input,
-html.platform-mobile .cockpit-panel select {
-  min-height: 42px;
+html.platform-mobile .cockpit-panel [role='button'],
+html.platform-mobile .cockpit-panel label.hud-touch-target,
+html.platform-mobile .cockpit-panel select,
+html.platform-mobile .cockpit-panel textarea {
+  min-height: 48px;
+  min-width: 48px;
+  box-sizing: border-box;
+}
+
+html.platform-mobile .cockpit-panel input:not([type='range']):not([type='checkbox']):not([type='radio']) {
+  min-height: 48px;
+  box-sizing: border-box;
+}
+
+html.platform-mobile .cockpit-panel input[type='checkbox'],
+html.platform-mobile .cockpit-panel input[type='radio'] {
+  min-width: 48px;
+  min-height: 48px;
+  box-sizing: border-box;
+}
+
+/* Range sliders: tall hit band without blowing up the thumb graphic */
+html.platform-mobile .cockpit-panel input[type='range'] {
+  min-height: 48px;
+  padding-block: 14px;
+  box-sizing: border-box;
+}
+
+html.platform-mobile .cockpit-panel button.waypoint-clear,
+html.platform-mobile button.waypoint-clear {
+  min-height: 48px !important;
+}
+
+html.platform-mobile .hud-readout {
+  font-size: 14px;
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { GPSData } from '../hooks/useGPS'
+import { getDeviceProfile } from '../runtime/deviceProfile'
+import { touchFontSm, touchFontMd, touchGapMd, touchGapSm, touchMinTarget } from './tokens'
 import {
   getPermissionSnapshot,
   requestCameraPermission,
@@ -18,6 +20,7 @@ import {
   tryOpenIosLocationPrivacySettings,
   tryOpenIosLocationPrivacySettingsAlternate,
 } from '../lib/systemSettingsLinks'
+import { traceAction } from '../runtime/actionTrace'
 
 export type WizardStepId =
   | 'intro'
@@ -55,16 +58,19 @@ type Props = {
   onResetApp: () => void
 }
 
-const btnBase: React.CSSProperties = {
-  minHeight: 42,
-  borderRadius: 8,
-  border: '1px solid rgba(199,206,198,0.35)',
-  background: 'rgba(199,206,198,0.12)',
-  color: '#e2e8e2',
-  fontSize: 11,
-  fontWeight: 700,
-  letterSpacing: '0.08em',
-  cursor: 'pointer',
+function makeBtnBase(isMobile: boolean): React.CSSProperties {
+  return {
+    minHeight: Math.max(touchMinTarget(isMobile), 42),
+    borderRadius: 8,
+    border: '1px solid rgba(199,206,198,0.35)',
+    background: 'rgba(199,206,198,0.12)',
+    color: '#e2e8e2',
+    fontSize: touchFontSm(isMobile),
+    fontWeight: 700,
+    letterSpacing: '0.08em',
+    cursor: 'pointer',
+    padding: '0 14px',
+  }
 }
 
 function hasOrientationRequest(): boolean {
@@ -126,6 +132,14 @@ export default function PermissionWizard({
     [],
   )
 
+  const isMobile = getDeviceProfile().interactionMode === 'mobile'
+  const fontSm = touchFontSm(isMobile)
+  const fontMd = touchFontMd(isMobile)
+  const gapMd = touchGapMd(isMobile)
+  const gapSm = touchGapSm(isMobile)
+  const tapMin = touchMinTarget(isMobile)
+  const btnBase = makeBtnBase(isMobile)
+
   useEffect(() => {
     if (visible) {
       setStepIndex(0)
@@ -149,12 +163,18 @@ export default function PermissionWizard({
 
   const runRequest = useCallback(
     async (fn: () => Promise<PermissionStateLike>, set: (s: PermissionStateLike) => void, id: WizardStepId) => {
-      if (busy) return
+      traceAction(`permission_request:${id}`, 'handler_enter')
+      if (busy) {
+        traceAction(`permission_request:${id}`, 'guard_reject', { reason: 'busy' })
+        return
+      }
       setBusy(true)
       try {
+        traceAction(`permission_request:${id}`, 'async_start')
         set(await fn())
         setAttempted((a) => ({ ...a, [id]: true }))
         refreshSnapshot()
+        traceAction(`permission_request:${id}`, 'async_complete')
       } finally {
         setBusy(false)
       }
@@ -163,9 +183,14 @@ export default function PermissionWizard({
   )
 
   const runAllRemaining = useCallback(async () => {
-    if (busy) return
+    traceAction('permission_request:batch_remaining', 'handler_enter')
+    if (busy) {
+      traceAction('permission_request:batch_remaining', 'guard_reject', { reason: 'busy' })
+      return
+    }
     setBusy(true)
     try {
+      traceAction('permission_request:batch_remaining', 'async_start')
       setGeo(await requestGeolocationPermission())
       setMic(await requestMicrophonePermission())
       setCamera(await requestCameraPermission())
@@ -182,6 +207,7 @@ export default function PermissionWizard({
         motion: true,
       }))
       refreshSnapshot()
+      traceAction('permission_request:batch_remaining', 'async_complete')
     } finally {
       setBusy(false)
     }
@@ -230,11 +256,11 @@ export default function PermissionWizard({
         gap: 10,
       }}
     >
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
-        <div style={{ fontSize: 12, letterSpacing: '0.12em', color: '#7dff8a', fontWeight: 800 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: gapMd }}>
+        <div style={{ fontSize: fontMd, letterSpacing: '0.12em', color: '#7dff8a', fontWeight: 800 }}>
           PERMISSION SETUP
         </div>
-        <div style={{ fontSize: 10, color: '#8a9a8c', letterSpacing: '0.06em' }}>
+        <div style={{ fontSize: fontSm, color: '#8a9a8c', letterSpacing: '0.06em' }}>
           STEP {stepNum} / {total}
         </div>
       </div>
@@ -259,7 +285,7 @@ export default function PermissionWizard({
 
       {stepId === 'intro' && (
         <>
-          <div style={{ fontSize: 11, color: '#b8c4b8', lineHeight: 1.5 }}>
+          <div style={{ fontSize: fontSm, color: '#b8c4b8', lineHeight: 1.5 }}>
             <p style={{ margin: '0 0 8px' }}>{platformHint}</p>
             <p style={{ margin: 0, color: '#9ec4a8' }}>
               This wizard walks through <strong>location</strong>, <strong>microphone</strong>, <strong>camera</strong>,{' '}
@@ -277,8 +303,8 @@ export default function PermissionWizard({
       {stepId === 'location' && (
         <>
           <div>
-            <div style={{ fontSize: 13, fontWeight: 800, color: '#d8e3d8', marginBottom: 6 }}>Location (GPS)</div>
-            <div style={{ fontSize: 11, color: '#9ea7a0', lineHeight: 1.45 }}>
+            <div style={{ fontSize: fontMd, fontWeight: 800, color: '#d8e3d8', marginBottom: 6 }}>Location (GPS)</div>
+            <div style={{ fontSize: fontSm, color: '#9ea7a0', lineHeight: 1.45 }}>
               Needed for coords, weather, elevation, and map follow. Status:{' '}
               <strong style={{ color: geo === 'granted' ? '#7dff8a' : '#ffd166' }}>{stateLabel(geo)}</strong>
               {gps.lat != null && gps.lng != null && (
@@ -287,7 +313,7 @@ export default function PermissionWizard({
             </div>
           </div>
           {(isAppleMobile || isAndroid) && (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: gapSm }}>
               {isAppleMobile && (
                 <>
                   <button
@@ -337,15 +363,15 @@ export default function PermissionWizard({
               )}
             </div>
           )}
-          {linkHint && <div style={{ fontSize: 10, color: '#a8d4b8' }}>{linkHint}</div>}
+          {linkHint && <div style={{ fontSize: fontSm, color: '#a8d4b8' }}>{linkHint}</div>}
           {locationDenied && (
             <div
               style={{
-                padding: 8,
+                padding: 10,
                 borderRadius: 8,
                 border: '1px solid rgba(255,107,135,0.45)',
                 background: 'rgba(40,12,20,0.45)',
-                fontSize: 10,
+                fontSize: fontSm,
                 color: '#ffd0d8',
               }}
             >
@@ -366,8 +392,8 @@ export default function PermissionWizard({
       {stepId === 'microphone' && (
         <>
           <div>
-            <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 6 }}>Microphone</div>
-            <div style={{ fontSize: 11, color: '#9ea7a0' }}>
+            <div style={{ fontSize: fontMd, fontWeight: 800, marginBottom: 6 }}>Microphone</div>
+            <div style={{ fontSize: fontSm, color: '#9ea7a0' }}>
               Voice commands. Status: <strong style={{ color: mic === 'granted' ? '#7dff8a' : '#ffd166' }}>{stateLabel(mic)}</strong>
             </div>
           </div>
@@ -385,8 +411,8 @@ export default function PermissionWizard({
       {stepId === 'camera' && (
         <>
           <div>
-            <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 6 }}>Camera</div>
-            <div style={{ fontSize: 11, color: '#9ea7a0' }}>
+            <div style={{ fontSize: fontMd, fontWeight: 800, marginBottom: 6 }}>Camera</div>
+            <div style={{ fontSize: fontSm, color: '#9ea7a0' }}>
               Optional for future visual features. Status:{' '}
               <strong style={{ color: camera === 'granted' ? '#7dff8a' : '#ffd166' }}>{stateLabel(camera)}</strong>
             </div>
@@ -405,8 +431,8 @@ export default function PermissionWizard({
       {stepId === 'notifications' && (
         <>
           <div>
-            <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 6 }}>Notifications</div>
-            <div style={{ fontSize: 11, color: '#9ea7a0' }}>
+            <div style={{ fontSize: fontMd, fontWeight: 800, marginBottom: 6 }}>Notifications</div>
+            <div style={{ fontSize: fontSm, color: '#9ea7a0' }}>
               Alerts and deadman renewals. Status:{' '}
               <strong style={{ color: notif === 'granted' ? '#7dff8a' : '#ffd166' }}>{stateLabel(notif)}</strong>
             </div>
@@ -425,8 +451,8 @@ export default function PermissionWizard({
       {stepId === 'orientation' && (
         <>
           <div>
-            <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 6 }}>Device orientation</div>
-            <div style={{ fontSize: 11, color: '#9ea7a0' }}>
+            <div style={{ fontSize: fontMd, fontWeight: 800, marginBottom: 6 }}>Device orientation</div>
+            <div style={{ fontSize: fontSm, color: '#9ea7a0' }}>
               Compass-style features on supported devices (often iOS Safari). Status:{' '}
               <strong style={{ color: orient === 'granted' ? '#7dff8a' : '#ffd166' }}>{stateLabel(orient)}</strong>
             </div>
@@ -445,8 +471,8 @@ export default function PermissionWizard({
       {stepId === 'motion' && (
         <>
           <div>
-            <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 6 }}>Motion</div>
-            <div style={{ fontSize: 11, color: '#9ea7a0' }}>
+            <div style={{ fontSize: fontMd, fontWeight: 800, marginBottom: 6 }}>Motion</div>
+            <div style={{ fontSize: fontSm, color: '#9ea7a0' }}>
               Motion sensors where the browser supports a prompt. Status:{' '}
               <strong style={{ color: motion === 'granted' ? '#7dff8a' : '#ffd166' }}>{stateLabel(motion)}</strong>
             </div>
@@ -467,12 +493,12 @@ export default function PermissionWizard({
 
       {stepId === 'done' && (
         <>
-          <div style={{ fontSize: 13, fontWeight: 800 }}>Summary</div>
+          <div style={{ fontSize: fontMd, fontWeight: 800 }}>Summary</div>
           <div
             style={{
               display: 'grid',
-              gap: 4,
-              fontSize: 11,
+              gap: gapSm,
+              fontSize: fontSm,
               fontFamily: 'var(--font-mono, monospace)',
               color: '#b8c1b9',
             }}
@@ -484,12 +510,16 @@ export default function PermissionWizard({
             {steps.includes('orientation') && <div>ORIENT ··· {stateLabel(orient)}</div>}
             {steps.includes('motion') && <div>MOTION ··· {stateLabel(motion)}</div>}
           </div>
-          <button type="button" disabled={busy} onClick={() => void runAllRemaining()} style={{ ...btnBase, fontSize: 10 }}>
+          <button type="button" disabled={busy} onClick={() => void runAllRemaining()} style={{ ...btnBase, fontSize: fontSm }}>
             {busy ? 'REQUESTING…' : 'REQUEST ALL REMAINING (BATCH)'}
           </button>
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => {
+              traceAction('enter_hud', 'handler_enter', { source: 'permission_wizard_done' })
+              traceAction('enter_hud', 'state_result', { overlayVisible: false })
+              onClose()
+            }}
             style={{
               ...btnBase,
               borderColor: 'rgba(125,255,138,0.55)',
@@ -502,8 +532,8 @@ export default function PermissionWizard({
       )}
 
       {stepId !== 'intro' && stepId !== 'done' && (
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button type="button" onClick={goBack} style={{ ...btnBase, flex: '0 0 auto', minHeight: 36 }}>
+        <div style={{ display: 'flex', gap: gapMd, flexWrap: 'wrap' }}>
+          <button type="button" onClick={goBack} style={{ ...btnBase, flex: '0 0 auto', minHeight: tapMin }}>
             BACK
           </button>
           <button
@@ -512,7 +542,7 @@ export default function PermissionWizard({
             style={{
               ...btnBase,
               flex: 1,
-              minHeight: 36,
+              minHeight: tapMin,
               borderColor: 'rgba(125,255,138,0.45)',
               color: '#e4fcea',
             }}
@@ -522,35 +552,35 @@ export default function PermissionWizard({
         </div>
       )}
 
-      <div style={{ borderTop: '1px solid rgba(199,206,198,0.15)', paddingTop: 8, display: 'grid', gap: 6 }}>
+      <div style={{ borderTop: '1px solid rgba(199,206,198,0.15)', paddingTop: gapMd, display: 'grid', gap: gapSm }}>
         <button
           type="button"
           onClick={() => setShowAdvanced((v) => !v)}
-          style={{ ...btnBase, minHeight: 32, fontSize: 10, borderColor: 'rgba(199,206,198,0.2)' }}
+          style={{ ...btnBase, minHeight: tapMin, fontSize: fontSm, borderColor: 'rgba(199,206,198,0.2)' }}
         >
           {showAdvanced ? 'HIDE' : 'SHOW'} ALL PERMISSION BUTTONS (ADVANCED)
         </button>
         {showAdvanced && (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
-            <button type="button" disabled={busy} onClick={() => void runRequest(requestGeolocationPermission, setGeo, 'location')} style={{ ...btnBase, minHeight: 36, fontSize: 10 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: gapSm }}>
+            <button type="button" disabled={busy} onClick={() => void runRequest(requestGeolocationPermission, setGeo, 'location')} style={{ ...btnBase, minHeight: tapMin, fontSize: fontSm }}>
               LOC ({geo})
             </button>
-            <button type="button" disabled={busy} onClick={() => void runRequest(requestMicrophonePermission, setMic, 'microphone')} style={{ ...btnBase, minHeight: 36, fontSize: 10 }}>
+            <button type="button" disabled={busy} onClick={() => void runRequest(requestMicrophonePermission, setMic, 'microphone')} style={{ ...btnBase, minHeight: tapMin, fontSize: fontSm }}>
               MIC ({mic})
             </button>
-            <button type="button" disabled={busy} onClick={() => void runRequest(requestCameraPermission, setCamera, 'camera')} style={{ ...btnBase, minHeight: 36, fontSize: 10 }}>
+            <button type="button" disabled={busy} onClick={() => void runRequest(requestCameraPermission, setCamera, 'camera')} style={{ ...btnBase, minHeight: tapMin, fontSize: fontSm }}>
               CAM ({camera})
             </button>
-            <button type="button" disabled={busy} onClick={() => void runRequest(requestNotificationPermission, setNotif, 'notifications')} style={{ ...btnBase, minHeight: 36, fontSize: 10 }}>
+            <button type="button" disabled={busy} onClick={() => void runRequest(requestNotificationPermission, setNotif, 'notifications')} style={{ ...btnBase, minHeight: tapMin, fontSize: fontSm }}>
               NTFY ({notif})
             </button>
             {steps.includes('orientation') && (
-              <button type="button" disabled={busy} onClick={() => void runRequest(requestOrientationPermission, setOrient, 'orientation')} style={{ ...btnBase, minHeight: 36, fontSize: 10 }}>
+              <button type="button" disabled={busy} onClick={() => void runRequest(requestOrientationPermission, setOrient, 'orientation')} style={{ ...btnBase, minHeight: tapMin, fontSize: fontSm }}>
                 ORI ({orient})
               </button>
             )}
             {steps.includes('motion') && (
-              <button type="button" disabled={busy} onClick={() => void runRequest(requestMotionPermission, setMotion, 'motion')} style={{ ...btnBase, minHeight: 36, fontSize: 10 }}>
+              <button type="button" disabled={busy} onClick={() => void runRequest(requestMotionPermission, setMotion, 'motion')} style={{ ...btnBase, minHeight: tapMin, fontSize: fontSm }}>
                 MOT ({motion})
               </button>
             )}
@@ -559,16 +589,20 @@ export default function PermissionWizard({
         <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
           <button
             type="button"
-            onClick={onResetApp}
+            onClick={() => {
+              traceAction('reset_app', 'handler_enter', { source: 'permission_wizard' })
+              onResetApp()
+            }}
             style={{
               border: 'none',
               background: 'transparent',
               color: '#a8b4ac',
-              fontSize: 10,
+              minHeight: tapMin,
+              fontSize: fontSm,
               letterSpacing: '0.06em',
               textDecoration: 'underline',
               cursor: 'pointer',
-              padding: 0,
+              padding: '0 6px',
             }}
           >
             Reset App
@@ -606,10 +640,10 @@ export default function PermissionWizard({
             gap: 10,
           }}
         >
-          <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: '0.06em', color: '#7dff8a' }}>
+          <div style={{ fontSize: fontMd, fontWeight: 800, letterSpacing: '0.06em', color: '#7dff8a' }}>
             OPEN SETTINGS MANUALLY
           </div>
-          <div style={{ fontSize: 12, color: '#b8c4b8', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
+          <div style={{ fontSize: fontSm, color: '#b8c4b8', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
             {settingsFallback}
           </div>
           <button

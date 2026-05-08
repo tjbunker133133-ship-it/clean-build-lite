@@ -39,6 +39,12 @@ import {
   type HapticsSnapshot,
 } from './haptics'
 import {
+  getInstallMode,
+  installPwaWatcher,
+  setInstallModeListener,
+  type InstallMode,
+} from './pwa'
+import {
   COMMAND_EXECUTION_DEFAULT,
   formatExecLine,
   formatFailLine,
@@ -199,6 +205,11 @@ export interface RuntimeSnapshot {
   wakeWordDetectedAt: number | null
   /** Centralized haptic broker mirror. Owned by `runtime/haptics.ts`. */
   haptics: HapticsSnapshot
+  /** PWA install-mode mirror. Owned by `runtime/pwa.ts`. Tells consumers
+   *  whether the app is running standalone vs. browser-tab and whether
+   *  install is currently eligible. Updated on `beforeinstallprompt`,
+   *  `appinstalled`, and `display-mode: standalone` matchMedia changes. */
+  installMode: InstallMode
 }
 
 export type DeadManTimerState =
@@ -313,6 +324,7 @@ const snapshot: RuntimeSnapshot = {
   },
   wakeWordDetectedAt: null,
   haptics: getHapticsSnapshot(),
+  installMode: getInstallMode(),
 }
 
 function pushRolling<T>(arr: T[], item: T, max: number): T[] {
@@ -1011,6 +1023,30 @@ export function installRuntimeSnapshot(): void {
     snapshot.haptics = s
     notify()
   })
+
+  // Mirror PWA install-mode broker state. The broker owns the
+  // `beforeinstallprompt` capture, `appinstalled`, and matchMedia
+  // listeners; we only mirror state here and surface lifecycle hits
+  // through the existing rolling-event feed.
+  setInstallModeListener((m) => {
+    const prev = snapshot.installMode
+    snapshot.installMode = m
+    if (
+      prev.standalone !== m.standalone ||
+      prev.eligible !== m.eligible ||
+      prev.promptAvailable !== m.promptAvailable
+    ) {
+      recordEvent(
+        'runtime',
+        'INFO',
+        `pwa standalone=${m.standalone} eligible=${m.eligible} prompt=${m.promptAvailable}`,
+        { platform: m.platform },
+      )
+    }
+    notify()
+  })
+  // Wire the watcher AFTER the listener so the initial notify reaches it.
+  installPwaWatcher()
 
   const onOnline = () => {
     snapshot.network = {

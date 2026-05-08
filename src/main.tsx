@@ -14,9 +14,41 @@ import { mountRuntimeDebugOverlay } from './runtime/RuntimeDebugOverlay'
 import { logInfo, logWarn } from './runtime/logger'
 import { getDeviceProfile } from './runtime/deviceProfile'
 import { reportPolicyAttempt } from './runtime/devicePolicy'
+import { classifyBuildFreshness } from './runtime/buildFreshness'
+import { shouldDeferReloadOnControllerChange, shouldFlushDeferredReload } from './runtime/swReloadPolicy'
+import {
+  classifyStaleRuntimeReason,
+  FORCE_UPDATE_META_KEY,
+  mergeForceUpdateMeta,
+  SW_DEFERRED_RELOAD_KEY,
+} from './runtime/forceUpdateMeta'
+import { traceAction } from './runtime/actionTrace'
 
 console.log('[BUILD ID]', __BUILD_ID__)
 console.log('[DEVICE DETECT]', getDeviceEnvironment())
+
+if (import.meta.env.DEV && typeof window !== 'undefined') {
+  try {
+    const lastSeen = sessionStorage.getItem('hud_last_build_id')
+    const runtimeBuild = getRuntimeSnapshot().buildId
+    const freshness = classifyBuildFreshness({
+      currentBuildId: __BUILD_ID__,
+      runtimeBuildId: runtimeBuild,
+      lastSeenBuildId: lastSeen,
+    })
+    if (freshness.staleRuntimeSuspected) {
+      console.info('[HUD DEV] build-freshness', {
+        currentBuildId: __BUILD_ID__,
+        runtimeBuildId: runtimeBuild,
+        lastSeenBuildId: lastSeen,
+        ...freshness,
+      })
+    }
+    sessionStorage.setItem('hud_last_build_id', __BUILD_ID__)
+  } catch {
+    // ignore storage-denied/unsupported environments
+  }
+}
 
 // Install runtime truth beacon as early as possible so any subsequent
 // subsystem (SW registration, voice, permissions) can update it.
@@ -87,6 +119,7 @@ if (import.meta.env.PROD) {
 const DEBUG_OVERLAY_ID = 'hud-build-debug-overlay'
 
 function refreshDebugOverlay() {
+  if (!import.meta.env.DEV) return
   if (typeof document === 'undefined') return
   let el = document.getElementById(DEBUG_OVERLAY_ID)
   if (!el) {
@@ -114,8 +147,16 @@ function refreshDebugOverlay() {
     document.body.appendChild(el)
   }
   const d = getDeviceEnvironment()
+  const snap = getRuntimeSnapshot()
+  const controllerUrl = snap.serviceWorker.controllerScriptUrl ?? navigator.serviceWorker?.controller?.scriptURL ?? null
+  const controllerTag = controllerUrl ? controllerUrl.split('/').pop() ?? controllerUrl : 'none'
+  const swState = snap.serviceWorker.status
   el.textContent = [
     `BUILD ID: ${__BUILD_ID__}`,
+    `origin: ${window.location.origin}`,
+    `sw.status: ${swState}`,
+    `sw.controller: ${controllerTag}`,
+    `sw.scope: ${snap.serviceWorker.scope ?? 'unknown'}`,
     `isMobileEnvironment: ${d.isMobileEnvironment}`,
     `width: ${d.width}`,
     `touch: ${d.isTouchDevice}`,
@@ -126,7 +167,6 @@ if (typeof window !== 'undefined') {
   const w = window as Window & {
     __forceReload?: () => Promise<void>
   }
-
   w.__forceReload = async () => {
     if ('caches' in window) {
       const keys = await caches.keys()
@@ -151,14 +191,54 @@ if (typeof window !== 'undefined') {
         /* ignore */
       }
     }
-    refreshDebugOverlay()
+    if (import.meta.env.DEV) {
+      refreshDebugOverlay()
+    }
   }
 
   window.addEventListener('resize', onViewportChange)
   window.addEventListener('orientationchange', onViewportChange)
 
   if ('serviceWorker' in navigator) {
+    const flushDeferredReloadIfSafe = () => {
+      traceAction('sw_controllerchange_reload', 'handler_enter', { source: 'deferred_flush_check' })
+      const snap = getRuntimeSnapshot()
+      const inFlight =
+        snap.voice.state === 'arming' ||
+        snap.voice.state === 'processing'
+      const recovering =
+        snap.runtimeContinuity.voiceRecoveryState === 'recovering' ||
+        snap.runtimeContinuity.appLifecycleState === 'resuming'
+      const gestureActive = snap.runtimeContinuity.gestureActive
+      let deferred = false
+      try {
+        deferred = sessionStorage.getItem(SW_DEFERRED_RELOAD_KEY) === '1'
+      } catch {
+        deferred = false
+      }
+      if (
+        !shouldFlushDeferredReload({
+          deferredReloadFlag: deferred,
+          inFlightVoiceGesture: inFlight,
+          recovering,
+          gestureActive,
+        })
+      ) {
+        traceAction('sw_controllerchange_reload', 'guard_reject', { reason: 'flush_not_safe_or_not_deferred' })
+        return
+      }
+      try {
+        sessionStorage.removeItem(SW_DEFERRED_RELOAD_KEY)
+      } catch {
+        // ignore
+      }
+      logInfo('SW', 'flushing deferred reload')
+      traceAction('sw_controllerchange_reload', 'reload_requested', { source: 'deferred_flush' })
+      window.location.reload()
+    }
+
     navigator.serviceWorker.addEventListener('controllerchange', () => {
+      traceAction('sw_controllerchange_reload', 'handler_enter', { source: 'controllerchange' })
       const snap = getRuntimeSnapshot()
       const inFlight =
         snap.voice.state === 'arming' ||
@@ -182,26 +262,117 @@ if (typeof window !== 'undefined') {
         'disable',
         'controllerchange-handler',
       )
-      if (inFlight) {
+      const defer = shouldDeferReloadOnControllerChange({
+        inFlightVoiceGesture: inFlight,
+        recovering,
+        gestureActive,
+      })
+      try {
+        const raw = sessionStorage.getItem(FORCE_UPDATE_META_KEY)
+        const parsed = raw ? (JSON.parse(raw) as Record<string, unknown>) : {}
+        sessionStorage.setItem(
+          FORCE_UPDATE_META_KEY,
+          JSON.stringify(
+            mergeForceUpdateMeta(parsed, {
+            controllerChangeObserved: true,
+            controllerChangeAt: Date.now(),
+            controllerUrl: navigator.serviceWorker.controller?.scriptURL ?? null,
+            }),
+          ),
+        )
+      } catch {
+        // ignore storage failures
+      }
+      if (defer && inFlight) {
         logWarn('SW', 'controllerchange deferred — voice gesture in flight')
+        traceAction('sw_controllerchange_reload', 'deferred_reload', { reason: 'voice_gesture_in_flight' })
+        try {
+          sessionStorage.setItem(SW_DEFERRED_RELOAD_KEY, '1')
+        } catch {
+          // ignore
+        }
         return
       }
-      if (recovering || gestureActive) {
+      if (defer && (recovering || gestureActive)) {
         logWarn('SW', 'controllerchange deferred — recovery or gesture active', {
           recovering,
           gestureActive,
         })
+        traceAction('sw_controllerchange_reload', 'deferred_reload', {
+          reason: 'recovering_or_gesture_active',
+          recovering,
+          gestureActive,
+        })
+        try {
+          sessionStorage.setItem(SW_DEFERRED_RELOAD_KEY, '1')
+        } catch {
+          // ignore
+        }
         return
       }
+      try {
+        const raw = sessionStorage.getItem(FORCE_UPDATE_META_KEY)
+        const parsed = raw ? (JSON.parse(raw) as Record<string, unknown>) : {}
+        sessionStorage.setItem(
+          FORCE_UPDATE_META_KEY,
+          JSON.stringify(
+            mergeForceUpdateMeta(parsed, {
+            reloadRequested: true,
+            reloadRequestedAt: Date.now(),
+            }),
+          ),
+        )
+      } catch {
+        // ignore storage failures
+      }
       logInfo('SW', 'controllerchange — reloading')
+      traceAction('sw_controllerchange_reload', 'reload_requested', { source: 'controllerchange' })
       window.location.reload()
     })
+    window.addEventListener('focus', flushDeferredReloadIfSafe)
+    window.addEventListener('pageshow', flushDeferredReloadIfSafe)
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') flushDeferredReloadIfSafe()
+    })
+
+    if (import.meta.env.DEV) {
+      void navigator.serviceWorker.getRegistration().then((reg) => {
+        const waitingPresent = Boolean(reg?.waiting)
+        const controllerUrl = navigator.serviceWorker.controller?.scriptURL ?? null
+        let meta: Record<string, unknown> | null = null
+        try {
+          const raw = sessionStorage.getItem(FORCE_UPDATE_META_KEY)
+          meta = raw ? (JSON.parse(raw) as Record<string, unknown>) : null
+        } catch {
+          meta = null
+        }
+        if (meta) {
+          const staleDiag = classifyStaleRuntimeReason({
+            currentBuildId: __BUILD_ID__,
+            runtimeBuildId: getRuntimeSnapshot().buildId,
+            lastSeenBuildId: sessionStorage.getItem('hud_last_build_id'),
+          })
+          console.info('[HUD DEV] force-update-runtime-state', {
+            currentBuildId: __BUILD_ID__,
+            runtimeBuildId: getRuntimeSnapshot().buildId,
+            controllerUrl,
+            waitingPresent,
+            controllerChangeObserved: Boolean(meta.controllerChangeObserved),
+            reloadRequested: Boolean(meta.reloadRequested),
+            staleRuntimeSuspected: staleDiag.staleRuntimeSuspected,
+            staleRuntimeReason: staleDiag.reason,
+          })
+        }
+      })
+    }
   }
 
-  if (document.body) {
-    refreshDebugOverlay()
-  } else {
-    document.addEventListener('DOMContentLoaded', () => refreshDebugOverlay(), { once: true })
+  if (import.meta.env.DEV) {
+    if (document.body) {
+      refreshDebugOverlay()
+    } else {
+      document.addEventListener('DOMContentLoaded', () => refreshDebugOverlay(), { once: true })
+    }
   }
 
   ;(window as any).__hudRuntimeGuards = true

@@ -11,7 +11,7 @@
  *   - onExpire callback fires once when counter hits 0
  */
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 
 const STORAGE_KEY = 'trailmap_deadman_v1'
 const FULL_MS        = 2 * 60 * 60 * 1000   // 2 hours default
@@ -27,12 +27,52 @@ interface Stored {
   durationMs?: number
 }
 
+/**
+ * Validates persisted `trailmap_deadman_v1` JSON. Malformed storage,
+ * NaN poisoning, or non-finite numbers must NOT reach React state —
+ * they would corrupt remaining-time math and UI.
+ * Exported for Vitest contract locking only.
+ */
+export function parseDeadManStorageRaw(raw: string | null): Stored | null {
+  if (raw == null || raw === '') return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  if (!parsed || typeof parsed !== 'object') return null
+  const o = parsed as Record<string, unknown>
+  const rawExp = o.expiresAt
+  let expiresAt: number
+  if (typeof rawExp === 'number' && Number.isFinite(rawExp)) {
+    expiresAt = rawExp
+  } else if (typeof rawExp === 'string' && rawExp.trim() !== '') {
+    const n = Number(rawExp)
+    if (!Number.isFinite(n)) return null
+    expiresAt = n
+  } else {
+    return null
+  }
+  const extended = typeof o.extended === 'boolean' ? o.extended : false
+  let durationMs: number | undefined
+  if (o.durationMs !== undefined) {
+    if (typeof o.durationMs !== 'number' || !Number.isFinite(o.durationMs)) {
+      durationMs = undefined
+    } else {
+      durationMs = o.durationMs
+    }
+  }
+  return { expiresAt, extended, durationMs }
+}
+
 function load(): Stored | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return null
-    return JSON.parse(raw)
-  } catch { return null }
+    return parseDeadManStorageRaw(raw)
+  } catch {
+    return null
+  }
 }
 function save(d: Stored) {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(d)) } catch {}
@@ -67,10 +107,14 @@ export function useDeadMan(onExpire?: () => void): UseDeadManReturn {
   useEffect(() => { onExpireRef.current = onExpire })
 
   // ── Bootstrap from storage ───────────────────────────────────────────────
+  // CONTRACT-SENSITIVE (long-runtime resilience): `boot()` parses localStorage
+  // and is only meaningful on mount — the values it returns seed `useState`
+  // and are ignored on every subsequent render. Memoizing prevents N×
+  // localStorage reads per second once the tick effect drives re-renders.
   const boot = () => {
     const stored = load()
     const safeDuration =
-      typeof stored?.durationMs === 'number'
+      typeof stored?.durationMs === 'number' && Number.isFinite(stored.durationMs)
         ? Math.max(MIN_DURATION_MIN * 60_000, Math.min(MAX_DURATION_MIN * 60_000, stored.durationMs))
         : FULL_MS
     if (stored && stored.expiresAt > Date.now()) {
@@ -79,7 +123,7 @@ export function useDeadMan(onExpire?: () => void): UseDeadManReturn {
     return { expiresAt: Date.now() + FULL_MS, extended: false, active: false, durationMs: safeDuration }
   }
 
-  const b = boot()
+  const b = useMemo(boot, [])
   const [expiresAt, setExpiresAt] = useState(b.expiresAt)
   const [extended,  setExtended]  = useState(b.extended)
   const [isActive,  setIsActive]  = useState(b.active)

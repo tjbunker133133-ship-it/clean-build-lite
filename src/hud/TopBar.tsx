@@ -3,12 +3,18 @@ import { useCockpit } from '../context/CockpitContext'
 import { useMapContext } from '../context/MapContext'
 import { useGPS } from '../hooks/useGPS'
 import { getDeviceProfile } from '../runtime/deviceProfile'
+import { touchFontSm, touchFontMd, touchGapMd, touchMinTarget } from './tokens'
 
 export default function TopBar() {
   const { prefs } = useCockpit()
   const { map } = useMapContext()
   const gps = useGPS()
   const profile = getDeviceProfile()
+  const isMobile = profile.interactionMode === 'mobile'
+  const fontSm = touchFontSm(isMobile)
+  const fontMd = touchFontMd(isMobile)
+  const gapMd = touchGapMd(isMobile)
+  const tapMin = touchMinTarget(isMobile)
   const isCompact = profile.width < 720 || profile.isCoarsePointer
   const hasFix = gps.lat != null && gps.lng != null
 
@@ -46,10 +52,10 @@ export default function TopBar() {
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: 10,
+          gap: gapMd,
           fontFamily: 'var(--font-ui)',
           fontWeight: 700,
-          fontSize: isCompact ? 11 : 12,
+          fontSize: isCompact ? fontSm : fontMd,
           letterSpacing: '0.18em',
           color: '#c7cec6',
           textShadow: '0 0 10px rgba(199,206,198,0.25)',
@@ -68,7 +74,7 @@ export default function TopBar() {
         {!isCompact && (
           <span
             style={{
-              fontSize: 9,
+              fontSize: fontSm,
               color: '#9ea7a0',
               letterSpacing: '0.12em',
               fontWeight: 400,
@@ -84,9 +90,9 @@ export default function TopBar() {
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: 10,
+          gap: gapMd,
           fontFamily: 'var(--font-ui, system-ui)',
-          fontSize: isCompact ? 9 : 10,
+          fontSize: fontSm,
           color: '#9ea7a0',
           letterSpacing: '0.12em',
           textTransform: 'uppercase',
@@ -97,15 +103,15 @@ export default function TopBar() {
           onClick={locateMe}
           disabled={!hasFix}
           style={{
-            minHeight: isCompact ? 34 : 32,
-            padding: isCompact ? '0 10px' : '0 12px',
+            minHeight: tapMin,
+            padding: isCompact ? '0 12px' : '0 14px',
             borderRadius: 8,
             border: hasFix ? '1px solid rgba(125,255,138,0.65)' : '1px solid rgba(130,138,132,0.45)',
             background: hasFix ? 'rgba(125,255,138,0.14)' : 'rgba(60,66,62,0.35)',
             color: hasFix ? '#b8f7c1' : '#8e9992',
             cursor: hasFix ? 'pointer' : 'not-allowed',
             letterSpacing: '0.08em',
-            fontSize: isCompact ? 9 : 10,
+            fontSize: fontSm,
             fontWeight: 700,
           }}
           title={hasFix ? 'Center map on live GPS' : 'Waiting for GPS fix'}

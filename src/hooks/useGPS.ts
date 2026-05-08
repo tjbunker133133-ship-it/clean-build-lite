@@ -27,6 +27,12 @@ export function deriveGpsUiStatus(g: GPSData): GPSUiStatus {
   return 'idle'
 }
 
+export function shouldRunGpsStaleCheck(input: {
+  visibilityState: DocumentVisibilityState | 'visible' | 'hidden'
+}): boolean {
+  return input.visibilityState === 'visible'
+}
+
 export type GPSData = {
   lat: number | null
   lng: number | null
@@ -100,6 +106,7 @@ let watchFlushRaf: number | null = null
 let watchPending: GeolocationPosition | null = null
 let watchRetryTimer: number | null = null
 let lastGoodFixAt = Date.now()
+let staleRecoveryRaised = false
 /** Throttle localStorage writes from high-frequency watch updates (first fix still persists immediately). */
 let lastGpsPersistAt = 0
 const WATCH_PERSIST_MIN_MS = 12_000
@@ -259,6 +266,7 @@ function flushWatchPending() {
   watchPending = null
   if (!pos) return
   lastGoodFixAt = Date.now()
+  staleRecoveryRaised = false
   updateGpsRecoveryState('healthy')
   setShared({
     lat: pos.coords.latitude,
@@ -291,6 +299,7 @@ function startWatching() {
     (pos) => {
       hasGPSFix = true
       lastGoodFixAt = Date.now()
+      staleRecoveryRaised = false
       updateGpsRecoveryState('healthy')
       if (gpsTelemetryVerboseEnabled()) {
         console.log('[GPS SUCCESS]', {
@@ -425,6 +434,7 @@ export function requestLocation(): Promise<LocationState> {
       (pos) => {
         hasGPSFix = true
         lastGoodFixAt = Date.now()
+        staleRecoveryRaised = false
         updateGpsRecoveryState('healthy')
         setShared({
           lat: pos.coords.latitude,
@@ -516,8 +526,16 @@ export function useGPS(): GPSData & { requestLocation: typeof requestLocation; s
 
   useEffect(() => {
     const t = window.setInterval(() => {
+      if (!shouldRunGpsStaleCheck({ visibilityState: document.visibilityState })) {
+        if (import.meta.env.DEV && gpsLoopDebugEnabled()) {
+          console.info('[HUD DEV] gps-stale-check-suppressed hidden-page')
+        }
+        return
+      }
       if (shared.locationState !== 'granted') return
       if (Date.now() - lastGoodFixAt > 45_000) {
+        if (staleRecoveryRaised) return
+        staleRecoveryRaised = true
         updateGpsRecoveryState('stale')
       }
     }, 5000)

@@ -1,15 +1,20 @@
 /**
- * LOW-POWER HAPTIC BROKER — Phase 1.
+ * LOW-POWER HAPTIC BROKER — Phase 2.
  *
- * Single runtime-owned service for tactile confirmation of three events:
+ * Single runtime-owned service for tactile confirmation of:
  *   - wakeWord         → very short subtle tap (~12ms)
  *   - commandSuccess   → tiny confirmation tap (~18ms)  — verified executions only
  *   - commandFailure   → slightly longer single pulse (~40ms) — critical reasons only
+ *   - criticalAlert    → multi-pulse pattern (~[120,80,120]ms) — corridor breach,
+ *                        SOS arm, rescue protocol, etc. Bypasses mobile-default
+ *                        gating because field-critical alerts MUST fire on any
+ *                        device that supports vibration.
  *
  * Design rules:
  *   - No React state, no intervals, no continuous patterns, no Morse / SOS streams.
- *   - Capability-gated: silent no-op on desktop and on devices without `vibrate`.
+ *   - Capability-gated: silent no-op on devices without `vibrate`.
  *   - Defaults ON for mobile/tablet (interactionMode === 'mobile'), OFF on desktop.
+ *     `criticalAlert` ignores the mode-default gate (still respects `setHapticsEnabled(false)`).
  *   - Throttled with a global minimum spacing window AND a per-event cooldown.
  *   - Pure observability via `runtime/logger.ts` and runtime snapshot mirror.
  *
@@ -23,7 +28,7 @@ import { logInfo, logWarn } from './logger'
 
 // ---------- public types ----------
 
-export type HapticEventKind = 'wakeWord' | 'commandSuccess' | 'commandFailure'
+export type HapticEventKind = 'wakeWord' | 'commandSuccess' | 'commandFailure' | 'criticalAlert'
 
 export type HapticSuppressedReason =
   | 'throttled'
@@ -44,21 +49,33 @@ export interface HapticsSnapshot {
 
 // ---------- pulse contracts ----------
 
-const PULSE_MS: Record<HapticEventKind, number> = {
+/**
+ * Pulse durations / patterns. Single number = one short tap.
+ * Pattern array follows the navigator.vibrate convention
+ * (vibrate, pause, vibrate, ...) and is used for `criticalAlert` only.
+ */
+const PULSE_MS: Record<Exclude<HapticEventKind, 'criticalAlert'>, number> = {
   wakeWord: 12,
   commandSuccess: 18,
   commandFailure: 40,
 }
 
+/** `criticalAlert` uses a multi-pulse pattern so it is unambiguously
+ *  distinguishable from low-noise success/failure taps. */
+const CRITICAL_ALERT_PATTERN: ReadonlyArray<number> = [120, 80, 120]
+
 /** Per-event cooldowns (ms). Prevents re-fire on rapid SR partials or
- *  cascading failures. */
+ *  cascading failures. `criticalAlert` has a long cooldown so corridor
+ *  breach / SOS / rescue events cannot vibrate-spam. */
 const COOLDOWN_MS: Record<HapticEventKind, number> = {
   wakeWord: 600,
   commandSuccess: 250,
   commandFailure: 600,
+  criticalAlert: 1500,
 }
 
-/** Global minimum spacing between any two pulses. */
+/** Global minimum spacing between any two pulses. `criticalAlert` is
+ *  exempt because field-critical alerts must always reach the user. */
 const GLOBAL_MIN_SPACING_MS = 350
 
 // ---------- internal state ----------
@@ -82,6 +99,7 @@ const lastEventAt: Record<HapticEventKind, number | null> = {
   wakeWord: null,
   commandSuccess: null,
   commandFailure: null,
+  criticalAlert: null,
 }
 
 // ---------- listener injection (runtimeSnapshot mirror) ----------
@@ -136,9 +154,15 @@ export function setHapticsEnabled(next: boolean): void {
  * Emit a haptic for a known event. Returns `true` if the pulse was
  * actually dispatched, `false` if suppressed. Always returns synchronously
  * and never throws.
+ *
+ * `criticalAlert` is treated as field-critical: it bypasses the
+ * mobile-default `enabled` gate (still respects an explicit
+ * `setHapticsEnabled(false)`) and bypasses the global min-spacing
+ * window. Per-event cooldown still applies so it cannot vibrate-spam.
  */
 export function emitHaptic(kind: HapticEventKind, context?: string): boolean {
   attemptCount += 1
+  const isCritical = kind === 'criticalAlert'
 
   if (!supported) {
     suppressedCount += 1
@@ -151,7 +175,11 @@ export function emitHaptic(kind: HapticEventKind, context?: string): boolean {
     return false
   }
 
-  if (!enabled) {
+  // Critical alerts ignore the mobile-default `enabled` gate so corridor
+  // breach / SOS / rescue still fires on tablets that fall back to desktop
+  // gating, but explicit user disable via `setHapticsEnabled(false)` is
+  // still honored (treated as opt-out).
+  if (!enabled && !isCritical) {
     suppressedCount += 1
     lastSuppressedReason = 'disabled'
     logInfo('RUNTIME', `[HAPTIC_SUPPRESSED] kind=${kind} reason=disabled${context ? ` ctx=${context}` : ''}`)
@@ -160,7 +188,7 @@ export function emitHaptic(kind: HapticEventKind, context?: string): boolean {
   }
 
   const now = Date.now()
-  if (lastPulseAt != null && now - lastPulseAt < GLOBAL_MIN_SPACING_MS) {
+  if (!isCritical && lastPulseAt != null && now - lastPulseAt < GLOBAL_MIN_SPACING_MS) {
     suppressedCount += 1
     lastSuppressedReason = 'throttled'
     logInfo('RUNTIME', `[HAPTIC_SUPPRESSED] kind=${kind} reason=throttled gap=${now - lastPulseAt}ms`)
@@ -177,9 +205,12 @@ export function emitHaptic(kind: HapticEventKind, context?: string): boolean {
     return false
   }
 
-  const ms = PULSE_MS[kind]
   try {
-    navigator.vibrate(ms)
+    if (isCritical) {
+      navigator.vibrate(CRITICAL_ALERT_PATTERN as number[])
+    } else {
+      navigator.vibrate(PULSE_MS[kind as Exclude<HapticEventKind, 'criticalAlert'>])
+    }
   } catch {
     // best-effort; some browsers throw on certain origins or in iframes
     suppressedCount += 1
@@ -192,7 +223,10 @@ export function emitHaptic(kind: HapticEventKind, context?: string): boolean {
   lastPulseAt = now
   lastEventAt[kind] = now
   lastSuppressedReason = null
-  logInfo('RUNTIME', `[HAPTIC] kind=${kind} ms=${ms}${context ? ` ctx=${context}` : ''}`)
+  const printable = isCritical
+    ? `pattern=[${CRITICAL_ALERT_PATTERN.join(',')}]`
+    : `ms=${PULSE_MS[kind as Exclude<HapticEventKind, 'criticalAlert'>]}`
+  logInfo('RUNTIME', `[HAPTIC] kind=${kind} ${printable}${context ? ` ctx=${context}` : ''}`)
   notifyState()
   return true
 }

@@ -30,6 +30,8 @@ export type LogCategory =
   | 'DEVICE'
   | 'PERMISSION'
   | 'DEADMAN'
+  | 'MOBILE_UI'
+  | 'PWA'
 
 const isDev = (() => {
   try {

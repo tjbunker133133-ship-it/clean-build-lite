@@ -4,6 +4,13 @@ import { useMapContext } from '../context/MapContext'
 import { usePanelData } from '../context/PanelDataContext'
 import { useGPS } from '../hooks/useGPS'
 import { getDeviceProfile } from '../runtime/deviceProfile'
+import {
+  touchFontSm,
+  touchFontMd,
+  touchGapMd,
+  touchGapSm,
+  touchMinTarget,
+} from './tokens'
 
 type FollowZoomMode = 'fixed' | 'dynamic'
 
@@ -38,6 +45,12 @@ export default function LocationPanel() {
   const lastFollowCenterRef = useRef<{ lat: number; lng: number } | null>(null)
 
   const isIOS = useMemo(() => getDeviceProfile().isIOS, [])
+  const isMobile = getDeviceProfile().interactionMode === 'mobile'
+  const fontSm = touchFontSm(isMobile)
+  const fontMd = touchFontMd(isMobile)
+  const gapMd = touchGapMd(isMobile)
+  const gapSm = touchGapSm(isMobile)
+  const tapMin = touchMinTarget(isMobile)
 
   useEffect(() => {
     if (!followLock) return
@@ -98,10 +111,10 @@ export default function LocationPanel() {
             : 'OFF'
 
   const btnBase: CSSProperties = {
-    minHeight: 44,
+    minHeight: Math.max(tapMin, 44),
     borderRadius: 8,
     border: '1px solid rgba(199,206,198,0.35)',
-    fontSize: 11,
+    fontSize: fontSm,
     letterSpacing: '0.08em',
     fontWeight: 700,
     cursor: 'pointer',
@@ -115,10 +128,10 @@ export default function LocationPanel() {
       initialWidth={300}
       minHeight={170}
     >
-      <div style={{ display: 'grid', gap: 10 }}>
+      <div style={{ display: 'grid', gap: Math.max(gapMd, 10) }}>
         {gps.locationState === 'idle' && (
-          <div style={{ display: 'grid', gap: 8 }}>
-            <p style={{ margin: 0, fontSize: 12, color: '#9fb0c7', lineHeight: 1.45 }}>
+          <div style={{ display: 'grid', gap: gapMd }}>
+            <p style={{ margin: 0, fontSize: fontMd, color: '#9fb0c7', lineHeight: 1.45 }}>
               Location is off. Enable it when you need GPS for weather, follow mode, and coordinates. Nothing is requested
               until you tap below.
             </p>
@@ -139,41 +152,41 @@ export default function LocationPanel() {
         )}
 
         {gps.locationState === 'requesting' && (
-          <p style={{ margin: 0, fontSize: 12, color: '#c7cec6' }}>Waiting for browser location prompt…</p>
+          <p style={{ margin: 0, fontSize: fontMd, color: '#c7cec6' }}>Waiting for browser location prompt…</p>
         )}
 
         {(gps.locationState === 'denied' || gps.locationState === 'error') && (
           <div
             style={{
               display: 'grid',
-              gap: 10,
+              gap: Math.max(gapMd, 10),
               padding: '10px 12px',
               borderRadius: 8,
               border: '1px solid rgba(255,107,135,0.45)',
               background: 'rgba(40,12,20,0.4)',
             }}
           >
-            <p style={{ margin: 0, fontSize: 12, color: '#ffd0d8' }}>Location access is blocked or failed.</p>
+            <p style={{ margin: 0, fontSize: fontMd, color: '#ffd0d8' }}>Location access is blocked or failed.</p>
             {isIOS && gps.locationState === 'denied' ? (
-              <div style={{ fontSize: 11, color: '#e2c2c8', lineHeight: 1.5 }}>
+              <div style={{ fontSize: fontSm, color: '#e2c2c8', lineHeight: 1.5 }}>
                 <p style={{ margin: '0 0 6px' }}>On iPhone / iPad (Safari):</p>
                 <ol style={{ margin: 0, paddingLeft: 18 }}>
                   <li>Open Settings</li>
                   <li>Go to Safari</li>
                   <li>Enable Location Access for this site (or set to Ask / Allow)</li>
                 </ol>
-                <p style={{ margin: '8px 0 0', fontSize: 10, color: '#b89da3' }}>
+                <p style={{ margin: '8px 0 0', fontSize: touchFontSm(isMobile), color: '#b89da3' }}>
                   You can also try: Settings → Privacy & Security → Location Services → Safari Websites.
                 </p>
               </div>
             ) : (
-              <p style={{ margin: 0, fontSize: 11, color: '#e2c2c8', lineHeight: 1.45 }}>
+              <p style={{ margin: 0, fontSize: fontSm, color: '#e2c2c8', lineHeight: 1.45 }}>
                 To enable: use your browser site settings and allow location for this app. On desktop: check the lock icon
                 in the address bar.
               </p>
             )}
             {gps.error && (
-              <p style={{ margin: 0, fontSize: 10, color: '#b89da3', fontFamily: 'var(--font-mono, monospace)' }}>
+              <p style={{ margin: 0, fontSize: fontSm, color: '#b89da3', fontFamily: 'var(--font-mono, monospace)' }}>
                 {gps.error}
               </p>
             )}
@@ -199,7 +212,7 @@ export default function LocationPanel() {
             padding: '8px 10px',
             background: 'rgba(10,12,13,0.55)',
             fontFamily: 'var(--font-mono, monospace)',
-            fontSize: 12,
+            fontSize: fontMd,
             color: '#c7cec6',
             lineHeight: 1.5,
           }}
@@ -218,11 +231,13 @@ export default function LocationPanel() {
                   ? (userLocation?.lng ?? gps.lng)!.toFixed(6)
                   : '—'}
               </div>
-              <div style={{ fontSize: 10, color: 'var(--cockpit-panel-subtle)' }}>
+              <div style={{ fontSize: fontSm, color: 'var(--cockpit-panel-subtle)' }}>
                 {gpsStatusText} · ACC {gps.accuracy != null ? `${Math.round(gps.accuracy)} m` : '—'}
               </div>
               {gps.elevation != null && Number.isFinite(gps.elevation) && (
-                <div className="hud-readout">Elevation: {Math.round(gps.elevation)} m</div>
+                <div className="hud-readout">
+                  Elevation: {Math.round(gps.elevation * 3.28084).toLocaleString('en-US')} ft
+                </div>
               )}
             </>
           ) : (
@@ -240,7 +255,7 @@ export default function LocationPanel() {
             onClick={() => void requestLocation()}
             style={{
               ...btnBase,
-              minHeight: 36,
+              minHeight: tapMin,
               background: 'rgba(10,12,13,0.8)',
               color: 'var(--cockpit-panel-subtle)',
             }}
@@ -249,7 +264,7 @@ export default function LocationPanel() {
           </button>
         )}
 
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: gapMd }}>
           <button
             type="button"
             data-no-drag
@@ -257,13 +272,13 @@ export default function LocationPanel() {
             disabled={!hasFix}
             style={{
               flex: 1,
-              minHeight: 38,
+              minHeight: tapMin,
               borderRadius: 8,
               border: '1px solid rgba(199,206,198,0.35)',
               background: hasFix ? 'rgba(199,206,198,0.14)' : 'rgba(70,75,73,0.22)',
               color: hasFix ? '#d6ddd6' : '#7d8680',
               cursor: hasFix ? 'pointer' : 'not-allowed',
-              fontSize: 11,
+              fontSize: fontSm,
               letterSpacing: '0.08em',
             }}
           >
@@ -276,7 +291,7 @@ export default function LocationPanel() {
             disabled={!hasFix}
             style={{
               flex: 1,
-              minHeight: 38,
+              minHeight: tapMin,
               borderRadius: 8,
               border: followLock
                 ? '1px solid rgba(125,255,138,0.7)'
@@ -284,7 +299,7 @@ export default function LocationPanel() {
               background: followLock ? 'rgba(125,255,138,0.16)' : 'rgba(10,12,13,0.8)',
               color: followLock ? '#7dff8a' : 'var(--cockpit-panel-subtle)',
               cursor: hasFix ? 'pointer' : 'not-allowed',
-              fontSize: 11,
+              fontSize: fontSm,
               letterSpacing: '0.08em',
               boxShadow: followLock ? '0 0 12px rgba(125,255,138,0.3)' : 'none',
               opacity: hasFix ? 1 : 0.5,
@@ -298,13 +313,13 @@ export default function LocationPanel() {
           data-no-drag
           onClick={() => setZoomMode((m) => (m === 'fixed' ? 'dynamic' : 'fixed'))}
           style={{
-            minHeight: 34,
+            minHeight: tapMin,
             borderRadius: 8,
             border: '1px solid rgba(199,206,198,0.3)',
             background: zoomMode === 'dynamic' ? 'rgba(199,206,198,0.14)' : 'rgba(10,12,13,0.8)',
             color: zoomMode === 'dynamic' ? '#d6ddd6' : 'var(--cockpit-panel-subtle)',
             cursor: 'pointer',
-            fontSize: 10,
+            fontSize: fontSm,
             letterSpacing: '0.08em',
           }}
         >

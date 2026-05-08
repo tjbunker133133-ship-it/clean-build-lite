@@ -2,6 +2,8 @@ import HudPanel from './HudPanel'
 import { useAppContext } from '../context/AppContext'
 import { useMapContext } from '../context/MapContext'
 import type { LayerType } from '../types'
+import { getDeviceProfile } from '../runtime/deviceProfile'
+import { touchFontSm, touchGapSm, touchMinTarget } from './tokens'
 
 const LAYERS: { id: LayerType; label: string }[] = [
   { id: 'streets', label: 'Streets' },
@@ -15,6 +17,10 @@ export default function LayerPanel() {
   const { activeLayer } = state
   const { status: mapStatus } = useMapContext()
   const mapBusy = mapStatus === 'initial'
+  const isMobile = getDeviceProfile().interactionMode === 'mobile'
+  const fontSm = touchFontSm(isMobile)
+  const gapSm = touchGapSm(isMobile)
+  const tapMin = touchMinTarget(isMobile)
 
   return (
     <HudPanel
@@ -31,7 +37,7 @@ export default function LayerPanel() {
         style={{
           display: 'flex',
           flexDirection: 'column',
-          gap: 6,
+          gap: gapSm,
           opacity: mapBusy ? 0.92 : 1,
           transition: 'opacity 160ms ease',
         }}
@@ -53,7 +59,7 @@ export default function LayerPanel() {
               onClick={() => setLayer(layer.id)}
               style={{
                 padding: '8px 10px',
-                fontSize: 11,
+                fontSize: fontSm,
                 cursor: 'pointer',
                 borderRadius: 4,
                 border: active
@@ -64,7 +70,7 @@ export default function LayerPanel() {
                 fontFamily: 'var(--font-mono)',
                 letterSpacing: '0.05em',
                 textAlign: 'left',
-                minHeight: 40,
+                minHeight: tapMin,
               }}
             >
               {layer.label.toUpperCase()}

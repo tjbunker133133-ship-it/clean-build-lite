@@ -13,6 +13,16 @@ import {
 } from '../runtime/runtimeSnapshot'
 import { enforcePolicyAttempt, reportPolicyAttempt } from '../runtime/devicePolicy'
 import { validateVoiceRegistry, type VoiceDirectoryItem } from '../runtime/voiceRegistry'
+import { logInfo, logWarn } from '../runtime/logger'
+import { getDeviceProfile } from '../runtime/deviceProfile'
+import { shouldAttemptVoiceRecovery, shouldTreatOnEndAsLifecycleSuspend } from '../runtime/voiceRecovery'
+import { traceAction } from '../runtime/actionTrace'
+import {
+  touchFontSm as touchFontSmFn,
+  touchGapMd as touchGapMdFn,
+  touchGapSm as touchGapSmFn,
+  touchMinTarget as touchMinTargetFn,
+} from './tokens'
 
 type VoiceState = 'sleeping' | 'listening' | 'processing' | 'success' | 'failure'
 
@@ -21,6 +31,23 @@ type VoiceState = 'sleeping' | 'listening' | 'processing' | 'success' | 'failure
 // This constant is the single source of truth for the wake word and is the
 // only string that can authorize voice command execution.
 const WAKE_WORD = 'hud' as const
+
+// Cross-platform utterance continuity window: after a bare "HUD"
+// finalization the runtime keeps a one-shot 2500ms window during which a
+// short, simple follow-up transcript ("weather", "center map") is
+// treated as if it had "HUD " prefixed. This is NOT conversational mode
+// — the window is one-shot, deterministic, auto-clears on consume /
+// timeout / disarm / SR teardown, and does NOT bypass DEPE wake-word
+// policy (the gate is reported 'enable' both for direct wake-word
+// utterances and for continuation consumption).
+const WAKE_CONTINUATION_MS = 2500
+// Final-transcript sanity bounds. Reject empty/whitespace/single-char
+// finals (common Android Chrome partial-flush garbage) and refuse to
+// consume the continuation window with long, multi-clause speech that
+// almost certainly is not a HUD command.
+const SANITY_MIN_FINAL_LEN = 2
+const SANITY_MAX_CONTINUATION_WORDS = 6
+const SANITY_MAX_CONTINUATION_CHARS = 60
 
 function speak(text: string) {
   if (!('speechSynthesis' in window)) return
@@ -103,6 +130,12 @@ const QUICK_COMMAND_GROUPS: Array<{
 
 export default function VoicePanel() {
   const { commands, dispatch } = useHudCommands()
+  const isMobileHud = getDeviceProfile().interactionMode === 'mobile'
+  const touchGapMd = touchGapMdFn(isMobileHud)
+  const touchGapSm = touchGapSmFn(isMobileHud)
+  const tapMin = touchMinTargetFn(isMobileHud)
+  const btnMin = (px: number) => Math.max(tapMin, px)
+  const labelPx = (px: number) => Math.max(touchFontSmFn(isMobileHud), px)
 
   // Flatten the voice directory definition into the validator's expected
   // shape. This lets us answer "are any directory items missing from the
@@ -131,7 +164,12 @@ export default function VoicePanel() {
   const [armed, setArmed] = useState(false)
   const [typed, setTyped] = useState('')
   const [lastHeard, setLastHeard] = useState('')
-  const [statusText, setStatusText] = useState('🎤 HUD (tap to wake)')
+  // Single SR ownership: the mic button is the ONE control for the SR
+  // lifecycle. Label clarifies "tap to start" rather than "tap to wake"
+  // so it does not imply a second tap-to-wake mode that competes with
+  // continuous mode. The button toggles the same `armed` flag whether
+  // continuous mode is on or off.
+  const [statusText, setStatusText] = useState('🎤 HUD (tap to start)')
   const [recoveryNonce, setRecoveryNonce] = useState(0)
   const recognitionRef = useRef<any>(null)
   const armedRef = useRef(false)
@@ -139,7 +177,17 @@ export default function VoicePanel() {
   const suspendedByLifecycleRef = useRef(false)
   const restartAttemptsRef = useRef(0)
   const restartTimerRef = useRef<number | null>(null)
+  const restartStormRef = useRef<{ windowStart: number; count: number; lastLogAt: number }>({
+    windowStart: 0,
+    count: 0,
+    lastLogAt: 0,
+  })
+  const uiResetTimerRef = useRef<number | null>(null)
   const lastRecognitionAtRef = useRef<number | null>(null)
+  /** Utterance continuity window expiry (`performance.now()` epoch). null
+   *  when no bare-wake-word ack is pending. Single-shot: cleared on
+   *  consume, timeout, disarm, or SR teardown. */
+  const pendingWakeUntilRef = useRef<number | null>(null)
   armedRef.current = armed
   const parseAndRunRef = useRef<(text: string) => Promise<void>>(async () => {})
   const supportsRec =
@@ -157,6 +205,9 @@ export default function VoicePanel() {
     updateVoiceArmed(armed)
     if (!armed) {
       restartAttemptsRef.current = 0
+      // Disarm clears any pending utterance-continuity window so a fresh
+      // arm cycle never inherits a stale bare-wake state.
+      pendingWakeUntilRef.current = null
       if (restartTimerRef.current != null) {
         window.clearTimeout(restartTimerRef.current)
         restartTimerRef.current = null
@@ -191,8 +242,27 @@ export default function VoicePanel() {
   const report = (text: string, ok = true) => {
     setStatusText(text)
     setVoiceState(ok ? 'success' : 'failure')
-    speak(text)
-    window.setTimeout(() => setVoiceState(armedRef.current ? 'listening' : 'sleeping'), 650)
+    // Voice continuity hardening: suppress non-critical TTS while SR is
+    // actively listening. Synthesis pollutes the open mic and triggers
+    // spurious partials that fragment the user's next utterance.
+    // Critical failures (`ok === false`) still speak so the operator
+    // hears errors regardless of recognizer state.
+    const shouldSpeak = !armedRef.current || !ok
+    if (shouldSpeak) {
+      speak(text)
+    } else {
+      logInfo(
+        'VOICE',
+        `tts.suppressed-during-active-listening text="${text.slice(0, 40)}"`,
+      )
+    }
+    if (uiResetTimerRef.current != null) {
+      window.clearTimeout(uiResetTimerRef.current)
+    }
+    uiResetTimerRef.current = window.setTimeout(() => {
+      uiResetTimerRef.current = null
+      setVoiceState(armedRef.current ? 'listening' : 'sleeping')
+    }, 650)
   }
 
   /**
@@ -234,33 +304,96 @@ export default function VoicePanel() {
     const norm = normalize(text)
     if (!norm) return
 
+    // Utterance continuity window: a recent bare "HUD" finalization left
+    // a one-shot 2500ms continuation window open. A short, simple
+    // follow-up transcript ("weather", "center map") that would normally
+    // fail the wake-word gate is treated as if it had been spoken with
+    // "HUD " prefix. Sanity bounds (≤6 words, ≤60 chars) prevent the
+    // window from being consumed by long unrelated speech. The window is
+    // one-shot — consumption clears it.
+    let consumedContinuation = false
+    if (pendingWakeUntilRef.current != null) {
+      if (performance.now() <= pendingWakeUntilRef.current) {
+        const directlyHasWake =
+          norm === WAKE_WORD || norm.startsWith(`${WAKE_WORD} `)
+        if (!directlyHasWake) {
+          const wordCount = norm.split(/\s+/).length
+          const sane =
+            norm.length <= SANITY_MAX_CONTINUATION_CHARS &&
+            wordCount <= SANITY_MAX_CONTINUATION_WORDS
+          if (sane) {
+            consumedContinuation = true
+            pendingWakeUntilRef.current = null
+            logInfo('VOICE', `wake-window.consume phrase="${norm.slice(0, 60)}"`)
+          }
+        }
+      } else {
+        pendingWakeUntilRef.current = null
+        logInfo('VOICE', 'wake-window.expire')
+      }
+    }
+
+    const effective = consumedContinuation ? `${WAKE_WORD} ${norm}` : norm
+
     // SYSTEM RULE: HUD is the ONLY valid activation token.
     // No aliases, no fuzzy matching, no fallback activation allowed.
     //
     // The transcript MUST start with the literal token "hud" (case-insensitive
     // via `normalize`). The check is exact-equality OR exact-prefix `"hud "`.
-    // Any other input is silently ignored — no error UI, no fallback modal,
-    // no continuous-mode bypass, no rolling wake window. This gate is the only
-    // entry path for free-text transcripts (voice + typed-input fallback).
-    if (norm !== WAKE_WORD && !norm.startsWith(`${WAKE_WORD} `)) {
-      // Critical DEPE guard: wake-word bypass attempt detected and blocked.
+    // The continuation-window branch above synthesizes a leading "hud "
+    // when (and only when) a bare wake-word was recently confirmed AND
+    // the follow-up phrase passes sanity bounds — wake-word policy is
+    // never bypassed for arbitrary utterances.
+    if (effective !== WAKE_WORD && !effective.startsWith(`${WAKE_WORD} `)) {
       reportPolicyAttempt('voice.wakeWordRequired', 'disable', 'parseAndRun.missing-wake-word')
+      traceAction('wake_word_activation', 'guard_reject', { reason: 'missing_wake_word' })
       return
+    }
+
+    // Direct wake-word utterance invalidates any prior bare-wake window
+    // (the user re-asserted intent explicitly).
+    if (!consumedContinuation) {
+      pendingWakeUntilRef.current = null
     }
 
     // DEPE: wake-word gate is REQUIRED in every mode. We report 'enable' when
     // the gate is honored (we just passed it). A future code path that bypassed
     // this check would never call this report, and the engine's required-vs-
     // active periodic validator would catch the silent absence.
-    reportPolicyAttempt('voice.wakeWordRequired', 'enable', 'parseAndRun.gate-passed')
+    reportPolicyAttempt(
+      'voice.wakeWordRequired',
+      'enable',
+      consumedContinuation
+        ? 'parseAndRun.continuation-window'
+        : 'parseAndRun.gate-passed',
+    )
+    logInfo('VOICE', `wake-word.detected phrase="${effective.slice(0, 80)}"`)
+    traceAction('wake_word_activation', 'state_result', { detected: true, viaContinuation: consumedContinuation })
     pulseWake()
     setVoiceState('listening')
     updateVoiceState('processing')
     const commandsPart =
-      norm === WAKE_WORD ? '' : norm.slice(WAKE_WORD.length + 1).trim()
+      effective === WAKE_WORD ? '' : effective.slice(WAKE_WORD.length + 1).trim()
     const parts = commandsPart.split(/\bthen\b/).map((s) => s.trim()).filter(Boolean)
     if (parts.length === 0) {
-      report('Ready. Say HUD plus command.', true)
+      // Bare wake-word: visual-only acknowledgement. NO TTS — synthesis
+      // would contaminate the open mic and break the user's natural
+      // follow-up cadence. Visual + chime (via pulseWake) and runtime
+      // pulse already confirmed the wake on this turn. We open the
+      // utterance continuity window so that "HUD" + short pause +
+      // "weather" is interpreted as one intent.
+      setStatusText('🎤 HUD ready')
+      setVoiceState('success')
+      pendingWakeUntilRef.current = performance.now() + WAKE_CONTINUATION_MS
+      logInfo('VOICE', `wake-window.open ms=${WAKE_CONTINUATION_MS}`)
+      logInfo('VOICE', 'wake-word.only-detected')
+      if (uiResetTimerRef.current != null) {
+        window.clearTimeout(uiResetTimerRef.current)
+      }
+      uiResetTimerRef.current = window.setTimeout(() => {
+        uiResetTimerRef.current = null
+        setVoiceState(armedRef.current ? 'listening' : 'sleeping')
+      }, 650)
       updateVoiceState('listening')
       return
     }
@@ -277,7 +410,12 @@ export default function VoicePanel() {
   useEffect(() => {
     if (!armed || !supportsRec) return
     if (recognitionRef.current) {
+      // Single SR ownership invariant: a previous recognizer is still attached.
+      // We refuse to construct a second instance — the existing one keeps
+      // ownership of the SR lifecycle. DEPE surfaces this as a violation
+      // because two start() owners would create overlapping restart loops.
       reportPolicyAttempt('voice.backgroundListenerWhenDisarmed', 'enable', 'duplicate-recognition-instance')
+      logWarn('VOICE', 'duplicate-ownership-prevented existing recognizer retained')
       return
     }
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
@@ -285,13 +423,35 @@ export default function VoicePanel() {
     recognitionRef.current = rec
     rec.lang = 'en-US'
     rec.continuous = true
-    rec.interimResults = false
+    // Android Chrome reliability win: interim results allow SR to surface
+    // partial transcripts in ~200-500ms instead of the ~1500ms end-of-
+    // utterance pause. Dispatch is still strictly gated on `isFinal`
+    // below so partial commands cannot misfire.
+    rec.interimResults = true
 
     let startedOnce = false
     const MAX_RESTART_ATTEMPTS = 6
-    const BASE_BACKOFF_MS = 400
+    // Faster first-restart: Android Chrome auto-ends SR after ~5s of silence
+    // even when continuous=true. Treat this as benign rotation, not error,
+    // so the recovery gap is barely noticeable.
+    const BASE_BACKOFF_MS = 250
     const MAX_BACKOFF_MS = 8000
     let watchdog: number | null = null
+
+    /** Detach all handlers from a recognizer instance so any deferred
+     *  events the browser has queued cannot mutate component state after
+     *  we've handed ownership back. Used by both lifecycle suspension and
+     *  cleanup paths. */
+    const detachHandlers = (target: any) => {
+      try {
+        target.onstart = null
+        target.onresult = null
+        target.onerror = null
+        target.onend = null
+      } catch {
+        // ignore
+      }
+    }
 
     const armWatchdog = () => {
       if (watchdog != null) window.clearTimeout(watchdog)
@@ -302,6 +462,7 @@ export default function VoicePanel() {
           // DEPE: silent dead-state is forbidden — surface as a violation so
           // it shows up in the overlay and console.
           reportPolicyAttempt('voice.silentDeadState', 'enable', 'watchdog-timeout-1500ms')
+          logWarn('VOICE', 'watchdog dead-state timeout=1500ms onstart never fired')
           setVoiceState('failure')
           setStatusText('🎤 Voice unresponsive — tap to retry')
           setArmed(false)
@@ -321,6 +482,7 @@ export default function VoicePanel() {
       setVoiceState('listening')
       setStatusText('🎤 HUD listening')
       updateVoiceState('listening')
+      logInfo('VOICE', 'sr.onstart listening')
       if (suspendedByLifecycleRef.current) {
         updateVoiceRecoveryState('resumed')
         suspendedByLifecycleRef.current = false
@@ -329,13 +491,43 @@ export default function VoicePanel() {
       }
     }
     rec.onresult = (e: any) => {
-      const transcript = Array.from(e.results)
-        .slice(e.resultIndex)
-        .map((r: any) => r[0]?.transcript ?? '')
-        .join(' ')
-      lastRecognitionAtRef.current = Date.now()
-      updateVoiceMeta({ lastTranscript: transcript.slice(0, 200), lastRecognitionAt: lastRecognitionAtRef.current })
-      void parseAndRunRef.current(transcript)
+      // Partition the new chunk into final vs interim text so we can:
+      //   1. dispatch only on final (no partial-command misfires)
+      //   2. reset restart-attempt counter on any progress (interim
+      //      counts as proof the recognizer is alive — we should not
+      //      escalate backoff after a real chunk arrived)
+      let finalText = ''
+      let interimText = ''
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const result = e.results[i]
+        const txt = result?.[0]?.transcript ?? ''
+        if (result?.isFinal) finalText += ` ${txt}`
+        else interimText += ` ${txt}`
+      }
+      finalText = finalText.trim()
+      interimText = interimText.trim()
+      const anyProgress = finalText.length > 0 || interimText.length > 0
+      if (anyProgress) {
+        lastRecognitionAtRef.current = Date.now()
+        // Treat progress as health: clear the restart-attempt counter so a
+        // subsequent natural onend (silence rotation) starts fresh on the
+        // backoff curve instead of escalating.
+        if (restartAttemptsRef.current !== 0) {
+          restartAttemptsRef.current = 0
+        }
+        updateVoiceMeta({
+          lastTranscript: (finalText || interimText).slice(0, 200),
+          lastRecognitionAt: lastRecognitionAtRef.current,
+          restartAttempts: 0,
+        })
+      }
+      if (finalText.length >= SANITY_MIN_FINAL_LEN) {
+        // Final-transcript sanity filter is enforced inside the result
+        // handler so SR-emitted single-char / whitespace finalizations
+        // (common Android Chrome partial-flush garbage) cannot consume
+        // the continuation window or trigger the parser.
+        void parseAndRunRef.current(finalText)
+      }
     }
     // Safety: any recognition error (incl. permission denial mid-session)
     // immediately disarms and stops listening — no auto-restart loop.
@@ -349,15 +541,43 @@ export default function VoicePanel() {
       updateVoiceState(denied ? 'blocked' : 'degraded', { lastError: code })
       if (denied) updatePermission('microphone', 'denied')
       updateVoiceRecoveryState('failed')
+      logWarn('VOICE', `sr.onerror code=${code}${denied ? ' permission-denied' : ''}`)
     }
     rec.onend = () => {
       if (!armedRef.current) {
         updateVoiceState('inactive_clean')
         updateVoiceRecoveryState('idle')
+        logInfo('VOICE', 'sr.onend disarmed-clean')
+        return
+      }
+      if (
+        shouldTreatOnEndAsLifecycleSuspend({
+          armed: armedRef.current,
+          visibilityState: document.visibilityState,
+        })
+      ) {
+        suspendedByLifecycleRef.current = true
+        updateVoiceRecoveryState('suspended')
+        updateVoiceState('inactive_clean', { lastError: 'interrupted: hidden-onend' })
+        logInfo('VOICE', 'sr.onend hidden-suspend')
         return
       }
       // Bounded recovery strategy: exponential backoff, capped attempts.
       restartAttemptsRef.current += 1
+      if (import.meta.env.DEV) {
+        const now = Date.now()
+        const storm = restartStormRef.current
+        if (storm.windowStart === 0 || now - storm.windowStart > 30_000) {
+          storm.windowStart = now
+          storm.count = 1
+        } else {
+          storm.count += 1
+          if (storm.count >= 5 && now - storm.lastLogAt > 15_000) {
+            storm.lastLogAt = now
+            logWarn('VOICE', `restart-storm suspected attemptsIn30s=${storm.count}`)
+          }
+        }
+      }
       updateVoiceMeta({ restartAttempts: restartAttemptsRef.current, lastInterruptionReason: 'onend' })
       updateVoiceRecoveryState('recovering')
       updateVoiceState('recovering')
@@ -368,6 +588,7 @@ export default function VoicePanel() {
         setStatusText('🎤 Voice degraded — tap to re-arm')
         setArmed(false)
         updateVoiceRecoveryState('failed')
+        logWarn('VOICE', `sr.onend recovery-exhausted attempts=${restartAttemptsRef.current}`)
         return
       }
 
@@ -376,6 +597,7 @@ export default function VoicePanel() {
         window.clearTimeout(restartTimerRef.current)
         restartTimerRef.current = null
       }
+      logInfo('VOICE', `sr.onend restart attempt=${restartAttemptsRef.current} backoff=${backoff}ms`)
       restartTimerRef.current = window.setTimeout(() => {
         restartTimerRef.current = null
         if (!armedRef.current) return
@@ -383,6 +605,7 @@ export default function VoicePanel() {
           startedOnce = false
           rec.start()
           armWatchdog()
+          logInfo('VOICE', `sr.start restart attempt=${restartAttemptsRef.current}`)
         } catch (err) {
           updateVoiceMeta({
             lastInterruptionReason: `restart-throw:${(err as Error)?.message ?? 'unknown'}`,
@@ -392,6 +615,7 @@ export default function VoicePanel() {
           setStatusText('🎤 Voice degraded — tap to re-arm')
           setArmed(false)
           updateVoiceRecoveryState('failed')
+          logWarn('VOICE', `sr.start restart-threw error=${(err as Error)?.message ?? 'unknown'}`)
         }
       }, backoff)
     }
@@ -400,6 +624,7 @@ export default function VoicePanel() {
       updateVoiceState('recovering', { lastSrStartAt: Date.now() })
       rec.start()
       armWatchdog()
+      logInfo('VOICE', 'sr.start initial-arm')
     } catch (err) {
       updateVoiceState('degraded', {
         lastError: `start threw: ${(err as Error)?.message ?? 'unknown'}`,
@@ -408,46 +633,82 @@ export default function VoicePanel() {
       setStatusText('🎤 Voice unresponsive — tap to retry')
       setArmed(false)
       updateVoiceRecoveryState('failed')
+      logWarn('VOICE', `sr.start initial-threw error=${(err as Error)?.message ?? 'unknown'}`)
       return
     }
 
     // Field continuity: lifecycle interruption does not cancel user intent.
+    // Detach handlers BEFORE relinquishing the ref so any deferred event
+    // queued by the platform during teardown cannot fire on a stale rec.
     const onPageHide = () => {
       suspendedByLifecycleRef.current = true
       updateVoiceRecoveryState('suspended')
       updateVoiceState('inactive_clean', { lastError: 'interrupted: pagehide' })
+      detachHandlers(rec)
       try {
         rec.stop()
       } catch {
         // ignore
       }
       recognitionRef.current = null
+      logInfo('VOICE', 'sr.suspend pagehide')
     }
     const onVisibility = () => {
       if (document.visibilityState === 'hidden') {
         suspendedByLifecycleRef.current = true
         updateVoiceRecoveryState('suspended')
         updateVoiceState('inactive_clean', { lastError: 'interrupted: hidden' })
+        detachHandlers(rec)
         try {
           rec.stop()
         } catch {
           // ignore
         }
         recognitionRef.current = null
+        logInfo('VOICE', 'sr.suspend visibility-hidden')
         return
       }
       // One-shot recovery on resume while preserving armed intent.
-      if (armedRef.current && suspendedByLifecycleRef.current && !recoveryAttemptedRef.current) {
+      if (
+        shouldAttemptVoiceRecovery({
+          armed: armedRef.current,
+          suspendedByLifecycle: suspendedByLifecycleRef.current,
+          recoveryAttempted: recoveryAttemptedRef.current,
+        })
+      ) {
         recoveryAttemptedRef.current = true
         updateVoiceRecoveryState('recovering')
         setRecoveryNonce((n) => n + 1)
+        logInfo('VOICE', 'sr.recover visibility-resumed')
+      } else if (import.meta.env.DEV) {
+        logInfo('VOICE', 'sr.recover visibility-skipped')
+      }
+    }
+    const onPageShow = () => {
+      // iOS/WebKit BFCache can skip normal visibility transition ordering.
+      // Preserve armed intent, but avoid duplicate recovery triggers.
+      if (
+        shouldAttemptVoiceRecovery({
+          armed: armedRef.current,
+          suspendedByLifecycle: suspendedByLifecycleRef.current,
+          recoveryAttempted: recoveryAttemptedRef.current,
+        })
+      ) {
+        recoveryAttemptedRef.current = true
+        updateVoiceRecoveryState('recovering')
+        setRecoveryNonce((n) => n + 1)
+        logInfo('VOICE', 'sr.recover pageshow-resumed')
+      } else if (import.meta.env.DEV) {
+        logInfo('VOICE', 'sr.recover pageshow-skipped')
       }
     }
     window.addEventListener('pagehide', onPageHide)
+    window.addEventListener('pageshow', onPageShow)
     document.addEventListener('visibilitychange', onVisibility)
 
     return () => {
       window.removeEventListener('pagehide', onPageHide)
+      window.removeEventListener('pageshow', onPageShow)
       document.removeEventListener('visibilitychange', onVisibility)
       if (watchdog != null) {
         window.clearTimeout(watchdog)
@@ -457,12 +718,22 @@ export default function VoicePanel() {
         window.clearTimeout(restartTimerRef.current)
         restartTimerRef.current = null
       }
+      if (uiResetTimerRef.current != null) {
+        window.clearTimeout(uiResetTimerRef.current)
+        uiResetTimerRef.current = null
+      }
+      // SR teardown clears the continuity window — page transitions,
+      // recovery cycles, and effect re-runs must never resume into a
+      // stale bare-wake state.
+      pendingWakeUntilRef.current = null
+      detachHandlers(rec)
       try {
         rec.stop()
       } catch {
         // ignore
       }
       recognitionRef.current = null
+      logInfo('VOICE', 'sr.cleanup effect-teardown')
       // Reflect the user's intent: arm=false → clean inactive; otherwise we
       // were torn down externally and do not change state here.
       if (!armedRef.current) updateVoiceState('inactive_clean')
@@ -490,6 +761,7 @@ export default function VoicePanel() {
         } finally {
           recognitionRef.current = null
         }
+        logWarn('VOICE', 'disarmed-sr-corrected leftover-recognizer-torn-down')
       },
     )
   }, [armed])
@@ -500,8 +772,10 @@ export default function VoicePanel() {
   // Post-condition for OFF: SR effect cleanup runs (rec.stop + listener
   // removal) — no background listener remains.
   const toggleVoiceLifecycle = async () => {
+    traceAction('voice_continuous_toggle', 'handler_enter', { armed })
     if (!armed) {
       updateVoiceState('arming')
+      traceAction('voice_continuous_toggle', 'async_start', { step: 'request_microphone_permission' })
       const mic = await requestMicrophonePermission()
       const permState =
         mic === 'granted'
@@ -519,14 +793,19 @@ export default function VoicePanel() {
         updateVoiceState(mic === 'unsupported' ? 'unavailable' : 'blocked', {
           lastError: `mic permission: ${mic}`,
         })
+        traceAction('voice_continuous_toggle', 'guard_reject', {
+          reason: 'mic_not_granted',
+          permission: mic,
+        })
         return
       }
     } else {
       updateVoiceState('inactive_clean')
     }
+    traceAction('voice_continuous_toggle', 'state_result', { nextArmed: !armed })
     setArmed((v) => !v)
     setVoiceState((s) => (s === 'sleeping' ? 'listening' : 'sleeping'))
-    setStatusText((t) => (t.includes('listening') ? '🎤 HUD (tap to wake)' : '🎤 HUD listening'))
+    setStatusText((t) => (t.includes('listening') ? '🎤 HUD (tap to start)' : '🎤 HUD listening'))
   }
 
   return (
@@ -538,40 +817,40 @@ export default function VoicePanel() {
       minHeight={130}
       accent={voiceState === 'failure' ? '#ff3b4d' : undefined}
     >
-      <div style={{ display: 'grid', gap: 8 }}>
+      <div style={{ display: 'grid', gap: touchGapMd }}>
         <button
           type="button"
           data-no-drag
           onClick={toggleVoiceLifecycle}
           style={{
-            minHeight: 40,
+            minHeight: btnMin(40),
             borderRadius: 8,
             border: '1px solid rgba(125,255,138,0.5)',
             background: armed ? 'rgba(125,255,138,0.18)' : 'rgba(10,12,13,0.8)',
             color: armed ? '#7dff8a' : 'var(--cockpit-panel-subtle)',
             boxShadow: armed ? '0 0 10px rgba(125,255,138,0.35)' : 'none',
             cursor: 'pointer',
-            fontSize: 11,
+            fontSize: labelPx(11),
             letterSpacing: '0.1em',
           }}
         >
-          {expanded ? '🎤 HUD (tap to wake)' : statusText}
+          {expanded ? '🎤 HUD (tap to start)' : statusText}
         </button>
 
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: touchGapMd }}>
           <button
             type="button"
             data-no-drag
             onClick={() => setExpanded((v) => !v)}
             style={{
               flex: 1,
-              minHeight: 34,
+              minHeight: btnMin(34),
               borderRadius: 8,
               border: '1px solid rgba(199,206,198,0.28)',
               background: 'rgba(10,12,13,0.8)',
               color: 'var(--cockpit-panel-subtle)',
               cursor: 'pointer',
-              fontSize: 10,
+              fontSize: labelPx(10),
               letterSpacing: '0.08em',
             }}
           >
@@ -583,7 +862,7 @@ export default function VoicePanel() {
             onClick={toggleVoiceLifecycle}
             aria-label={armed ? 'Voice lifecycle on, tap to turn off' : 'Voice lifecycle off, tap to turn on'}
             style={{
-              minHeight: 34,
+              minHeight: btnMin(34),
               borderRadius: 8,
               border: armed
                 ? '1px solid rgba(125,255,138,0.6)'
@@ -591,7 +870,7 @@ export default function VoicePanel() {
               background: armed ? 'rgba(125,255,138,0.16)' : 'rgba(10,12,13,0.8)',
               color: armed ? '#7dff8a' : 'var(--cockpit-panel-subtle)',
               cursor: 'pointer',
-              fontSize: 10,
+              fontSize: labelPx(10),
               letterSpacing: '0.08em',
             }}
           >
@@ -600,9 +879,9 @@ export default function VoicePanel() {
         </div>
 
         {!supportsRec && (
-          <div style={{ display: 'grid', gap: 6 }}>
-            <div style={{ fontSize: 10, color: 'var(--cockpit-panel-subtle)' }}>No speech recognition. Type command:</div>
-            <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ display: 'grid', gap: touchGapSm }}>
+            <div style={{ fontSize: labelPx(10), color: 'var(--cockpit-panel-subtle)' }}>No speech recognition. Type command:</div>
+            <div style={{ display: 'flex', gap: touchGapMd }}>
               <input
                 data-no-drag
                 value={typed}
@@ -610,7 +889,7 @@ export default function VoicePanel() {
                 placeholder="HUD status"
                 style={{
                   flex: 1,
-                  minHeight: 34,
+                  minHeight: btnMin(34),
                   borderRadius: 8,
                   border: '1px solid rgba(199,206,198,0.24)',
                   background: 'rgba(10,12,13,0.8)',
@@ -623,7 +902,7 @@ export default function VoicePanel() {
                 data-no-drag
                 onClick={() => parseAndRun(typed)}
                 style={{
-                  minHeight: 34,
+                  minHeight: btnMin(34),
                   borderRadius: 8,
                   border: '1px solid rgba(199,206,198,0.3)',
                   background: 'rgba(199,206,198,0.14)',
@@ -638,11 +917,11 @@ export default function VoicePanel() {
         )}
 
         {expanded && (
-          <div style={{ fontSize: 10, color: 'var(--cockpit-panel-subtle)', lineHeight: 1.5, display: 'grid', gap: 8 }}>
+          <div style={{ fontSize: labelPx(10), color: 'var(--cockpit-panel-subtle)', lineHeight: 1.5, display: 'grid', gap: touchGapMd }}>
             <div>
               Wake word: <strong>HUD</strong>. Example: <code>HUD status</code>. Last: {lastHeard || '—'}
             </div>
-            <div style={{ fontSize: 10, letterSpacing: '0.08em', color: 'var(--cockpit-panel-subtle)' }}>
+            <div style={{ fontSize: labelPx(10), letterSpacing: '0.08em', color: 'var(--cockpit-panel-subtle)' }}>
               ONE-TAP COMMANDS (MOBILE READY)
             </div>
             <div
@@ -653,16 +932,16 @@ export default function VoicePanel() {
                 border: '1px solid rgba(199,206,198,0.2)',
                 borderRadius: 8,
                 background: 'rgba(10,12,13,0.65)',
-                padding: 6,
+                padding: touchGapSm,
                 display: 'grid',
-                gap: 6,
+                gap: touchGapSm,
               }}
             >
               {QUICK_COMMAND_GROUPS.map((group) => (
-                <div key={group.group} style={{ display: 'grid', gap: 6 }}>
+                <div key={group.group} style={{ display: 'grid', gap: touchGapSm }}>
                   <div
                     style={{
-                      fontSize: 9,
+                      fontSize: labelPx(9),
                       letterSpacing: '0.1em',
                       color: group.priority ? '#ffb8c6' : 'var(--cockpit-panel-subtle)',
                       fontWeight: 700,
@@ -678,7 +957,7 @@ export default function VoicePanel() {
                       onClick={() => void dispatchAndReport(item.cmd, 'ui')}
                       style={{
                         width: '100%',
-                        minHeight: 34,
+                        minHeight: btnMin(34),
                         textAlign: 'left',
                         borderRadius: 6,
                         border: group.priority ? '1px solid rgba(255,127,151,0.35)' : '1px solid rgba(199,206,198,0.26)',
@@ -686,7 +965,7 @@ export default function VoicePanel() {
                         color: '#d3dad3',
                         padding: '0 10px',
                         cursor: 'pointer',
-                        fontSize: 11,
+                        fontSize: labelPx(11),
                         letterSpacing: '0.04em',
                       }}
                     >
