@@ -1,5 +1,4 @@
 import { useMemo } from 'react'
-import HudPanel from './HudPanel'
 import { useAppContext } from '../context/AppContext'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 import {
@@ -8,10 +7,9 @@ import {
   touchGapSm as touchGapSmFn,
   touchMinTarget as touchMinTargetFn,
 } from './tokens'
-import type { WaypointType } from '../types'
+import type { WaypointType, WaypointLifecycle } from '../types'
 import { formatDistance, haversineDistance, totalRouteDistance } from '../lib/haversine'
 import { tier1Debug } from '../lib/tier1DebugLog'
-
 /** Water / Camp / Rest / End only — CLEAR ROUTE is a separate command button (not a waypoint type). */
 type RouteTypeTile = { id: WaypointType; label: string; icon: string; color: string }
 
@@ -22,7 +20,54 @@ const ROUTE_TYPE_TILES: RouteTypeTile[] = [
   { id: 'finish', label: 'End Flag', icon: '🏁', color: '#f472b6' },
 ]
 
-export default function WaypointTypePanel() {
+/** Same control as legacy waypoint panel header — presentation only. */
+export function WaypointClearRouteHeaderButton() {
+  const { state } = useAppContext()
+  const { waypoints } = state
+  const isMobile = getDeviceProfile().interactionMode === 'mobile'
+  const labelPx = (px: number) => Math.max(touchFontSmFn(isMobile), px)
+  const btnMin = (px: number) => Math.max(touchMinTargetFn(isMobile), 48, px)
+  return (
+    <button
+      type="button"
+      data-no-drag
+      data-testid="waypoint-clear-route-docked"
+      className="waypoint-clear"
+      title="Clear entire route"
+      aria-label="Clear entire route"
+      disabled={waypoints.length === 0}
+      onClick={(e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        tier1Debug('waypoint', 'clear-route-click')
+        ;(window as Window & { __FORCE_CLEAR_ROUTE__?: () => void }).__FORCE_CLEAR_ROUTE__?.()
+      }}
+      style={{
+        minHeight: btnMin(48),
+        padding: '4px 8px',
+        borderRadius: 6,
+        fontSize: labelPx(10),
+        fontWeight: 800,
+        letterSpacing: '0.08em',
+        minWidth: 72,
+        background: '#ef4444',
+        color: '#fff',
+        border: '2px solid #fbbf24',
+      }}
+    >
+      CLR
+    </button>
+  )
+}
+
+function lifecycleLabel(l: WaypointLifecycle | undefined): string {
+  const v = l ?? 'active'
+  if (v === 'arrived') return 'ARRIVED'
+  if (v === 'completed') return 'DONE'
+  return 'ACTIVE'
+}
+
+export function WaypointMissionBody() {
   const {
     state,
     setPendingType,
@@ -32,6 +77,8 @@ export default function WaypointTypePanel() {
     setShowMapLabels,
     setShowMapDistances,
     setSnapToTrail,
+    updateWaypoint,
+    removeWaypointWithUndo,
   } = useAppContext()
   const {
     pendingWaypointType,
@@ -55,60 +102,34 @@ export default function WaypointTypePanel() {
   const isMobile = getDeviceProfile().interactionMode === 'mobile'
   const gapMd = touchGapMdFn(isMobile)
   const gapSm = touchGapSmFn(isMobile)
-  const tapMin = touchMinTargetFn(isMobile)
+  const tapMin = Math.max(touchMinTargetFn(isMobile), 48)
   const btnMin = (px: number) => Math.max(tapMin, px)
   const labelPx = (px: number) => Math.max(touchFontSmFn(isMobile), px)
   const legCount = Math.max(0, waypoints.length - 1)
   const armedType = selectedType === 'default' ? 'DISARMED' : selectedType.toUpperCase()
-
   function handleRouteTypeClick(item: RouteTypeTile) {
     setPendingType(item.id)
   }
 
-  const clearRouteDockedBtn = (
-    <button
-      type="button"
-      data-no-drag
-      data-testid="waypoint-clear-route-docked"
-      className="waypoint-clear"
-      title="Clear entire route"
-      aria-label="Clear entire route"
-      disabled={waypoints.length === 0}
-        onClick={(e) => {
-        e.preventDefault()
-        e.stopPropagation()
-        tier1Debug('waypoint', 'clear-route-click')
-        ;(window as Window & { __FORCE_CLEAR_ROUTE__?: () => void }).__FORCE_CLEAR_ROUTE__?.()
-      }}
-      style={{
-        minHeight: btnMin(28),
-        padding: '4px 8px',
-        borderRadius: 6,
-        fontSize: labelPx(10),
-        fontWeight: 800,
-        letterSpacing: '0.08em',
-        lineHeight: 1.2,
-        minWidth: 72,
-        background: '#ef4444',
-        color: '#fff',
-        border: '2px solid #fbbf24',
-      }}
-    >
-      CLR
-    </button>
-  )
-
   return (
-    <HudPanel
-      panelId="waypoints"
-      title="Waypoint type"
-      initialPos={{ x: 20, y: 420 }}
-      initialWidth={360}
-      minHeight={72}
-      dockedHeaderTrailing={clearRouteDockedBtn}
-    >
+    <>
       <div style={{ marginBottom: gapMd, fontSize: labelPx(11), color: '#9fb0c7' }}>
-        Arm a waypoint type below. Placement is blocked while this panel is docked.
+        Arm a waypoint type below. Pin drops are blocked while the Situation panel is docked — pull it away from the
+        edge to place waypoints.
+      </div>
+      <div
+        style={{
+          marginBottom: gapMd,
+          fontSize: labelPx(10),
+          color: '#94a3b8',
+          lineHeight: 1.45,
+          borderLeft: '3px solid rgba(56,189,248,0.45)',
+          paddingLeft: 10,
+        }}
+      >
+        Map drop: tap for preview, then <strong style={{ color: '#fdba74' }}>PLACE PIN</strong> — or{' '}
+        <strong>hold ~0.5s</strong> and release to commit when trail snap is off. Trail snap still uses its own
+        confirm row.
       </div>
       <div style={{ marginBottom: gapMd, fontSize: labelPx(10), color: '#94a3b8', lineHeight: 1.35 }}>
         <strong style={{ color: '#fca5a5' }}>CLEAR ROUTE</strong> (red/yellow) removes all pins — not a waypoint type.
@@ -167,7 +188,7 @@ export default function WaypointTypePanel() {
                 cursor: 'pointer',
                 fontSize: labelPx(12),
                 fontWeight: 600,
-                minHeight: btnMin(40),
+                minHeight: btnMin(48),
                 minWidth: 96,
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -223,7 +244,7 @@ export default function WaypointTypePanel() {
             cursor: 'pointer',
             fontSize: labelPx(12),
             fontWeight: 600,
-            minHeight: btnMin(40),
+            minHeight: btnMin(48),
             minWidth: 96,
             background: selectedType === 'default'
               ? 'linear-gradient(180deg, #94a3b833, #94a3b822)'
@@ -292,7 +313,7 @@ export default function WaypointTypePanel() {
             title={
               trailSnapAssistCapable
                 ? 'Preview only — choose Use Snapped or Use Raw after each drop.'
-                : 'Unavailable until the map loads vector trails at zoom 12+.'
+                : 'Needs a vector trail style, visible line layers, and map zoom ≥ 12. Zoom in or switch off raster-only fallback.'
             }
             style={{
               fontSize: labelPx(11),
@@ -315,7 +336,8 @@ export default function WaypointTypePanel() {
         </div>
         {!trailSnapAssistCapable ? (
           <div style={{ fontSize: labelPx(10), color: '#64748b', marginTop: -gapSm, marginBottom: gapSm }}>
-            Trail snap needs vector layers at zoom 12+.
+            Trail snap is off: use a vector map style with trail lines, then zoom to <strong>12+</strong> (raster /
+            satellite fallback has no snap geometry).
           </div>
         ) : null}
       </div>
@@ -341,7 +363,17 @@ export default function WaypointTypePanel() {
               Legs: <strong style={{ color: '#93c5fd' }}>{legCount}</strong> · Total points:{' '}
               <strong style={{ color: '#93c5fd' }}>{waypoints.length}</strong>
             </div>
-            <div style={{ marginTop: gapMd, maxHeight: 180, overflowY: 'auto', borderTop: '1px solid #253041', paddingTop: gapSm }}>
+            <div
+              style={{
+                marginTop: gapMd,
+                maxHeight: 320,
+                overflowY: 'auto',
+                borderTop: '1px solid #253041',
+                paddingTop: gapSm,
+                display: 'grid',
+                gap: gapMd,
+              }}
+            >
               {waypoints.map((wp, idx) => {
                 const leg =
                   idx > 0
@@ -352,23 +384,128 @@ export default function WaypointTypePanel() {
                         wp.lng,
                       )
                     : null
+                const life = wp.lifecycle ?? 'active'
                 return (
                   <div
                     key={wp.id}
                     style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      gap: gapMd,
-                      padding: '3px 0',
-                      fontSize: labelPx(11),
+                      border: '1px solid #334155',
+                      borderRadius: 10,
+                      padding: gapSm,
+                      background: 'rgba(15,23,42,0.35)',
                     }}
                   >
-                    <span style={{ color: '#d5dde7' }}>
-                      {idx + 1}. {wp.label}
-                    </span>
-                    <span style={{ color: leg ? '#81f7dd' : '#64748b' }}>
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        gap: gapMd,
+                        flexWrap: 'wrap',
+                        alignItems: 'center',
+                        marginBottom: gapSm,
+                      }}
+                    >
+                      <span style={{ color: '#d5dde7', fontSize: labelPx(11), fontWeight: 700 }}>
+                        {idx + 1}. {wp.label}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: labelPx(10),
+                          letterSpacing: '0.1em',
+                          fontWeight: 800,
+                          color:
+                            life === 'arrived' ? '#4ade80' : life === 'completed' ? '#94a3b8' : '#7dd3fc',
+                        }}
+                      >
+                        {lifecycleLabel(wp.lifecycle)}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: labelPx(10), color: leg ? '#81f7dd' : '#64748b', marginBottom: gapSm }}>
                       {leg ? `${formatDistance(leg.miles)} (${Math.round(leg.feet).toLocaleString()} ft)` : 'START'}
-                    </span>
+                    </div>
+                    <label style={{ display: 'grid', gap: 4, fontSize: labelPx(10), color: '#94a3b8' }}>
+                      Notes
+                      <textarea
+                        data-no-drag
+                        rows={2}
+                        defaultValue={wp.notes ?? ''}
+                        key={`${wp.id}-notes`}
+                        onBlur={(e) => updateWaypoint(wp.id, { notes: e.target.value.slice(0, 512) })}
+                        style={{
+                          width: '100%',
+                          resize: 'vertical',
+                          minHeight: 48,
+                          borderRadius: 8,
+                          border: '1px solid #475569',
+                          background: 'rgba(2,6,23,0.5)',
+                          color: '#e2e8f0',
+                          fontSize: labelPx(11),
+                          padding: '8px 10px',
+                        }}
+                      />
+                    </label>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: gapSm, marginTop: gapSm }}>
+                      {life !== 'completed' ? (
+                        <button
+                          type="button"
+                          data-no-drag
+                          onClick={() => updateWaypoint(wp.id, { lifecycle: 'completed' })}
+                          style={{
+                            minHeight: btnMin(48),
+                            padding: '0 12px',
+                            borderRadius: 8,
+                            border: '1px solid rgba(52,211,153,0.5)',
+                            background: 'rgba(6,78,59,0.35)',
+                            color: '#bbf7d0',
+                            fontWeight: 800,
+                            letterSpacing: '0.06em',
+                            fontSize: labelPx(10),
+                            cursor: 'pointer',
+                          }}
+                        >
+                          MARK COMPLETE
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          data-no-drag
+                          onClick={() => updateWaypoint(wp.id, { lifecycle: 'active' })}
+                          style={{
+                            minHeight: btnMin(48),
+                            padding: '0 12px',
+                            borderRadius: 8,
+                            border: '1px solid rgba(148,163,184,0.45)',
+                            background: 'rgba(30,41,59,0.5)',
+                            color: '#e2e8f0',
+                            fontWeight: 700,
+                            letterSpacing: '0.06em',
+                            fontSize: labelPx(10),
+                            cursor: 'pointer',
+                          }}
+                        >
+                          REOPEN
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        data-no-drag
+                        onClick={() => removeWaypointWithUndo(wp.id)}
+                        style={{
+                          minHeight: btnMin(48),
+                          padding: '0 12px',
+                          borderRadius: 8,
+                          border: '1px solid rgba(248,113,113,0.55)',
+                          background: 'rgba(69,10,10,0.45)',
+                          color: '#fecaca',
+                          fontWeight: 800,
+                          letterSpacing: '0.06em',
+                          fontSize: labelPx(10),
+                          cursor: 'pointer',
+                        }}
+                      >
+                        REMOVE
+                      </button>
+                    </div>
                   </div>
                 )
               })}
@@ -376,6 +513,6 @@ export default function WaypointTypePanel() {
           </>
         )}
       </div>
-    </HudPanel>
+    </>
   )
 }

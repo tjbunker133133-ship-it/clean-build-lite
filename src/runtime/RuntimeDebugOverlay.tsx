@@ -128,7 +128,12 @@ function Body({ snap, onClose }: { snap: RuntimeSnapshot; onClose: () => void })
   const trace = snap.commandTrace
   const ageSec = Math.round((Date.now() - snap.startedAt) / 1000)
   const origin = typeof window !== 'undefined' ? window.location.origin : 'unknown'
-  const provider = origin.includes('vercel.app') ? 'vercel' : 'netlify-or-other'
+  const host = typeof window !== 'undefined' ? window.location.hostname.toLowerCase() : ''
+  const provider = host.includes('vercel.app')
+    ? 'vercel'
+    : host === 'localhost' || host === '127.0.0.1'
+      ? 'local'
+      : 'hosted'
   const backend = getSupabaseDiagnostics()
 
   return (
@@ -237,6 +242,25 @@ function Body({ snap, onClose }: { snap: RuntimeSnapshot; onClose: () => void })
         <Row k="update-pending" v={String(snap.deploymentIntegrity.updatePending)} />
         <Row k="recovery-in-flight" v={String(snap.deploymentIntegrity.recoveryInFlight)} />
         <Row k="reload-attempted" v={String(snap.deploymentIntegrity.reloadAttempted)} />
+      </Section>
+
+      <Section title="offline readiness">
+        <Row k="assessed" v={String(snap.offlineReadiness.assessed)} />
+        <Row k="navigator-offline" v={String(snap.offlineReadiness.navigatorOffline)} />
+        <Row k="map-cache-urls" v={String(snap.offlineReadiness.mapRelatedCacheEntryCount)} />
+        <Row k="map-readiness" v={snap.offlineReadiness.mapTileReadiness} />
+        <Row k="shell-cached" v={String(snap.offlineReadiness.appShellLikelyCached)} />
+        <Row
+          k="banner"
+          v={
+            snap.offlineReadiness.bannerMessage
+              ? snap.offlineReadiness.bannerMessage.length > 120
+                ? snap.offlineReadiness.bannerMessage.slice(0, 120) + '…'
+                : snap.offlineReadiness.bannerMessage
+              : 'none'
+          }
+          color={snap.offlineReadiness.bannerMessage ? '#ffd76b' : undefined}
+        />
       </Section>
 
       <Section title="install mode">

@@ -14,21 +14,14 @@ import { traceAction } from '../runtime/actionTrace'
 import {
   clampMobileToReachableViewport,
   chooseMobileMinimizeDockSideAutoBalance,
-  clampMobilePanelFontScale,
-  cycleMobilePanelSizePreset,
   mobileFocusOpacity,
-  mobilePresetDimensions,
   shouldRunMaterialViewportRecovery,
   shouldApplyViewportClampDeduped,
   shouldSuppressRepeatedDimensionWrite,
-  type MobilePanelSizePreset,
   MOBILE_DENSITY_COLLAPSE_IDLE_MS,
   MOBILE_RESIZE_HITBOX_PX,
   mobileFloatingCommitCoords,
   MOBILE_FLOATING_MAX_HEIGHT_VH,
-  MOBILE_PANEL_FONT_SCALE_MAX,
-  MOBILE_PANEL_FONT_SCALE_MIN,
-  MOBILE_PANEL_FONT_SCALE_STEP,
 } from '../lib/mobilePanelHelpers'
 import { touchFontSm, touchFontMd } from './tokens'
 
@@ -100,6 +93,7 @@ function dockBadge(panelId: string, title: string): { icon: string; abbr: string
   const id = panelId.toLowerCase()
   if (id === 'layers') return { icon: '▦', abbr: 'LYR' }
   if (id === 'waypoints') return { icon: '⌖', abbr: 'WPT' }
+  if (id === 'positional') return { icon: '◎', abbr: 'SIT' }
   if (id === 'deadman') return { icon: '☠', abbr: 'DMS' }
   if (id === 'coords') return { icon: '◎', abbr: 'GPS' }
   if (id === 'elevation') return { icon: '⛰', abbr: 'ELV' }
@@ -109,6 +103,7 @@ function dockBadge(panelId: string, title: string): { icon: string; abbr: string
   if (id === 'voice') return { icon: '🎤', abbr: 'VOC' }
   if (id === 'weather') return { icon: '⛅', abbr: 'WTH' }
   if (id === 'presets') return { icon: '⚙', abbr: 'PST' }
+  if (id === 'checkin') return { icon: '◇', abbr: 'CHK' }
   const compact = title
     .replace(/[^a-z0-9 ]/gi, '')
     .trim()
@@ -171,6 +166,25 @@ export default function CockpitHudPanel({
   layoutSnapshotRef.current = layout
   const badge = dockBadge(panelId, title)
 
+  const devRenderProbeRef = useRef({ count: 0, windowStart: 0 })
+  if (import.meta.env.DEV) {
+    const pr = devRenderProbeRef.current
+    pr.count += 1
+    const now = Date.now()
+    if (pr.windowStart === 0) pr.windowStart = now
+    if (now - pr.windowStart >= 2500) {
+      if (pr.count > 55) {
+        console.warn('[HUD DEV] panel-render-storm', {
+          panelId,
+          renders: pr.count,
+          windowMs: now - pr.windowStart,
+        })
+      }
+      pr.count = 0
+      pr.windowStart = now
+    }
+  }
+
   const [pos, setPos] = useState({
     x: layout?.x ?? initialPos.x,
     y: layout?.y ?? initialPos.y,
@@ -194,9 +208,6 @@ export default function CockpitHudPanel({
   const [resizeBump, setResizeBump] = useState(false)
   const [dragMode, setDragMode] = useState<DragMode>('none')
   const [isMaximized, setIsMaximized] = useState(false)
-  /** In-memory per-panel; mobile-only text scale for panel body (no viewport zoom / no transform scale). */
-  const [mobilePanelFontScale, setMobilePanelFontScale] = useState(() => clampMobilePanelFontScale(1))
-  const [mobileSizePreset, setMobileSizePreset] = useState<MobilePanelSizePreset | 'custom'>('normal')
   const [mobileDensityCollapsed, setMobileDensityCollapsed] = useState(false)
 
   const drag = useRef({ dx: 0, dy: 0 })
@@ -421,7 +432,12 @@ export default function CockpitHudPanel({
         y: clampedY,
         w: clampedW,
         h: initialHeight,
-        z: panelId === 'layers' ? 400 : panelId === 'waypoints' ? 401 : 402,
+        z:
+          panelId === 'layers'
+            ? 400
+            : panelId === 'waypoints' || panelId === 'positional'
+              ? 401
+              : 402,
         minimized: false,
       })
     }
@@ -447,10 +463,12 @@ export default function CockpitHudPanel({
         (Math.abs(layout.x - lastMobileFinalPosRef.current.x) > 0.5 ||
           Math.abs(layout.y - lastMobileFinalPosRef.current.y) > 0.5)
       ) {
-        console.warn('[MOBILE POST-DRAG MODIFIER DETECTED]', {
-          expected: lastMobileFinalPosRef.current,
-          actual: { x: layout.x, y: layout.y },
-        })
+        if (import.meta.env.DEV) {
+          console.warn('[MOBILE POST-DRAG MODIFIER DETECTED]', {
+            expected: lastMobileFinalPosRef.current,
+            actual: { x: layout.x, y: layout.y },
+          })
+        }
       }
       if (Math.abs(posRef.current.x - layout.x) > 0.5 || Math.abs(posRef.current.y - layout.y) > 0.5) {
         const nextPos = { x: layout.x, y: layout.y }
@@ -478,7 +496,12 @@ export default function CockpitHudPanel({
         (sizeRef.current.w !== committedW || sizeRef.current.h !== committedH)
       ) {
         const nextSize = { w: committedW, h: committedH }
-        if (panelId === 'waypoints' && isMobile && layout.h == null && import.meta.env.DEV) {
+        if (
+          (panelId === 'waypoints' || panelId === 'positional') &&
+          isMobile &&
+          layout.h == null &&
+          import.meta.env.DEV
+        ) {
           const now = Date.now()
           const diag = waypointOscillationDiagRef.current
           if (diag.windowStart === 0 || now - diag.windowStart > 12_000) {
@@ -814,14 +837,16 @@ export default function CockpitHudPanel({
     if (shouldDock) {
       const source: DockIntentSource = 'drag'
       if (!mobileDockAllowed(source, isMobile)) {
-        console.warn('[DOCK BLOCKED - MOBILE]', source)
+        if (import.meta.env.DEV) console.warn('[DOCK BLOCKED - MOBILE]', source)
         return
       }
-      console.log('[DOCK FINAL CHECK]', {
-        isMobile,
-        source,
-        allowed: mobileDockAllowed(source, isMobile),
-      })
+      if (import.meta.env.DEV) {
+        console.log('[DOCK FINAL CHECK]', {
+          isMobile,
+          source,
+          allowed: mobileDockAllowed(source, isMobile),
+        })
+      }
       const dockW = DOCKED_PANEL_WIDTH_PX
       const dockX =
         nextDockSide === 'right'
@@ -982,7 +1007,6 @@ export default function CockpitHudPanel({
         // Mobile field rule: resizing must not auto-relocate panel position.
         // We only clamp when position would become unreachable.
         if (isMobile) {
-          setMobileSizePreset('custom')
           const reachable = clampMobileToReachableViewport(
             p,
             { w: nw, h: nh },
@@ -1313,12 +1337,14 @@ export default function CockpitHudPanel({
         const source: DockIntentSource = 'toggle'
         if (!mobileDockAllowed(source, isMobile)) {
           traceAction(`panel_toggle_dock:${panelId}`, 'guard_reject', { reason: 'mobile_toggle_blocked' })
-          console.warn('[DOCK BLOCKED - MOBILE]', source)
-          console.log('[DOCK FINAL CHECK]', {
-            isMobile,
-            source,
-            allowed: mobileDockAllowed(source, isMobile),
-          })
+          if (import.meta.env.DEV) {
+            console.warn('[DOCK BLOCKED - MOBILE]', source)
+            console.log('[DOCK FINAL CHECK]', {
+              isMobile,
+              source,
+              allowed: mobileDockAllowed(source, isMobile),
+            })
+          }
           return prev
         }
         const allowed = canDock('toggle')
@@ -1326,11 +1352,13 @@ export default function CockpitHudPanel({
           traceAction(`panel_toggle_dock:${panelId}`, 'guard_reject', { reason: 'controller_rejected' })
           return prev
         }
-        console.log('[DOCK FINAL CHECK]', {
-          isMobile,
-          source,
-          allowed: mobileDockAllowed(source, isMobile),
-        })
+        if (import.meta.env.DEV) {
+          console.log('[DOCK FINAL CHECK]', {
+            isMobile,
+            source,
+            allowed: mobileDockAllowed(source, isMobile),
+          })
+        }
         const dockW = DOCKED_PANEL_WIDTH_PX
         const x =
           dockSide === 'right'
@@ -1363,7 +1391,7 @@ export default function CockpitHudPanel({
       traceAction(`panel_minimize:${panelId}`, 'guard_reject', { reason: 'controller_rejected' })
       return
     }
-    if (isMobile) {
+    if (import.meta.env.DEV && isMobile) {
       console.log('[MOBILE DOCK TRIGGER] source: button')
     }
     const side = isMobile ? chooseMobileMinimizeDockSide() : dockSide
@@ -1385,14 +1413,16 @@ export default function CockpitHudPanel({
     const source: DockIntentSource = 'minimize'
     if (!mobileDockAllowed(source, isMobile)) {
       traceAction(`panel_minimize:${panelId}`, 'guard_reject', { reason: 'mobile_minimize_blocked' })
-      console.warn('[DOCK BLOCKED - MOBILE]', source)
+      if (import.meta.env.DEV) console.warn('[DOCK BLOCKED - MOBILE]', source)
       return
     }
-    console.log('[DOCK FINAL CHECK]', {
-      isMobile,
-      source,
-      allowed: mobileDockAllowed(source, isMobile),
-    })
+    if (import.meta.env.DEV) {
+      console.log('[DOCK FINAL CHECK]', {
+        isMobile,
+        source,
+        allowed: mobileDockAllowed(source, isMobile),
+      })
+    }
     setDockedGuarded(true, 'controller')
     setDockPreview(null)
     undockedAt.current = null
@@ -1609,6 +1639,7 @@ export default function CockpitHudPanel({
     >
       <div
         role="banner"
+        aria-label={docked ? undefined : `${title} — drag header to move; double-tap to maximize`}
         onPointerDown={onHeaderPointerDown}
         onPointerUp={() => {
           if (isMobile && mobileDensityCollapsed) setMobileDensityCollapsed(false)
@@ -1684,72 +1715,6 @@ export default function CockpitHudPanel({
               {dockedHeaderTrailing ? (
                 <span style={{ pointerEvents: 'auto', flexShrink: 0 }}>{dockedHeaderTrailing}</span>
               ) : null}
-              {isMobile && !docked ? (
-                <span
-                  data-no-drag
-                  title="Panel text size"
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 4,
-                    flexShrink: 0,
-                  }}
-                >
-                  {/* CONTRACT (mobile): explicit +/- avoids pinch-zoom / gesture fights with MapLibre + iOS Safari overlays. */}
-                  <button
-                    type="button"
-                    data-no-drag
-                    aria-label="Decrease panel text size"
-                    disabled={mobilePanelFontScale <= MOBILE_PANEL_FONT_SCALE_MIN + 1e-6}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setMobilePanelFontScale((v) =>
-                        clampMobilePanelFontScale(v - MOBILE_PANEL_FONT_SCALE_STEP),
-                      )
-                    }}
-                    style={{
-                      background: `${accent}14`,
-                      border: `1px solid ${accent}77`,
-                      color: accent,
-                      cursor: 'pointer',
-                      borderRadius: 4,
-                      minHeight: 44,
-                      minWidth: 44,
-                      fontSize: touchFontSm(isMobile),
-                      fontWeight: 800,
-                      opacity: mobilePanelFontScale <= MOBILE_PANEL_FONT_SCALE_MIN + 1e-6 ? 0.35 : 1,
-                    }}
-                  >
-                    −
-                  </button>
-                  <button
-                    type="button"
-                    data-no-drag
-                    aria-label="Increase panel text size"
-                    disabled={mobilePanelFontScale >= MOBILE_PANEL_FONT_SCALE_MAX - 1e-6}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setMobilePanelFontScale((v) =>
-                        clampMobilePanelFontScale(v + MOBILE_PANEL_FONT_SCALE_STEP),
-                      )
-                    }}
-                    style={{
-                      background: `${accent}14`,
-                      border: `1px solid ${accent}77`,
-                      color: accent,
-                      cursor: 'pointer',
-                      borderRadius: 4,
-                      minHeight: 44,
-                      minWidth: 44,
-                      fontSize: touchFontSm(isMobile),
-                      fontWeight: 800,
-                      opacity: mobilePanelFontScale >= MOBILE_PANEL_FONT_SCALE_MAX - 1e-6 ? 0.35 : 1,
-                    }}
-                  >
-                    +
-                  </button>
-                </span>
-              ) : null}
               {isMobile ? (
                 <button
                   type="button"
@@ -1758,16 +1723,16 @@ export default function CockpitHudPanel({
                     e.stopPropagation()
                     setIsMaximized((prev) => !prev)
                   }}
-                  aria-label={isMaximized ? `Restore ${title}` : `Maximize ${title}`}
-                  title={isMaximized ? 'Restore panel' : 'Maximize panel'}
+                  aria-label={isMaximized ? `Restore ${title} to previous size` : `Maximize ${title} (full screen area)`}
+                  title={isMaximized ? 'Restore — return to movable panel size' : 'Maximize — use most of the screen'}
                   style={{
                     background: `${accent}14`,
                     border: `1px solid ${accent}77`,
                     color: accent,
                     cursor: 'pointer',
-                    borderRadius: 4,
-                    minHeight: isMobile ? 48 : isCoarsePointer ? 44 : 32,
-                    minWidth: isMobile ? 48 : isCoarsePointer ? 44 : 32,
+                    borderRadius: 6,
+                    minHeight: isMobile ? 52 : isCoarsePointer ? 44 : 32,
+                    minWidth: isMobile ? 52 : isCoarsePointer ? 44 : 32,
                     lineHeight: 1,
                     fontSize: touchFontSm(isMobile),
                     fontWeight: 700,
@@ -1776,75 +1741,10 @@ export default function CockpitHudPanel({
                     display: 'inline-flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    padding: '0 8px',
+                    padding: '0 10px',
                   }}
                 >
                   {isMaximized ? 'Restore' : 'Max'}
-                </button>
-              ) : null}
-              {isMobile && !docked ? (
-                <button
-                  type="button"
-                  data-no-drag
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    const nextPreset = cycleMobilePanelSizePreset(mobileSizePreset)
-                    const { vw, vh } = viewportSize()
-                    const prevSize = sizeRef.current
-                    const next = mobilePresetDimensions(
-                      nextPreset,
-                      { vw, vh },
-                      { w: minWidthEffective, h: minHeightEffective },
-                    )
-                    const clampedPos = clampMobileToReachableViewport(
-                      posRef.current,
-                      next,
-                      { vw, vh },
-                      36,
-                    )
-                    sizeRef.current = next
-                    posRef.current = clampedPos
-                    setSize(next)
-                    setPos(clampedPos)
-                    setMobileSizePreset(nextPreset)
-                    if (import.meta.env.DEV) {
-                      logInfo(
-                        'MOBILE_UI',
-                        `mobile-preset-apply panel=${panelId} preset=${nextPreset} dw=${next.w - prevSize.w} dh=${next.h - (prevSize.h ?? 0)}`,
-                      )
-                    }
-                    safeUpdatePanel(panelId, {
-                      w: next.w,
-                      h: next.h,
-                      x: clampedPos.x,
-                      y: clampedPos.y,
-                    })
-                  }}
-                  aria-label={`Cycle panel size preset for ${title}`}
-                  title="Cycle size preset"
-                  style={{
-                    background: `${accent}14`,
-                    border: `1px solid ${accent}77`,
-                    color: accent,
-                    cursor: 'pointer',
-                    borderRadius: 4,
-                    minHeight: 48,
-                    minWidth: 48,
-                    lineHeight: 1,
-                    fontSize: touchFontSm(isMobile),
-                    fontWeight: 700,
-                    letterSpacing: '0.06em',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    padding: '0 8px',
-                  }}
-                >
-                  {mobileSizePreset === 'compact'
-                    ? 'C'
-                    : mobileSizePreset === 'large'
-                      ? 'L'
-                      : 'N'}
                 </button>
               ) : null}
               <button
@@ -1854,16 +1754,16 @@ export default function CockpitHudPanel({
                   e.stopPropagation()
                   minimizeToDock()
                 }}
-                aria-label={`Minimize ${title} to dock`}
-                title="Minimize to dock"
+                aria-label={`Minimize ${title} to edge dock`}
+                title="Minimize — dock panel to screen edge (swipe to peek)"
                 style={{
                   background: `${accent}14`,
                   border: `1px solid ${accent}77`,
                   color: accent,
                   cursor: 'pointer',
-                  borderRadius: 4,
-                  minHeight: isMobile ? 48 : isCoarsePointer ? 44 : 32,
-                  minWidth: isMobile ? 48 : isCoarsePointer ? 44 : 32,
+                  borderRadius: 6,
+                  minHeight: isMobile ? 52 : isCoarsePointer ? 44 : 32,
+                  minWidth: isMobile ? 52 : isCoarsePointer ? 44 : 32,
                   lineHeight: 1,
                   fontSize: touchFontMd(isMobile),
                   fontWeight: 700,
@@ -1877,7 +1777,6 @@ export default function CockpitHudPanel({
               >
                 ▬
               </button>
-              <span style={{ opacity: 0.65, fontSize: 8, color: panelSubtleText }}>⋮⋮</span>
             </div>
           </>
         )}
@@ -1890,7 +1789,7 @@ export default function CockpitHudPanel({
             paddingBottom: isMobile
               ? `max(8px, env(safe-area-inset-bottom, 0px))`
               : undefined,
-            fontSize: isMobile ? `${1.0 * mobilePanelFontScale}em` : undefined,
+            fontSize: isMobile ? '0.9375rem' : undefined,
             flex: '1 1 auto',
             minHeight: 0,
             maxHeight: mobileDensityCollapsed ? 0 : '100%',

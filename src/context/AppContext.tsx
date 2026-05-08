@@ -5,10 +5,20 @@ import React, {
   useCallback,
   useEffect,
   useMemo,
-  type ReactNode
+  useState,
+  useRef,
+  type ReactNode,
 } from 'react'
-import type { AppState, AppAction, Waypoint, LayerType, WaypointType } from '../types'
+import type {
+  AppState,
+  AppAction,
+  Waypoint,
+  LayerType,
+  WaypointType,
+  WaypointLifecycle,
+} from '../types'
 import { tier1Debug } from '../lib/tier1DebugLog'
+import { snapshotOperationalMapResumeForSuspend } from '../lib/operationalMapResume'
 
 const DEAD_MAN_DURATION = 300
 const APP_STORAGE_KEY = 'tactical_hud_app_state_v1'
@@ -55,6 +65,12 @@ function appReducer(state: AppState, action: AppAction): AppState {
         selectedWaypointId: sel,
       }
     }
+    case 'INSERT_WAYPOINT_AT': {
+      const { waypoint, index } = action.payload
+      const i = Math.max(0, Math.min(index, state.waypoints.length))
+      const next = [...state.waypoints.slice(0, i), waypoint, ...state.waypoints.slice(i)]
+      return { ...state, waypoints: next }
+    }
     case 'UPDATE_WAYPOINT':
       return {
         ...state,
@@ -92,6 +108,8 @@ function appReducer(state: AppState, action: AppAction): AppState {
       return { ...state, showMapDistances: action.payload }
     case 'SET_SNAP_TO_TRAIL':
       return { ...state, snapToTrailEnabled: action.payload }
+    case 'SET_TRAIL_SNAP_ASSIST_CAPABLE':
+      return { ...state, trailSnapAssistCapable: action.payload }
     case 'SET_DEAD_MAN_TIME':
       return { ...state, deadManTimeLeft: action.payload }
     case 'RESET_DEAD_MAN':
@@ -103,12 +121,18 @@ function appReducer(state: AppState, action: AppAction): AppState {
   }
 }
 
+export type WaypointDeletionUndo = { waypoint: Waypoint; index: number }
+
 interface AppContextValue {
   state: AppState
+  waypointDeletionUndo: WaypointDeletionUndo | null
   addWaypoint: (wp: Waypoint) => void
   setWaypoints: (wps: Waypoint[]) => void
   updateWaypoint: (id: string, patch: Partial<Waypoint>) => void
   removeWaypoint: (id: string) => void
+  removeWaypointWithUndo: (id: string) => void
+  restoreWaypointDeletionUndo: () => void
+  dismissWaypointDeletionUndo: () => void
   selectWaypoint: (id: string | null) => void
   setLayer: (layer: LayerType) => void
   setPendingType: (type: WaypointType) => void
@@ -127,6 +151,10 @@ const AppContext = createContext<AppContextValue | null>(null)
 
 function isWaypointType(value: unknown): value is WaypointType {
   return value === 'default' || value === 'camp' || value === 'water' || value === 'rest' || value === 'finish'
+}
+
+function isWaypointLifecycle(value: unknown): value is WaypointLifecycle {
+  return value === 'active' || value === 'arrived' || value === 'completed'
 }
 
 function isLayerType(value: unknown): value is LayerType {
@@ -155,6 +183,8 @@ function sanitizeWaypoint(raw: unknown): Waypoint | null {
   if (typeof item.snapDistanceMeters === 'number' && Number.isFinite(item.snapDistanceMeters)) {
     base.snapDistanceMeters = item.snapDistanceMeters
   }
+  if (isWaypointLifecycle(item.lifecycle)) base.lifecycle = item.lifecycle
+  if (typeof item.notes === 'string') base.notes = item.notes.slice(0, 512)
   return base
 }
 
@@ -197,6 +227,20 @@ function loadInitialState(): AppState {
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(appReducer, initialState, loadInitialState)
+  const [waypointDeletionUndo, setWaypointDeletionUndo] = useState<WaypointDeletionUndo | null>(null)
+  const waypointUndoTimerRef = useRef<number | null>(null)
+
+  const clearWaypointUndoTimer = useCallback(() => {
+    if (waypointUndoTimerRef.current != null) {
+      clearTimeout(waypointUndoTimerRef.current)
+      waypointUndoTimerRef.current = null
+    }
+  }, [])
+
+  const dismissWaypointDeletionUndo = useCallback(() => {
+    clearWaypointUndoTimer()
+    setWaypointDeletionUndo(null)
+  }, [clearWaypointUndoTimer])
 
   const addWaypoint = useCallback((wp: Waypoint) => {
     dispatch({ type: 'ADD_WAYPOINT', payload: wp })
@@ -213,6 +257,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
     const clearAll = () => {
       tier1Debug('waypoint', 'clear-route-global')
+      setWaypointDeletionUndo(null)
+      clearWaypointUndoTimer()
       setWaypoints([])
     }
     w.__FORCE_CLEAR_ROUTE__ = clearAll
@@ -221,7 +267,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       delete w.__FORCE_CLEAR_ROUTE__
       delete w.__DEBUG_CLEAR_ROUTE__
     }
-  }, [setWaypoints])
+  }, [setWaypoints, clearWaypointUndoTimer])
 
   const updateWaypoint = useCallback((id: string, patch: Partial<Waypoint>) => {
     dispatch({ type: 'UPDATE_WAYPOINT', payload: { id, patch } })
@@ -231,12 +277,35 @@ export function AppProvider({ children }: { children: ReactNode }) {
     dispatch({ type: 'REMOVE_WAYPOINT', payload: id })
   }, [])
 
+  const removeWaypointWithUndo = useCallback(
+    (id: string) => {
+      const idx = state.waypoints.findIndex((w) => w.id === id)
+      if (idx < 0) return
+      const waypoint = state.waypoints[idx]
+      clearWaypointUndoTimer()
+      dispatch({ type: 'REMOVE_WAYPOINT', payload: id })
+      setWaypointDeletionUndo({ waypoint, index: idx })
+      waypointUndoTimerRef.current = window.setTimeout(() => {
+        waypointUndoTimerRef.current = null
+        setWaypointDeletionUndo(null)
+      }, 12000)
+    },
+    [state.waypoints, clearWaypointUndoTimer],
+  )
+
+  const restoreWaypointDeletionUndo = useCallback(() => {
+    if (!waypointDeletionUndo) return
+    const { waypoint, index } = waypointDeletionUndo
+    dispatch({ type: 'INSERT_WAYPOINT_AT', payload: { waypoint, index } })
+    dismissWaypointDeletionUndo()
+  }, [waypointDeletionUndo, dismissWaypointDeletionUndo])
+
   const selectWaypoint = useCallback((id: string | null) => {
     dispatch({ type: 'SELECT_WAYPOINT', payload: id })
   }, [])
 
   const setLayer = useCallback((layer: LayerType) => {
-    console.log('[SET LAYER DISPATCH]', layer, Date.now())
+    if (import.meta.env.DEV) console.log('[SET LAYER DISPATCH]', layer, Date.now())
     dispatch({ type: 'SET_LAYER', payload: layer })
   }, [])
 
@@ -288,13 +357,31 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [state])
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const flush = () => snapshotOperationalMapResumeForSuspend()
+    window.addEventListener('pagehide', flush)
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') flush()
+    }
+    document.addEventListener('visibilitychange', onVis)
+    return () => {
+      window.removeEventListener('pagehide', flush)
+      document.removeEventListener('visibilitychange', onVis)
+    }
+  }, [])
+
   const value = useMemo(
     () => ({
       state,
+      waypointDeletionUndo,
       addWaypoint,
       setWaypoints,
       updateWaypoint,
       removeWaypoint,
+      removeWaypointWithUndo,
+      restoreWaypointDeletionUndo,
+      dismissWaypointDeletionUndo,
       selectWaypoint,
       setLayer,
       setPendingType,
@@ -310,10 +397,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }),
     [
       state,
+      waypointDeletionUndo,
       addWaypoint,
       setWaypoints,
       updateWaypoint,
       removeWaypoint,
+      removeWaypointWithUndo,
+      restoreWaypointDeletionUndo,
+      dismissWaypointDeletionUndo,
       selectWaypoint,
       setLayer,
       setPendingType,

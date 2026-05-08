@@ -1,5 +1,13 @@
 import { createClient } from '@supabase/supabase-js'
 
+function sysTraceSuccess(payload: Record<string, unknown>): void {
+  if (import.meta.env.DEV) console.log('[SYSTEM TRACE]', payload)
+}
+
+function sysTraceFailure(payload: Record<string, unknown>): void {
+  console.warn('[SYSTEM TRACE]', payload)
+}
+
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 
 const supabaseAnonKey =
@@ -15,6 +23,16 @@ export const supabaseConfigValid =
 export const hasSupabaseUrl = isNonEmptyString(supabaseUrl)
 export const hasSupabaseAnon = isNonEmptyString(supabaseAnonKey)
 
+/** Hostname only (for deploy debugging). Never logs keys or full URLs. */
+export function getSupabaseUrlHostnameForDiagnostics(): string | null {
+  if (!hasSupabaseUrl) return null
+  try {
+    return new URL(String(supabaseUrl).trim()).hostname
+  } catch {
+    return 'unparseable_url'
+  }
+}
+
 export type SupabaseEnvReadiness =
   | 'ready'
   | 'missing_url'
@@ -29,13 +47,92 @@ export const supabaseEnvReadiness: SupabaseEnvReadiness = hasSupabaseUrl
     ? 'missing_url'
     : 'missing_both'
 
+export type BackendFailureReason =
+  | 'missing_supabase_url'
+  | 'missing_supabase_anon'
+  | 'missing_supabase_both'
+  | null
+
+export const backendFailureReason: BackendFailureReason =
+  supabaseEnvReadiness === 'missing_url'
+    ? 'missing_supabase_url'
+    : supabaseEnvReadiness === 'missing_anon'
+      ? 'missing_supabase_anon'
+      : supabaseEnvReadiness === 'missing_both'
+        ? 'missing_supabase_both'
+        : null
+
 if (!supabaseConfigValid) {
-  console.warn('[SUPABASE] missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY; backend contact features disabled')
+  console.error('[BACKEND] initialization blocked', {
+    hasSupabaseUrl,
+    hasSupabaseAnon,
+    envReadiness: supabaseEnvReadiness,
+    backendFailureReason,
+  })
+  sysTraceFailure({
+    step: 'supabase_init_validation',
+    success: false,
+    data: {
+      hasSupabaseUrl,
+      hasSupabaseAnon,
+      envReadiness: supabaseEnvReadiness,
+    },
+    error: backendFailureReason,
+  })
+} else {
+  sysTraceSuccess({
+    step: 'supabase_init_validation',
+    success: true,
+    data: { envReadiness: supabaseEnvReadiness },
+    error: null,
+  })
 }
 
-export const supabase = supabaseConfigValid
-  ? createClient(supabaseUrl, supabaseAnonKey)
-  : null
+let supabaseClientInitError: string | null = null
+let supabaseClientInternal: any = null
+
+if (supabaseConfigValid) {
+  try {
+    supabaseClientInternal = createClient(supabaseUrl, supabaseAnonKey)
+  } catch (err) {
+    supabaseClientInternal = null
+    supabaseClientInitError = (err as Error)?.message ?? 'unknown_create_client_error'
+  }
+}
+
+export const supabase = supabaseClientInternal
+export const supabaseInitialized = supabase != null
+export const backendReady = supabaseConfigValid && supabaseInitialized
+
+if (import.meta.env.DEV) {
+  console.log('[SUPABASE INIT]', {
+    urlExists: hasSupabaseUrl,
+    keyExists: hasSupabaseAnon,
+    clientCreated: supabaseInitialized,
+    error: supabaseClientInitError,
+  })
+} else if (supabaseClientInitError || (supabaseConfigValid && !supabaseInitialized)) {
+  console.warn('[SUPABASE INIT]', {
+    urlExists: hasSupabaseUrl,
+    keyExists: hasSupabaseAnon,
+    clientCreated: supabaseInitialized,
+    error: supabaseClientInitError,
+  })
+}
+
+export type BackendReadySource = {
+  envValid: boolean
+  supabaseInitialized: boolean
+  supabasePingSuccess: boolean | null
+}
+
+export function getBackendReadySource(): BackendReadySource {
+  return {
+    envValid: supabaseConfigValid,
+    supabaseInitialized,
+    supabasePingSuccess: lastReachable,
+  }
+}
 
 let lastReachabilityAt: number | null = null
 let lastReachable: boolean | null = null
@@ -57,21 +154,55 @@ export async function probeSupabaseReachability(): Promise<boolean> {
     lastReachabilityAt = Date.now()
     // Any HTTP response confirms origin reachability/auth pipeline.
     lastReachable = response.status > 0
+    if (lastReachable) {
+      sysTraceSuccess({
+        step: 'supabase_reachability_probe',
+        success: true,
+        data: { status: response.status },
+        error: null,
+      })
+    } else {
+      sysTraceFailure({
+        step: 'supabase_reachability_probe',
+        success: false,
+        data: { status: response.status },
+        error: 'non_positive_status',
+      })
+    }
     return lastReachable
   } catch {
     lastReachabilityAt = Date.now()
     lastReachable = false
+    sysTraceFailure({
+      step: 'supabase_reachability_probe',
+      success: false,
+      data: null,
+      error: 'network_or_cors_failure',
+    })
     return false
   }
 }
 
 export function getSupabaseDiagnostics() {
+  const backendReadySource = getBackendReadySource()
+  const onVercel =
+    typeof window !== 'undefined' && window.location.hostname.toLowerCase().includes('vercel.app')
+  const deployEnvHint = onVercel
+    ? 'Vercel: add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY under Project → Settings → Environment Variables (Production + Preview as needed). Redeploy required — Vite inlines VITE_* at build time only; runtime env vars without a rebuild will stay undefined in the bundle.'
+    : 'Build must receive VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY at vite build time (inlined). They are not read from the browser at runtime.'
   return {
+    backendReady,
+    backendReadySource,
+    backendFailureReason,
+    supabaseClientInitError,
     hasSupabaseUrl,
     hasSupabaseAnon,
+    supabaseUrlHost: getSupabaseUrlHostnameForDiagnostics(),
     backendConfigured: supabaseConfigValid,
     envReadiness: supabaseEnvReadiness,
     reachable: lastReachable,
     lastReachabilityAt,
+    deployEnvHint,
+    buildTimeEnvMode: import.meta.env.MODE,
   }
 }

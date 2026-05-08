@@ -57,6 +57,37 @@ const PREFS_DEFAULT: CockpitPrefs = {
 
 type PanelMap = Record<string, CockpitPanelRect>
 
+/**
+ * Standalone panel IDs from pre–Positional-Awareness-Suite builds. They are
+ * embedded inside `positional` now; if left in persisted layout they inflate
+ * dock-lane counts and collision math without mounting any React surface.
+ */
+const LEGACY_MERGED_PANEL_IDS = new Set([
+  'coords',
+  'elevation',
+  'location',
+  'layers',
+  'waypoints',
+  'waypointType',
+  'display',
+])
+
+function stripLegacyMergedPanels(panels: PanelMap): PanelMap {
+  if (!panels || typeof panels !== 'object') return {}
+  const next: PanelMap = { ...panels }
+  let stripped = false
+  for (const id of LEGACY_MERGED_PANEL_IDS) {
+    if (id in next) {
+      delete next[id]
+      stripped = true
+    }
+  }
+  if (import.meta.env.DEV && stripped) {
+    console.info('[HUD DEV] layout: removed legacy merged panel keys from snapshot')
+  }
+  return next
+}
+
 interface StoredState {
   v: number
   panels: PanelMap
@@ -175,7 +206,7 @@ function loadState(): StoredState | null {
     if (!raw) return null
     const o = JSON.parse(raw) as Partial<StoredState> | null
     if (!o || o.v !== LAYOUT_VERSION) return null
-    let panels = o.panels && typeof o.panels === 'object' ? (o.panels as PanelMap) : {}
+    let panels = o.panels && typeof o.panels === 'object' ? stripLegacyMergedPanels(o.panels as PanelMap) : {}
     if (scope === 'mobile') {
       const { vw, vh } = cockpitViewport()
       const sanitized: PanelMap = {}
@@ -212,7 +243,7 @@ function loadState(): StoredState | null {
         updatePersistenceHealth('error')
         return null
       }
-      let panels = o.panels && typeof o.panels === 'object' ? (o.panels as PanelMap) : {}
+      let panels = o.panels && typeof o.panels === 'object' ? stripLegacyMergedPanels(o.panels as PanelMap) : {}
       if (scope === 'mobile') {
         const { vw, vh } = cockpitViewport()
         const sanitized: PanelMap = {}
@@ -264,13 +295,19 @@ function firstRunPreset(device: DevicePreset): {
         low_map_brightness: 0.16,
       },
       panelPatches: {
-        layers: { x: 8, y: 48, w: 176, h: null, z: 430, minimized: false, docked: true, dockSide: 'left' },
-        waypoints: { x: 8, y: 148, w: 300, h: null, z: 431, minimized: false, docked: true, dockSide: 'left' },
-        location: { x: 8, y: 248, w: 300, h: null, z: 432, minimized: false, docked: true, dockSide: 'right' },
-        voice: { x: 8, y: 348, w: 320, h: null, z: 433, minimized: false, docked: true, dockSide: 'right' },
-        sos: { x: 8, y: 448, w: 264, h: null, z: 434, minimized: false, docked: true, dockSide: 'right' },
-        weather: { x: 8, y: 548, w: 300, h: null, z: 435, minimized: false, docked: true, dockSide: 'right' },
-        display: { x: 8, y: 648, w: 260, h: null, z: 436, minimized: false, docked: true, dockSide: 'left' },
+        positional: {
+          x: 8,
+          y: 48,
+          w: 300,
+          h: null,
+          z: 430,
+          minimized: true,
+          docked: true,
+          dockSide: 'left',
+        },
+        voice: { x: 8, y: 48, w: 320, h: null, z: 433, minimized: false, docked: true, dockSide: 'right' },
+        sos: { x: 8, y: 148, w: 264, h: null, z: 434, minimized: false, docked: true, dockSide: 'right' },
+        weather: { x: 8, y: 248, w: 300, h: null, z: 435, minimized: false, docked: true, dockSide: 'right' },
       },
     }
   }
@@ -284,13 +321,19 @@ function firstRunPreset(device: DevicePreset): {
         low_map_brightness: 0.14,
       },
       panelPatches: {
-        layers: { x: 8, y: 48, w: 176, h: null, z: 430, minimized: false, docked: true, dockSide: 'left' },
-        waypoints: { x: 8, y: 148, w: 300, h: null, z: 431, minimized: false, docked: true, dockSide: 'left' },
-        location: { x: 8, y: 248, w: 300, h: null, z: 432, minimized: false, docked: true, dockSide: 'right' },
-        voice: { x: 8, y: 348, w: 320, h: null, z: 433, minimized: false, docked: true, dockSide: 'right' },
-        sos: { x: 8, y: 448, w: 264, h: null, z: 434, minimized: false, docked: true, dockSide: 'right' },
-        weather: { x: 8, y: 548, w: 300, h: null, z: 435, minimized: false, docked: true, dockSide: 'right' },
-        display: { x: 8, y: 648, w: 260, h: null, z: 436, minimized: false, docked: true, dockSide: 'left' },
+        positional: {
+          x: 8,
+          y: 48,
+          w: 300,
+          h: null,
+          z: 430,
+          minimized: true,
+          docked: true,
+          dockSide: 'left',
+        },
+        voice: { x: 8, y: 48, w: 320, h: null, z: 433, minimized: false, docked: true, dockSide: 'right' },
+        sos: { x: 8, y: 148, w: 264, h: null, z: 434, minimized: false, docked: true, dockSide: 'right' },
+        weather: { x: 8, y: 248, w: 300, h: null, z: 435, minimized: false, docked: true, dockSide: 'right' },
       },
     }
   }
@@ -304,13 +347,19 @@ function firstRunPreset(device: DevicePreset): {
         low_map_brightness: 0.16,
       },
       panelPatches: {
-        layers: { x: 8, y: 48, w: 176, h: null, z: 430, minimized: false, docked: true, dockSide: 'left' },
-        waypoints: { x: 8, y: 148, w: 300, h: null, z: 431, minimized: false, docked: true, dockSide: 'left' },
-        location: { x: 8, y: 248, w: 300, h: null, z: 432, minimized: false, docked: true, dockSide: 'right' },
-        voice: { x: 8, y: 348, w: 330, h: null, z: 433, minimized: false, docked: true, dockSide: 'right' },
-        sos: { x: 8, y: 448, w: 280, h: null, z: 434, minimized: false, docked: true, dockSide: 'right' },
-        weather: { x: 8, y: 548, w: 320, h: null, z: 435, minimized: false, docked: true, dockSide: 'right' },
-        display: { x: 8, y: 648, w: 280, h: null, z: 436, minimized: false, docked: true, dockSide: 'left' },
+        positional: {
+          x: 8,
+          y: 48,
+          w: 320,
+          h: null,
+          z: 430,
+          minimized: true,
+          docked: true,
+          dockSide: 'left',
+        },
+        voice: { x: 8, y: 48, w: 330, h: null, z: 433, minimized: false, docked: true, dockSide: 'right' },
+        sos: { x: 8, y: 148, w: 280, h: null, z: 434, minimized: false, docked: true, dockSide: 'right' },
+        weather: { x: 8, y: 248, w: 320, h: null, z: 435, minimized: false, docked: true, dockSide: 'right' },
       },
     }
   }
@@ -395,7 +444,7 @@ function saveState(panels: PanelMap, prefs: CockpitPrefs) {
       'saveState',
     )
 
-    const body: StoredState = { v: LAYOUT_VERSION, panels, prefs }
+    const body: StoredState = { v: LAYOUT_VERSION, panels: stripLegacyMergedPanels(panels), prefs }
     const bodyJson = JSON.stringify(body)
     reportPolicyAttempt('persistence.transactionalWrite', 'enable', 'saveState.txn')
     if (scopeEnableOk) {
@@ -430,6 +479,7 @@ function saveState(panels: PanelMap, prefs: CockpitPrefs) {
 
 function panelHeightGuess(pid: string, p: CockpitPanelRect): number {
   const defaults: Record<string, number> = {
+    positional: 520,
     layers: 230,
     waypoints: 92,
     deadman: 320,
@@ -442,6 +492,7 @@ function panelHeightGuess(pid: string, p: CockpitPanelRect): number {
     weather: 180,
     presets: 220,
     sos: 300,
+    checkin: 420,
     preflight: 300,
   }
   const minBar = 46
@@ -594,14 +645,13 @@ interface CockpitContextValue {
 const CockpitContext = createContext<CockpitContextValue | null>(null)
 
 const DEFAULT_PANELS = (): PanelMap => ({
-  layers: { x: 16, y: 60, w: 160, h: null, z: 400, minimized: false, docked: true, dockSide: 'left' },
-  waypoints: {
-    x: 20,
-    y: typeof window !== 'undefined' ? Math.max(80, window.innerHeight - 140) : 400,
-    w: 340,
+  positional: {
+    x: 16,
+    y: 56,
+    w: 380,
     h: null,
-    z: 401,
-    minimized: false,
+    z: 400,
+    minimized: true,
     docked: true,
     dockSide: 'left',
   },
@@ -615,15 +665,21 @@ const DEFAULT_PANELS = (): PanelMap => ({
     docked: true,
     dockSide: 'left',
   },
-  coords: { x: 16, y: 280, w: 280, h: null, z: 403, minimized: false, docked: true, dockSide: 'left' },
-  elevation: { x: 420, y: 60, w: 240, h: null, z: 404, minimized: false, docked: true, dockSide: 'left' },
   clock: { x: 760, y: 60, w: 260, h: null, z: 405, minimized: false, docked: true, dockSide: 'left' },
-  display: { x: 1040, y: 60, w: 280, h: null, z: 406, minimized: false, docked: true, dockSide: 'left' },
-  location: { x: 1220, y: 60, w: 300, h: null, z: 407, minimized: false, docked: true, dockSide: 'right' },
   voice: { x: 1220, y: 260, w: 340, h: null, z: 408, minimized: false, docked: true, dockSide: 'right' },
   weather: { x: 1220, y: 500, w: 300, h: null, z: 409, minimized: false, docked: true, dockSide: 'right' },
   presets: { x: 760, y: 200, w: 300, h: null, z: 410, minimized: false, docked: true, dockSide: 'left' },
   sos: { x: 1080, y: 420, w: 280, h: null, z: 411, minimized: false, docked: true, dockSide: 'right' },
+  checkin: {
+    x: 1080,
+    y: 100,
+    w: 300,
+    h: null,
+    z: 413,
+    minimized: true,
+    docked: true,
+    dockSide: 'right',
+  },
   preflight: { x: 16, y: 180, w: 320, h: null, z: 412, minimized: false, docked: true, dockSide: 'left' },
 })
 
@@ -912,6 +968,7 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
 
       const panelHeight = (pid: string, p: CockpitPanelRect) => {
         const defaults: Record<string, number> = {
+          positional: 520,
           layers: 230,
           waypoints: 92,
           deadman: 320,
@@ -1000,7 +1057,7 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
           normalizeNoOverlapLayout(
             {
               ...DEFAULT_PANELS(),
-              ...o.panels,
+              ...stripLegacyMergedPanels(o.panels as PanelMap),
             },
             panelGapPx(o.prefs ?? prefs),
           ),

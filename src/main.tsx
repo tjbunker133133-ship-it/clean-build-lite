@@ -24,21 +24,49 @@ import {
   SW_DEFERRED_RELOAD_KEY,
 } from './runtime/forceUpdateMeta'
 import { traceAction } from './runtime/actionTrace'
-import { hasSupabaseAnon, hasSupabaseUrl } from './lib/supabase'
+import {
+  backendFailureReason,
+  backendReady,
+  getBackendReadySource,
+  getSupabaseDiagnostics,
+  hasSupabaseAnon,
+  hasSupabaseUrl,
+} from './lib/supabase'
+import { logRuntimeIntegrityReport } from './runtime/runtimeIntegrity'
+import { installOfflineReadiness } from './runtime/offlineReadiness'
+import { consumeForceUpdateNavigationMark } from './utils/forceUpdate'
 
-console.log('[BUILD ID]', __BUILD_ID__)
-console.log('[DEVICE DETECT]', getDeviceEnvironment())
+if (import.meta.env.DEV) {
+  console.log('[BUILD ID]', __BUILD_ID__)
+  console.log('[DEVICE DETECT]', getDeviceEnvironment())
+}
 if (typeof window !== 'undefined') {
-  const provider = window.location.hostname.includes('vercel.app') ? 'vercel' : 'netlify-or-other'
+  consumeForceUpdateNavigationMark()
+  const host = window.location.hostname.toLowerCase()
+  const deploymentProvider = host.includes('vercel.app')
+    ? 'vercel'
+    : host === 'localhost' || host === '127.0.0.1'
+      ? 'local'
+      : 'hosted'
+  const bootDiag = getSupabaseDiagnostics()
   const swScope = navigator.serviceWorker?.controller?.scriptURL ?? 'none'
-  console.table({
+  const bootPayload = {
+    backendReady,
+    backendReadySource: getBackendReadySource(),
+    backendFailureReason: backendFailureReason ?? 'none',
     hasSupabaseUrl,
     hasSupabaseAnon,
+    supabaseUrlHost: bootDiag.supabaseUrlHost ?? 'none',
+    buildTimeEnvMode: bootDiag.buildTimeEnvMode,
     origin: window.location.origin,
     swScope,
     buildId: __BUILD_ID__,
-    deploymentProvider: provider,
-  })
+    deploymentProvider,
+  }
+  if (import.meta.env.DEV) {
+    console.table(bootPayload)
+    logInfo('RUNTIME', 'boot', bootPayload)
+  }
   if (import.meta.env.DEV) {
     console.table([
       {
@@ -106,7 +134,7 @@ if (import.meta.env.DEV && typeof window !== 'undefined') {
       runtimeBuildId: runtimeBuild,
       lastSeenBuildId: lastSeen,
     })
-    if (freshness.staleRuntimeSuspected) {
+    if (import.meta.env.DEV && freshness.staleRuntimeSuspected) {
       console.info('[HUD DEV] build-freshness', {
         currentBuildId: __BUILD_ID__,
         runtimeBuildId: runtimeBuild,
@@ -124,12 +152,35 @@ if (import.meta.env.DEV && typeof window !== 'undefined') {
 // subsystem (SW registration, voice, permissions) can update it.
 installRuntimeSnapshot()
 installDeploymentFreshnessGuard()
+installOfflineReadiness()
 mountRuntimeDebugOverlay()
 logInfo('RUNTIME', 'boot', {
   build: __BUILD_ID__,
   device: getDeviceProfile().type,
   mode: getDeviceProfile().interactionMode,
 })
+if (!backendReady) {
+  const hint = getSupabaseDiagnostics().deployEnvHint
+  console.warn('[BACKEND] degraded startup mode enabled', {
+    backendFailureReason: backendFailureReason ?? 'unknown',
+    backendReadySource: getBackendReadySource(),
+    deployEnvHint: hint,
+  })
+  logInfo(
+    'RUNTIME',
+    'emergency contacts will use local device storage until Supabase is configured.',
+  )
+}
+
+if (typeof window !== 'undefined') {
+  const runIntegrity = () =>
+    void logRuntimeIntegrityReport().catch((e) => console.warn('[RUNTIME INTEGRITY]', e))
+  if (typeof requestIdleCallback === 'function') {
+    requestIdleCallback(() => runIntegrity(), { timeout: 4000 })
+  } else {
+    window.setTimeout(runIntegrity, 50)
+  }
+}
 
 if (typeof document !== 'undefined') {
   document.title = `HUD [${import.meta.env.VITE_GIT_COMMIT || 'dev'}]`
@@ -141,7 +192,7 @@ if (import.meta.env.PROD) {
   const activateUpdate = registerSW({
     immediate: true,
     onNeedRefresh() {
-      console.log('[UPDATE AVAILABLE]')
+      if (import.meta.env.DEV) console.info('[UPDATE AVAILABLE]')
       updateServiceWorker({ needsRefresh: true, status: 'installed' })
       updatePendingSwUpdate(true)
       window.dispatchEvent(
@@ -239,13 +290,24 @@ if (typeof window !== 'undefined') {
     __forceReload?: () => Promise<void>
   }
   w.__forceReload = async () => {
+    try {
+      window.dispatchEvent(
+        new CustomEvent('hud:operator-reload-notify', {
+          detail: { message: 'Clearing caches and reloading…' },
+        }),
+      )
+    } catch {
+      /* ignore */
+    }
     if ('caches' in window) {
       const keys = await caches.keys()
       await Promise.all(keys.map((k) => caches.delete(k)))
     }
     location.reload()
   }
-  console.log('[FORCE RELOAD AVAILABLE] window.__forceReload()')
+  if (import.meta.env.DEV) {
+    console.log('[FORCE RELOAD AVAILABLE] window.__forceReload()')
+  }
 
   const onViewportChange = () => {
     if (import.meta.env.DEV) {
@@ -446,7 +508,6 @@ if (typeof window !== 'undefined') {
     }
   }
 
-  ;(window as any).__hudRuntimeGuards = true
   window.addEventListener('unhandledrejection', (event) => {
     const reason = event.reason
     const asError = reason instanceof Error ? reason : new Error(String(reason ?? 'Unknown rejection'))

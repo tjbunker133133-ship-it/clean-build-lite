@@ -4,32 +4,33 @@ import { CockpitProvider } from './context/CockpitContext'
 import { MapProvider } from './context/MapContext'
 import { PanelDataProvider } from './context/PanelDataContext'
 import TopBar from './hud/TopBar'
-import LayerPanel from './hud/LayerPanel'
-import WaypointTypePanel from './hud/WaypointTypePanel'
 import DeadManPanel from './hud/DeadManPanel'
-import CoordDisplay from './hud/CoordDisplay'
 import ScanlineOverlay from './hud/ScanlineOverlay'
 import CockpitKeyboard from './hud/CockpitKeyboard'
 import CockpitEdgeZones from './hud/CockpitEdgeZones'
 import CockpitLayoutHotspot from './hud/CockpitLayoutHotspot'
 import CockpitHudShell from './hud/CockpitHudShell'
 import DisplayModeOverlay from './hud/DisplayModeOverlay'
-import ElevationReadout from './hud/ElevationReadout'
 import PermissionPromptOverlay from './hud/PermissionPromptOverlay'
 import SwUpdateBanner from './hud/SwUpdateBanner'
+import WaypointArrivalMonitor from './hud/WaypointArrivalMonitor'
+import WaypointUndoStrip from './hud/WaypointUndoStrip'
+import GpsPowerModeIndicator from './hud/GpsPowerModeIndicator'
+import MovementIntelligenceBridge from './hud/MovementIntelligenceBridge'
 
 const MapCanvas = lazy(() => import('./components/MapCanvas'))
 const WaypointLayer = lazy(() => import('./layers/WaypointLayer'))
+const BreadcrumbTrailLayer = lazy(() => import('./layers/BreadcrumbTrailLayer'))
 const RouteLayer = lazy(() => import('./layers/RouteLayer'))
 const ClockPanel = lazy(() => import('./hud/ClockPanel'))
-const DisplayModePanel = lazy(() => import('./hud/DisplayModePanel'))
-const LocationPanel = lazy(() => import('./hud/LocationPanel'))
+const PositionalAwarenessPanel = lazy(() => import('./hud/PositionalAwarenessPanel'))
 const VoicePanel = lazy(() => import('./hud/VoicePanel'))
 const WeatherPanel = lazy(() => import('./hud/WeatherPanel'))
 const CommandPalette = lazy(() => import('./hud/CommandPalette'))
 const StatusRail = lazy(() => import('./hud/StatusRail'))
 const PresetPanel = lazy(() => import('./hud/PresetPanel'))
 const SOSPanel = lazy(() => import('./hud/SOSPanel'))
+const CheckInPanel = lazy(() => import('./hud/CheckInPanel'))
 const PreflightPanel = lazy(() => import('./hud/PreflightPanel'))
 const InstallHelperBanner = lazy(() => import('./hud/InstallHelperBanner'))
 
@@ -39,6 +40,7 @@ export default function App() {
       <CockpitProvider>
       <PanelDataProvider>
       <MapProvider>
+        <MovementIntelligenceBridge />
         {/* Full-screen container */}
         <div
           style={{
@@ -63,6 +65,7 @@ export default function App() {
             <MapCanvas />
             {/* ── Map Feature Layers (render-only, no DOM) ── */}
             <WaypointLayer />
+            <BreadcrumbTrailLayer />
             <RouteLayer />
           </Suspense>
 
@@ -81,15 +84,14 @@ export default function App() {
             <TopBar />
             <Suspense fallback={null}>
               <ClockPanel />
-              <DisplayModePanel />
-              <LocationPanel />
+              <PositionalAwarenessPanel />
               <VoicePanel />
               <SOSPanel />
+              <CheckInPanel />
               <WeatherPanel />
               <PresetPanel />
               <PreflightPanel />
             </Suspense>
-            <ElevationReadout />
             <div
               style={{
                 position: 'absolute',
@@ -97,17 +99,16 @@ export default function App() {
                 pointerEvents: 'none',
               }}
             >
-              <LayerPanel />
-              <WaypointTypePanel />
               <DeadManPanel />
             </div>
-            <CoordDisplay />
             <Suspense fallback={null}>
               <StatusRail />
               <CommandPalette />
             </Suspense>
+            <WaypointUndoStrip />
           </CockpitHudShell>
           <DisplayModeOverlay />
+          <GpsPowerModeIndicator />
         </div>
       </MapProvider>
       </PanelDataProvider>

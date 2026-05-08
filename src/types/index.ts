@@ -1,5 +1,8 @@
 export type WaypointType = 'default' | 'camp' | 'water' | 'rest' | 'finish'
 
+/** Field lifecycle for route pins (interaction layer only; geometry unchanged). */
+export type WaypointLifecycle = 'active' | 'arrived' | 'completed'
+
 export interface Waypoint {
   id: string
   lng: number
@@ -7,6 +10,10 @@ export interface Waypoint {
   label: string
   type: WaypointType
   createdAt: number
+  /** Defaults to active when omitted (legacy saves). */
+  lifecycle?: WaypointLifecycle
+  /** Operator notes; max length enforced at save boundary. */
+  notes?: string
   /** Operator tap before snap — present only when `source === 'snapped'`. */
   rawLat?: number
   rawLng?: number
@@ -37,6 +44,7 @@ export interface AppState {
 export type AppAction =
   | { type: 'ADD_WAYPOINT'; payload: Waypoint }
   | { type: 'SET_WAYPOINTS'; payload: Waypoint[] }
+  | { type: 'INSERT_WAYPOINT_AT'; payload: { waypoint: Waypoint; index: number } }
   | { type: 'UPDATE_WAYPOINT'; payload: { id: string; patch: Partial<Waypoint> } }
   | { type: 'REMOVE_WAYPOINT'; payload: string }
   | { type: 'SELECT_WAYPOINT'; payload: string | null }

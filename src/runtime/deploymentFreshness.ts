@@ -146,6 +146,28 @@ async function runNetworkFreshnessCheck(source: string): Promise<void> {
   const swState = snap.serviceWorker.status
   const { names, totalEntries } = await getCacheStats()
 
+  // Airplane / zero-service: never block launch on a network HTML probe. Cache stats still publish.
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    updateDeploymentIntegrity({
+      currentBuildId: RUNTIME_BUILD_ID,
+      latestBuildId: null,
+      swState,
+      cacheGeneration: names.join(', '),
+      cacheCount: names.length,
+      cacheEntryCount: totalEntries,
+      lastNetworkValidationAt: now,
+      lastNetworkValidationOk: false,
+      staleStatus: 'unknown',
+      updatePending: snap.runtimeContinuity.pendingSWUpdate,
+    })
+    try {
+      localStorage.setItem(LAST_CHECK_AT_KEY, String(now))
+    } catch {
+      // ignore
+    }
+    return
+  }
+
   let latestEntry: string | null = null
   let staleStatus: 'unknown' | 'fresh' | 'stale_detected' | 'recovering' = 'unknown'
   let lastValidationOk = false
@@ -180,8 +202,13 @@ async function runNetworkFreshnessCheck(source: string): Promise<void> {
     updatePending: snap.runtimeContinuity.pendingSWUpdate,
   })
 
-  if (import.meta.env.DEV) {
-    const deploymentProvider = window.location.hostname.includes('vercel.app') ? 'vercel' : 'netlify-or-other'
+  if (import.meta.env.DEV && typeof window !== 'undefined' && window.location?.hostname) {
+    const h = window.location.hostname.toLowerCase()
+    const deploymentProvider = h.includes('vercel.app')
+      ? 'vercel'
+      : h === 'localhost' || h === '127.0.0.1'
+        ? 'local'
+        : 'hosted'
     console.table({
       source,
       origin: window.location.origin,

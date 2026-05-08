@@ -28,6 +28,10 @@ import {
   installBuiltinCommandVerifiers,
 } from '../runtime/commandExecution'
 import { traceAction } from '../runtime/actionTrace'
+import { clearBreadcrumbSession } from '../lib/movement/breadcrumbSessionStore'
+import { sendVoiceRoutineCheckIn } from '../lib/checkIn/voiceRoutineCheckIn'
+import { applyVoiceBeaconAction } from '../lib/checkIn/voiceBeaconControl'
+import { isVoiceOperationalCommandId } from '../voice/voiceOperationalIds'
 
 /**
  * Single source of truth for HUD commands.
@@ -67,17 +71,19 @@ export type VoiceIntentRegistryEntry = {
   aliases: string[]
 }
 
+/** Directory of intents exposed to voice UX / validators (operational channel only). */
 export const VOICE_INTENT_REGISTRY: VoiceIntentRegistryEntry[] = [
-  { intent: 'flashlight_on', category: 'Safety', aliases: ['flashlight on', 'torch on', 'flashlight yes', 'torch yes'] },
-  { intent: 'flashlight_off', category: 'Safety', aliases: ['flashlight off', 'torch off', 'flashlight no', 'torch no'] },
+  { intent: 'drop_waypoint', category: 'Route', aliases: ['drop waypoint', 'drop pin'] },
+  { intent: 'check_in', category: 'Check-In', aliases: ['check in', 'routine check in'] },
+  { intent: 'weather', category: 'Weather', aliases: ['weather', 'show weather'] },
+  { intent: 'flashlight_on', category: 'Safety', aliases: ['flashlight on', 'torch on'] },
+  { intent: 'flashlight_off', category: 'Safety', aliases: ['flashlight off', 'torch off'] },
   { intent: 'flashlight_toggle', category: 'Safety', aliases: ['flashlight toggle', 'torch toggle'] },
-  { intent: 'morse_toggle', category: 'Safety', aliases: ['morse toggle'] },
-  { intent: 'weather', category: 'Weather', aliases: ['weather', 'current weather'] },
-  { intent: 'zoom_in', category: 'Navigation', aliases: ['zoom in'] },
-  { intent: 'zoom_out', category: 'Navigation', aliases: ['zoom out'] },
-  { intent: 'recenter_gps', category: 'Navigation', aliases: ['center', 'center gps', 'center map', 'gps', 'my location', 'recenter'] },
-  { intent: 'night_mode', category: 'Display', aliases: ['night', 'night mode'] },
-  { intent: 'bright_mode', category: 'Display', aliases: ['bright', 'bright mode', 'day mode', 'normal mode'] },
+  { intent: 'beacon_start', category: 'Check-In', aliases: ['start beacon', 'beacon on'] },
+  { intent: 'beacon_stop', category: 'Check-In', aliases: ['stop beacon', 'beacon off'] },
+  { intent: 'clear_trail', category: 'Route', aliases: ['clear trail', 'clear breadcrumb'] },
+  { intent: 'sos_confirm', category: 'Safety', aliases: ['confirm sos', 'sos confirm'] },
+  { intent: 'help', category: 'Meta', aliases: ['help', 'commands'] },
 ]
 
 function normalize(input: string): string {
@@ -175,8 +181,12 @@ export function useHudCommands(): {
         id: 'help',
         label: 'Help / command directory',
         aliases: ['commands', 'directory'],
-        run: () =>
-          ok('Navigation, route, status, display, and safety commands are available.'),
+        run: (ctx) =>
+          ctx.source === 'voice'
+            ? ok(
+                'Voice (after HUD): drop waypoint, check in, show weather, flashlight on or off, start or stop beacon, clear trail. Say SOS then confirm to arm.',
+              )
+            : ok('Navigation, route, status, display, and safety commands are available.'),
       },
 
       // Navigation
@@ -336,6 +346,72 @@ export function useHudCommands(): {
             createdAt: Date.now(),
           })
           return ok('Pin added at current location.')
+        },
+      },
+      {
+        id: 'drop waypoint',
+        label: 'Drop waypoint at current position',
+        aliases: ['drop way point', 'mark waypoint', 'place waypoint'],
+        group: 'Route',
+        run: () => {
+          if (gps.lat == null || gps.lng == null) return fail('GPS fix required.')
+          const idx = state.waypoints.length + 1
+          addWaypoint({
+            id: `wp_voice_${Date.now()}`,
+            lat: gps.lat,
+            lng: gps.lng,
+            label: `WP-${idx}`,
+            type: 'default',
+            createdAt: Date.now(),
+          })
+          return ok('Waypoint dropped at current position.')
+        },
+      },
+      {
+        id: 'clear trail',
+        label: 'Clear breadcrumb trail',
+        aliases: ['clear breadcrumbs', 'reset breadcrumb trail'],
+        group: 'Route',
+        run: () => {
+          clearBreadcrumbSession()
+          return ok('Breadcrumb trail cleared.')
+        },
+      },
+      {
+        id: 'check in',
+        label: 'Send routine check-in',
+        aliases: ['routine check in', 'send check in', 'send check-in'],
+        group: 'Check-In',
+        run: async () => {
+          if (gps.lat == null || gps.lng == null) return fail('GPS fix required.')
+          const r = await sendVoiceRoutineCheckIn({
+            lat: gps.lat,
+            lng: gps.lng,
+            locationState: gps.locationState,
+            accuracy: gps.accuracy ?? null,
+            elevation: gps.elevation ?? null,
+          })
+          return { ok: r.ok, message: r.message }
+        },
+      },
+      {
+        id: 'start beacon',
+        label: 'Start check-in beacon',
+        aliases: ['beacon start', 'enable beacon'],
+        group: 'Check-In',
+        run: () => {
+          const r = applyVoiceBeaconAction('start')
+          return { ok: r.ok, message: r.message }
+        },
+      },
+      {
+        id: 'stop beacon',
+        label: 'Stop check-in beacon',
+        aliases: ['beacon stop', 'disable beacon'],
+        group: 'Check-In',
+        run: () => {
+          const r = applyVoiceBeaconAction('stop')
+          return { ok: r.ok, message: r.message }
         },
       },
       {
@@ -507,11 +583,24 @@ export function useHudCommands(): {
         label: 'Arm SOS',
         aliases: ['emergency', 'rescue'],
         group: 'Safety',
-        run: () => {
+        run: (ctx) => {
+          if (ctx.source === 'voice') {
+            return fail('Say HUD SOS for the prompt, then say confirm to arm.')
+          }
           window.dispatchEvent(new CustomEvent('hud:sos-arm'))
           raisePanel('sos')
           updatePanel('sos', { minimized: false, docked: false })
           return ok('Emergency protocol armed. SOS panel activated.')
+        },
+      },
+      {
+        id: 'sos confirm',
+        label: 'Confirm voice SOS arm',
+        aliases: ['confirm sos', 'confirm emergency'],
+        group: 'Safety',
+        run: () => {
+          window.dispatchEvent(new CustomEvent('hud:sos-arm'))
+          return ok('Emergency protocol armed.')
         },
       },
       {
@@ -687,14 +776,14 @@ export function useHudCommands(): {
       },
       {
         id: 'location panel',
-        label: 'Open location panel',
-        aliases: ['open location', 'open location panel'],
+        label: 'Open situation panel',
+        aliases: ['open location', 'open location panel', 'open situation', 'open situation panel'],
         paletteVisible: true,
         group: 'Panels',
         run: () => {
-          updatePanel('location', { docked: false, minimized: false })
-          raisePanel('location')
-          return ok('Location panel opened.')
+          updatePanel('positional', { docked: false, minimized: false })
+          raisePanel('positional')
+          return ok('Situation panel opened.')
         },
       },
       {
@@ -719,6 +808,18 @@ export function useHudCommands(): {
           updatePanel('preflight', { docked: false, minimized: false })
           raisePanel('preflight')
           return ok('Emergency contacts panel opened.')
+        },
+      },
+      {
+        id: 'checkin panel',
+        label: 'Open routine check-in panel',
+        aliases: ['open check in', 'check in panel', 'routine check in', 'beacon panel'],
+        paletteVisible: true,
+        group: 'Panels',
+        run: () => {
+          updatePanel('checkin', { docked: false, minimized: false })
+          raisePanel('checkin')
+          return ok('Routine check-in panel opened.')
         },
       },
       {
@@ -846,6 +947,8 @@ export function useHudCommands(): {
     gps.lat,
     gps.lng,
     gps.locationState,
+    gps.accuracy,
+    gps.elevation,
     map,
     raisePanel,
     removeWaypoint,
@@ -871,6 +974,12 @@ export function useHudCommands(): {
       'bright',
       'status',
       'sos',
+      'sos confirm',
+      'drop waypoint',
+      'clear trail',
+      'check in',
+      'start beacon',
+      'stop beacon',
     ]
     const rows = requiredCommands.map((command) => {
       const hit = commands.find((c) => c.id === command || (c.aliases ?? []).includes(command))
@@ -952,6 +1061,16 @@ export function useHudCommands(): {
         return finalize(
           fail(`Unknown command: ${norm}.`),
           { id: null, alias: null },
+          'unknown',
+        )
+      }
+
+      if (source === 'voice' && !isVoiceOperationalCommandId(found.id)) {
+        traceAction(`command:${found.id}`, 'guard_reject', { reason: 'voice_operational_only' })
+        reportCommandRejected(execId, 'invalid_state', 'That command is not available on voice.')
+        return finalize(
+          fail('Voice channel runs field actions only. Use the command palette for panels and navigation.'),
+          { id: found.id, alias: matchedAlias },
           'unknown',
         )
       }

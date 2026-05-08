@@ -26,6 +26,11 @@ import {
 } from '../lib/snapToTrail'
 import { hudObsMark, hudObsMeasure } from '../diag/hudObs'
 import { getDeviceProfile } from '../runtime/deviceProfile'
+import { resolveMapBootView } from '../lib/operationalMapResume'
+import {
+  WAYPOINT_LONG_PRESS_MS,
+  WAYPOINT_LONG_PRESS_MOVE_PX,
+} from '../lib/waypointInteraction'
 
 const HUD_DEBUG_CLICK_SRC = 'hud-debug-click'
 const HUD_DEBUG_CLICK_LAYER = 'hud-debug-click-circle'
@@ -40,34 +45,6 @@ type PersistedViewport = {
   bearing: number
   pitch: number
   ts: number
-}
-
-function readPersistedViewport(): PersistedViewport | null {
-  try {
-    const raw = localStorage.getItem(MAP_VIEWPORT_KEY)
-    if (!raw) return null
-    const p = JSON.parse(raw) as Partial<PersistedViewport> | null
-    if (!p) return null
-    if (
-      typeof p.lng !== 'number' ||
-      typeof p.lat !== 'number' ||
-      typeof p.zoom !== 'number' ||
-      typeof p.bearing !== 'number' ||
-      typeof p.pitch !== 'number'
-    ) {
-      return null
-    }
-    return {
-      lng: p.lng,
-      lat: p.lat,
-      zoom: p.zoom,
-      bearing: p.bearing,
-      pitch: p.pitch,
-      ts: typeof p.ts === 'number' ? p.ts : Date.now(),
-    }
-  } catch {
-    return null
-  }
 }
 
 function readCachedOperationalFix(): { lat: number; lng: number } | null {
@@ -247,8 +224,17 @@ export default function MapCanvas() {
   /** Latest sync fn so window-level events (pageshow/visibilitychange) can ping capability without re-binding map listeners. */
   const snapAssistSyncRef = useRef<(() => void) | null>(null)
   const snapPreviewCleanupRef = useRef<(() => void) | null>(null)
+  const rawPlacementCleanupRef = useRef<(() => void) | null>(null)
+  const longPressTimerRef = useRef<number | null>(null)
+  const longPressEligibleRef = useRef(false)
+
+  function dismissRawPlacementPreview() {
+    rawPlacementCleanupRef.current?.()
+    rawPlacementCleanupRef.current = null
+  }
 
   function clearTrailSnapPreview() {
+    dismissRawPlacementPreview()
     snapPreviewCleanupRef.current?.()
     snapPreviewCleanupRef.current = null
     snapPreviewGateRef.current.unlock()
@@ -257,7 +243,9 @@ export default function MapCanvas() {
   const { panels } = useCockpit()
   const waypointDropBlockedRef = useRef(false)
   const wpLayout = panels.waypoints
-  waypointDropBlockedRef.current = wpLayout?.docked === true
+  const pasLayout = panels.positional
+  waypointDropBlockedRef.current =
+    wpLayout?.docked === true || pasLayout?.docked === true
 
   const activeLayerRef = useRef(activeLayer)
   activeLayerRef.current = activeLayer
@@ -380,8 +368,6 @@ export default function MapCanvas() {
     setStaticFallbackVisible(true)
     setStatus('initial')
 
-    const STATIC_CENTER = { lng: -105.7821, lat: 39.5501 }
-
     /** Once per style (not `styledata`, which fires on every tile batch). */
     const onStyleLoad = () => {
       if (cancelled || !map) return
@@ -470,12 +456,16 @@ export default function MapCanvas() {
       currentStyleRef.current = initialStyle
       logActiveLayerTileDebug(initLayer)
 
+      const boot = resolveMapBootView()
+
       hudObsMark('hud:map:boot:start')
       map = new maplibregl.Map({
         container,
         style: initialStyle,
-        center: [STATIC_CENTER.lng, STATIC_CENTER.lat],
-        zoom: 10,
+        center: [boot.lng, boot.lat],
+        zoom: boot.zoom,
+        bearing: boot.bearing,
+        pitch: boot.pitch,
         attributionControl: { compact: true },
         renderWorldCopies: false,
       })
@@ -584,17 +574,19 @@ export default function MapCanvas() {
         startupResetAttemptsRef.current = 0
         setMapReady(true)
         setMap(map)
-        const persisted = readPersistedViewport()
-        if (persisted) {
-          map.jumpTo({
-            center: [persisted.lng, persisted.lat],
-            zoom: persisted.zoom,
-            bearing: persisted.bearing,
-            pitch: persisted.pitch,
-          })
+        const bootNow = resolveMapBootView()
+        map.jumpTo({
+          center: [bootNow.lng, bootNow.lat],
+          zoom: bootNow.zoom,
+          bearing: bootNow.bearing,
+          pitch: bootNow.pitch,
+        })
+        if (bootNow.kind !== 'static') {
           restoredViewportRef.current = true
           initialOperationalCenterAppliedRef.current = true
         } else {
+          restoredViewportRef.current = false
+          initialOperationalCenterAppliedRef.current = false
           void tryApplyInitialOperationalCenter()
         }
         scheduleResize()
@@ -685,8 +677,13 @@ export default function MapCanvas() {
         hardReset()
       })
 
-      const placeWaypoint = (e: any, source: 'click' | 'touch'): boolean => {
+      const placeWaypoint = (
+        e: any,
+        source: 'click' | 'touch',
+        opts?: { longPressCommit?: boolean },
+      ): boolean => {
         if (!map) return false
+        const longPressCommit = opts?.longPressCommit === true
         // CONTRACT-SENSITIVE (trail snap): while a preview is open, ignore
         // further map taps — operator must use explicit buttons. Never queue
         // multiple previews; gate ensures no duplicate placement from stacked gestures.
@@ -696,13 +693,13 @@ export default function MapCanvas() {
         if (!ll || typeof ll.lat !== 'number' || typeof ll.lng !== 'number') return false
         const lat = ll.lat
         const lng = ll.lng
+        dismissRawPlacementPreview()
         if (waypointDropBlockedRef.current) {
           return false
         }
         const now = Date.now()
         // Stability guard: prevent accidental double-drops from rapid taps/clicks.
         if (now - lastDropAtRef.current < 220) return false
-        lastDropAtRef.current = now
 
         // Ignore placement while camera is moving, except deliberate touch taps.
         if (source !== 'touch' && map.isMoving()) return false
@@ -713,10 +710,10 @@ export default function MapCanvas() {
           type === 'default'
             ? 'WP'
             : type === 'finish'
-            ? 'FINISH'
-            : type === 'rest'
-              ? 'REST'
-              : type.toUpperCase()
+              ? 'FINISH'
+              : type === 'rest'
+                ? 'REST'
+                : type.toUpperCase()
         const label = manualLabel || `${autoBase}-${nextIdx}`
         const makeId = () => `wp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
 
@@ -727,10 +724,90 @@ export default function MapCanvas() {
             console.error('[MapCanvas] waypoint add failed', err)
             return false
           }
+          dismissRawPlacementPreview()
           setDebugClickRef.current({ lat: wp.lat, lng: wp.lng })
           if (!keepArmedRef.current) setPendingType('default')
           if (clearLabelAfterDropRef.current && manualLabel) setNextWaypointLabel('')
+          lastDropAtRef.current = Date.now()
           return true
+        }
+
+        const commitRawAt = (rlat: number, rlng: number, extra?: Partial<Waypoint>) => {
+          commitWaypoint({
+            id: makeId(),
+            lng: rlng,
+            lat: rlat,
+            label,
+            type,
+            createdAt: Date.now(),
+            lifecycle: 'active',
+            ...extra,
+          })
+        }
+
+        const showRawTwoStepBar = (rlat: number, rlng: number) => {
+          if (!map) return
+          const mapCtl = map
+          dismissRawPlacementPreview()
+          const pulse = document.createElement('div')
+          pulse.style.cssText =
+            'width:18px;height:18px;border-radius:50%;background:#fb923c;border:3px solid #fff;box-shadow:0 0 8px rgba(0,0,0,0.55)'
+          const pulseMarker = new maplibregl.Marker({ element: pulse }).setLngLat([rlng, rlat]).addTo(mapCtl)
+
+          const bar = document.createElement('div')
+          bar.setAttribute('data-hud-waypoint-raw-place', '1')
+          bar.style.cssText =
+            'position:absolute;bottom:28px;left:50%;transform:translateX(-50%);z-index:10000;display:flex;gap:10px;align-items:center;padding:12px 14px;border-radius:12px;background:rgba(8,12,18,0.94);border:1px solid rgba(251,146,60,0.55);pointer-events:auto;max-width:96vw;flex-wrap:wrap'
+
+          const mkBtn = (text: string, primary: boolean) => {
+            const b = document.createElement('button')
+            b.type = 'button'
+            b.setAttribute('data-no-drag', '1')
+            b.textContent = text
+            b.style.cssText = [
+              'cursor:pointer',
+              'font-weight:800',
+              'letter-spacing:0.06em',
+              'font-size:12px',
+              'min-height:48px',
+              primary ? 'min-width:132px' : 'min-width:96px',
+              'padding:10px 16px',
+              'border-radius:10px',
+              primary
+                ? 'border:2px solid rgba(251,191,36,0.85);background:rgba(251,146,60,0.22);color:#ffedd5'
+                : 'border:1px solid rgba(148,163,184,0.55);background:rgba(30,41,59,0.75);color:#e2e8f0',
+            ].join(';')
+            return b
+          }
+          const btnPlace = mkBtn('PLACE PIN', true)
+          const btnCancel = mkBtn('CANCEL', false)
+          bar.appendChild(btnPlace)
+          bar.appendChild(btnCancel)
+          mapCtl.getContainer().appendChild(bar)
+
+          const onMoveStart = () => {
+            dismissRawPlacementPreview()
+            mapCtl.off('movestart', onMoveStart)
+          }
+          mapCtl.once('movestart', onMoveStart)
+
+          rawPlacementCleanupRef.current = () => {
+            pulseMarker.remove()
+            bar.remove()
+            mapCtl.off('movestart', onMoveStart)
+            rawPlacementCleanupRef.current = null
+          }
+
+          btnPlace.addEventListener('click', (ev) => {
+            ev.preventDefault()
+            ev.stopPropagation()
+            commitRawAt(rlat, rlng)
+          })
+          btnCancel.addEventListener('click', (ev) => {
+            ev.preventDefault()
+            ev.stopPropagation()
+            dismissRawPlacementPreview()
+          })
         }
 
         // CONTRACT-SENSITIVE (trail snap): preview-only path. When OFF or
@@ -792,7 +869,6 @@ export default function MapCanvas() {
 
             const finish = (mode: 'snapped' | 'raw') => {
               clearTrailSnapPreview()
-              lastDropAtRef.current = Date.now()
               if (mode === 'snapped') {
                 commitWaypoint({
                   id: makeId(),
@@ -805,6 +881,7 @@ export default function MapCanvas() {
                   label,
                   type,
                   createdAt: Date.now(),
+                  lifecycle: 'active',
                 })
               } else {
                 commitWaypoint({
@@ -814,6 +891,7 @@ export default function MapCanvas() {
                   label,
                   type,
                   createdAt: Date.now(),
+                  lifecycle: 'active',
                 })
               }
             }
@@ -837,22 +915,11 @@ export default function MapCanvas() {
           }
         }
 
-        try {
-          addWaypoint({
-            id: makeId(),
-            lng,
-            lat,
-            label,
-            type,
-            createdAt: Date.now(),
-          })
-        } catch (err) {
-          console.error('[MapCanvas] waypoint add failed', err)
-          return false
+        if (longPressCommit) {
+          commitRawAt(lat, lng)
+          return true
         }
-        setDebugClickRef.current({ lat, lng })
-        if (!keepArmedRef.current) setPendingType('default')
-        if (clearLabelAfterDropRef.current && manualLabel) setNextWaypointLabel('')
+        showRawTwoStepBar(lat, lng)
         return true
       }
 
@@ -863,17 +930,28 @@ export default function MapCanvas() {
         if (Date.now() - lastTouchDropAt < 550) return
         selectWaypoint(null)
         tapDiag('click placement attempt')
-        placeWaypoint(e, 'click')
+        placeWaypoint(e, 'click', { longPressCommit: false })
       })
       map.on('touchstart', (e: any) => {
         lastUserInteractionAt = Date.now()
         markUserViewportControl()
+        longPressEligibleRef.current = false
+        if (longPressTimerRef.current != null) {
+          clearTimeout(longPressTimerRef.current)
+          longPressTimerRef.current = null
+        }
         const pointCount = Array.isArray(e?.points) ? e.points.length : 0
         multiTouchActive = pointCount > 1
         const p = e?.points?.[0]
         touchStart = p ? { x: p.x, y: p.y } : null
         touchLast = touchStart
         touchMoved = false
+        if (!multiTouchActive && pointCount === 1 && map) {
+          longPressTimerRef.current = window.setTimeout(() => {
+            longPressTimerRef.current = null
+            if (!cancelled) longPressEligibleRef.current = true
+          }, WAYPOINT_LONG_PRESS_MS)
+        }
         tapDiag(`touchstart points=${pointCount}`)
       })
       map.on('touchmove', (e: any) => {
@@ -886,9 +964,23 @@ export default function MapCanvas() {
           touchMoved = true
           tapDiag('touchmove crossed drag tolerance')
         }
+        if (
+          longPressTimerRef.current != null &&
+          Math.hypot(p.x - touchStart.x, p.y - touchStart.y) > WAYPOINT_LONG_PRESS_MOVE_PX
+        ) {
+          clearTimeout(longPressTimerRef.current)
+          longPressTimerRef.current = null
+          longPressEligibleRef.current = false
+        }
       })
       map.on('touchend', (e: any) => {
         lastUserInteractionAt = Date.now()
+        const longPressCommit = longPressEligibleRef.current
+        longPressEligibleRef.current = false
+        if (longPressTimerRef.current != null) {
+          clearTimeout(longPressTimerRef.current)
+          longPressTimerRef.current = null
+        }
         if (multiTouchActive) {
           const remaining = Array.isArray(e?.points) ? e.points.length : 0
           if (remaining <= 1) multiTouchActive = false
@@ -896,7 +988,7 @@ export default function MapCanvas() {
         }
         if (touchMoved) return
         selectWaypoint(null)
-        const dropped = placeWaypoint(e, 'touch')
+        const dropped = placeWaypoint(e, 'touch', { longPressCommit })
         if (dropped) lastTouchDropAt = Date.now()
         tapDiag(`touchend dropped=${String(dropped)}`)
       })
@@ -986,6 +1078,11 @@ export default function MapCanvas() {
     return () => {
       setMapReady(false)
       setTrailSnapAssistCapable(false)
+      longPressEligibleRef.current = false
+      if (longPressTimerRef.current != null) {
+        clearTimeout(longPressTimerRef.current)
+        longPressTimerRef.current = null
+      }
       clearTrailSnapPreview()
       vv?.removeEventListener('resize', onVisualViewportChange)
       vv?.removeEventListener('scroll', onVisualViewportChange)
@@ -1340,7 +1437,7 @@ export default function MapCanvas() {
       userMarkerRef.current = new maplibregl.Marker({ element: el })
         .setLngLat([gps.lng, gps.lat])
         .addTo(map)
-      console.log('[USER MARKER CREATED]')
+      if (import.meta.env.DEV) console.log('[USER MARKER CREATED]')
       return
     }
     userMarkerRef.current.setLngLat([gps.lng, gps.lat])

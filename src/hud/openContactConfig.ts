@@ -36,21 +36,23 @@ export function openContactConfig({
   })
   raisePanel('preflight')
 
-  console.log('[ContactConfig]', {
-    source,
-    handlerExists: true,
-    functionExists: typeof openContactConfig === 'function',
-    stateBefore,
-    stateAfter: {
-      docked: false,
-      minimized: false,
-      x: preflight?.x ?? 16,
-      y: preflight?.y ?? 72,
-      z: nextZ,
-    },
-    modalMounted: Boolean(preflight),
-    navigationAttempted: false,
-  })
+  if (import.meta.env.DEV) {
+    console.log('[ContactConfig]', {
+      source,
+      handlerExists: true,
+      functionExists: typeof openContactConfig === 'function',
+      stateBefore,
+      stateAfter: {
+        docked: false,
+        minimized: false,
+        x: preflight?.x ?? 16,
+        y: preflight?.y ?? 72,
+        z: nextZ,
+      },
+      modalMounted: Boolean(preflight),
+      navigationAttempted: false,
+    })
+  }
 
   window.dispatchEvent(
     new CustomEvent('hud:contact-config-opened', {

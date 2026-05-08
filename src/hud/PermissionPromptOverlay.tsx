@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useGPS } from '../hooks/useGPS'
 import { getPermissionSnapshot, type PermissionStateLike } from '../lib/devicePermissions'
+import {
+  getPermissionRecoveryPlatform,
+  mergePersistedGeolocationState,
+  wizardIntroHint,
+} from '../lib/permissionRecoveryCopy'
 import PermissionWizard from './PermissionWizard'
 import { resetAppState } from '../utils/resetApp'
 
@@ -80,6 +85,7 @@ export default function PermissionPromptOverlay() {
   const [orient, setOrient] = useState<PermissionStateLike>('unknown')
   const [motion, setMotion] = useState<PermissionStateLike>('unknown')
   const [busy, setBusy] = useState(false)
+  const prevGeoRef = useRef<PermissionStateLike | null>(null)
 
   const isAppleMobile = useMemo(() => {
     const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : ''
@@ -93,21 +99,21 @@ export default function PermissionPromptOverlay() {
 
   const locationDenied = geo === 'denied' || gps.status === 'denied'
 
-  const platformHint = useMemo(() => {
-    const ua = navigator.userAgent || ''
-    const isAndroidUa = /Android/i.test(ua)
-    const isWindows = /Windows/i.test(ua)
-    const isApple = /iPhone|iPad|iPod|Macintosh/i.test(ua)
-    if (isAndroidUa) {
-      return 'Android: allow prompts, then check Chrome site settings if any permission stays blocked.'
+  const platformHint = useMemo(() => wizardIntroHint(getPermissionRecoveryPlatform()), [])
+
+  const applySnapshot = useCallback((s: Awaited<ReturnType<typeof getPermissionSnapshot>>) => {
+    const persisted = safeLocalStorageGet(GPS_PERMISSION_KEY)
+    let geolocation = mergePersistedGeolocationState(s.geolocation, persisted)
+    if (gpsRef.current.locationState === 'denied') {
+      geolocation = 'denied'
+      safeLocalStorageSet(GPS_PERMISSION_KEY, 'denied')
     }
-    if (isWindows) {
-      return 'Windows: allow browser prompts and confirm Location/Microphone are enabled in browser + OS privacy settings.'
+    setGeo(geolocation)
+    setMic(s.microphone)
+    setNotif(s.notifications)
+    if (geolocation === 'granted' || geolocation === 'denied') {
+      safeLocalStorageSet(GPS_PERMISSION_KEY, geolocation)
     }
-    if (isApple) {
-      return 'Apple: iOS/Safari requires explicit user taps for each permission prompt.'
-    }
-    return 'Allow each browser prompt. If blocked, reopen site permissions from your browser address bar.'
   }, [])
 
   const allRequested = useMemo(() => {
@@ -127,18 +133,27 @@ export default function PermissionPromptOverlay() {
   useEffect(() => {
     const wizardCompleted = readWizardCompletedFlag()
     void getPermissionSnapshot().then((s) => {
-      setGeo(s.geolocation)
-      setMic(s.microphone)
-      setNotif(s.notifications)
-      if (s.geolocation === 'granted' || s.geolocation === 'denied') {
-        safeLocalStorageSet(GPS_PERMISSION_KEY, s.geolocation)
-      }
+      applySnapshot(s)
       const shouldShowWizard = !wizardCompleted
       if (shouldShowWizard) {
         setVisible(true)
       }
     })
-  }, [])
+  }, [applySnapshot])
+
+  useEffect(() => {
+    if (!visible) return
+    const bump = () => {
+      if (document.visibilityState !== 'visible') return
+      void getPermissionSnapshot().then(applySnapshot)
+    }
+    document.addEventListener('visibilitychange', bump)
+    window.addEventListener('pageshow', bump)
+    return () => {
+      document.removeEventListener('visibilitychange', bump)
+      window.removeEventListener('pageshow', bump)
+    }
+  }, [visible, applySnapshot])
 
   // CONTRACT-SENSITIVE (iOS / PWA loop prevention): this watchdog exists
   // because Safari often leaves GPS in searching/idle/error briefly after
@@ -151,11 +166,7 @@ export default function PermissionPromptOverlay() {
   useEffect(() => {
     if (!isAppleMobile) return
     const refreshSnapshot = () => {
-      void getPermissionSnapshot().then((s) => {
-        setGeo(s.geolocation)
-        setMic(s.microphone)
-        setNotif(s.notifications)
-      })
+      void getPermissionSnapshot().then(applySnapshot)
     }
     const id = window.setInterval(() => {
       const g = gpsRef.current
@@ -193,23 +204,28 @@ export default function PermissionPromptOverlay() {
     return () => {
       window.clearInterval(id)
     }
-  }, [isAppleMobile])
+  }, [isAppleMobile, applySnapshot])
 
   useEffect(() => {
     const onShow = () => {
       setVisible(true)
-      void getPermissionSnapshot().then((s) => {
-        setGeo(s.geolocation)
-        setMic(s.microphone)
-        setNotif(s.notifications)
-        if (s.geolocation === 'granted' || s.geolocation === 'denied') {
-          safeLocalStorageSet(GPS_PERMISSION_KEY, s.geolocation)
-        }
-      })
+      void getPermissionSnapshot().then(applySnapshot)
     }
     window.addEventListener('hud:show-permissions', onShow)
     return () => window.removeEventListener('hud:show-permissions', onShow)
-  }, [])
+  }, [applySnapshot])
+
+  /** After dismissal, reopen when geolocation transitions to denied (e.g. OS revoke). */
+  useEffect(() => {
+    const prev = prevGeoRef.current
+    prevGeoRef.current = geo
+    if (visible) return
+    if (!readWizardCompletedFlag()) return
+    if (geo !== 'denied') return
+    if (prev !== 'granted' && prev !== 'prompt') return
+    setVisible(true)
+    void getPermissionSnapshot().then(applySnapshot)
+  }, [geo, visible, applySnapshot])
 
   const close = useCallback(() => {
     dismissedRef.current = true

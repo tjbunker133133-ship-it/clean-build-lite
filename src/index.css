@@ -383,3 +383,9 @@ html.cockpit-reduced-transparency [style*="backdrop-filter"] {
     max-width: min(96vw, 440px);
   }
 }
+
+@keyframes hud-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

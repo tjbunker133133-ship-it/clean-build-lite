@@ -6,11 +6,27 @@ import {
 } from '../runtime/forceUpdateMeta'
 import { traceAction } from '../runtime/actionTrace'
 import { getRuntimeSnapshot } from '../runtime/runtimeSnapshot'
+import { logInfo, logWarn } from '../runtime/logger'
 
 const FORCE_UPDATE_IN_FLIGHT_KEY = 'hud_force_update_in_flight_v1'
 const FORCE_UPDATE_LAST_RELOAD_KEY = 'hud_force_update_last_reload_v1'
-const FORCE_UPDATE_RELOAD_GUARD_MS = 15_000
 const FORCE_UPDATE_RESULT_KEY = 'hud_force_update_result_v1'
+
+/**
+ * After a force-update navigation (`?update=`), clear session throttles so the
+ * operator can run another force update immediately on the fresh document.
+ */
+export function consumeForceUpdateNavigationMark(): void {
+  if (typeof window === 'undefined') return
+  try {
+    if (new URLSearchParams(window.location.search).has('update')) {
+      sessionStorage.removeItem(FORCE_UPDATE_LAST_RELOAD_KEY)
+      sessionStorage.removeItem(FORCE_UPDATE_IN_FLIGHT_KEY)
+    }
+  } catch {
+    /* ignore */
+  }
+}
 
 function reloadWithUpdateQuery(): void {
   const qs = new URLSearchParams(window.location.search)
@@ -45,12 +61,36 @@ async function getLocalStorageSizeSafe(): Promise<number> {
   }
 }
 
+/** Give Workbox time to finish precache after a new worker reaches installed/activated. */
+async function waitForServiceWorkerLifecycle(
+  reg: ServiceWorkerRegistration,
+  maxMs: number,
+): Promise<void> {
+  const w = reg.installing ?? reg.waiting
+  if (!w) return
+  await new Promise<void>((resolve) => {
+    const finish = () => resolve()
+    const maybeFinish = () => {
+      if (w.state === 'installed' || w.state === 'activated' || w.state === 'redundant') {
+        w.removeEventListener('statechange', onState)
+        finish()
+      }
+    }
+    const onState = () => maybeFinish()
+    w.addEventListener('statechange', onState)
+    maybeFinish()
+    window.setTimeout(() => {
+      w.removeEventListener('statechange', onState)
+      finish()
+    }, maxMs)
+  })
+}
+
 type RecoveryResult = { ok: boolean; message: string }
 
 export async function forceUpdateApp(): Promise<RecoveryResult> {
   traceAction('force_update_app', 'handler_enter')
-  console.log('[ForceUpdate] button pressed')
-  console.log('[ForceUpdate] checking service worker')
+  logInfo('PWA', 'force update: handler enter')
   const now = Date.now()
   try {
     const inFlightAt = Number(sessionStorage.getItem(FORCE_UPDATE_IN_FLIGHT_KEY) ?? '0')
@@ -104,9 +144,10 @@ export async function forceUpdateApp(): Promise<RecoveryResult> {
         if (waiting) {
           waitingPresent = true
           updateAvailable = true
-          console.log('[ForceUpdate] update available', reg)
+          logInfo('PWA', 'force update: waiting worker — skipWaiting', { scope: reg.scope })
           waiting.postMessage({ type: 'SKIP_WAITING' })
         }
+        await waitForServiceWorkerLifecycle(reg, 6000)
       }
       if (import.meta.env.DEV) {
         try {
@@ -138,7 +179,7 @@ export async function forceUpdateApp(): Promise<RecoveryResult> {
         waitingPresent,
       })
     } catch (err) {
-      console.warn('[FORCE UPDATE ERROR]', err)
+      logWarn('PWA', 'force update: service worker error', err)
       traceAction('force_update_app', 'failure', {
         reason: 'sw_update_failed',
         message: (err as Error)?.message ?? 'unknown',
@@ -160,20 +201,16 @@ export async function forceUpdateApp(): Promise<RecoveryResult> {
     return { ok: false, message: 'Service worker unsupported in this browser' }
   }
 
-  // A healthy production state should typically have <=1 active registration for this scope.
   if (activeWorkerCount > 1) {
-    console.warn('[ForceUpdate] multiple active service workers detected', { activeWorkerCount, registrationCount })
+    logWarn('PWA', 'force update: multiple registrations report an active worker', {
+      activeWorkerCount,
+      registrationCount,
+    })
   }
 
-  console.log('[ForceUpdate] reload triggered')
+  logInfo('PWA', 'force update: scheduling navigation reload')
   window.setTimeout(() => {
     try {
-      const lastReloadAt = Number(sessionStorage.getItem(FORCE_UPDATE_LAST_RELOAD_KEY) ?? '0')
-      if (Number.isFinite(lastReloadAt) && lastReloadAt > 0 && Date.now() - lastReloadAt < FORCE_UPDATE_RELOAD_GUARD_MS) {
-        console.warn('[ForceUpdate] reload suppressed by guard window')
-        sessionStorage.removeItem(FORCE_UPDATE_IN_FLIGHT_KEY)
-        return
-      }
       sessionStorage.setItem(FORCE_UPDATE_LAST_RELOAD_KEY, String(Date.now()))
       const reloadReason =
         updateAvailable
@@ -207,13 +244,11 @@ export async function forceUpdateApp(): Promise<RecoveryResult> {
     } catch {
       // ignore storage failures
     }
-    // Timeout fail-safe: if waiting worker exists but controllerchange is delayed,
-    // this deterministic reload still advances runtime freshness.
     if (registrationRef?.waiting) {
       registrationRef.waiting.postMessage({ type: 'SKIP_WAITING' })
     }
     traceAction('force_update_app', 'reload_requested', { source: 'force_update_timeout' })
     reloadWithUpdateQuery()
-  }, 500)
+  }, 650)
   return { ok: true, message: 'Force update triggered' }
 }

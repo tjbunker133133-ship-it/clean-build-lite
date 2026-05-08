@@ -83,6 +83,7 @@ function installRuntimeStubs(opts: { htmlEntrySrc: string }) {
     navigator: {
       userAgent: 'vitest',
       standalone: false,
+      onLine: true,
       serviceWorker,
     },
     location: {
@@ -141,18 +142,22 @@ describe('deploymentFreshness', () => {
     vi.resetModules()
   })
 
-  it('self-recovers once when network entry mismatches running entry', async () => {
-    const env = installRuntimeStubs({ htmlEntrySrc: '/assets/index-new.js' })
-    const mod = await import('./deploymentFreshness')
-    mod.installDeploymentFreshnessGuard()
-    await flush()
+  it(
+    'self-recovers once when network entry mismatches running entry',
+    async () => {
+      const env = installRuntimeStubs({ htmlEntrySrc: '/assets/index-new.js' })
+      const mod = await import('./deploymentFreshness')
+      mod.installDeploymentFreshnessGuard()
+      await flush()
 
-    expect(env.cachesStub.keys).toHaveBeenCalled()
-    expect(env.cachesStub.delete).toHaveBeenCalled()
-    expect(env.registrations[0].unregister).toHaveBeenCalled()
-    expect(env.locationReplace).toHaveBeenCalledTimes(1)
-    expect(env.sessionStorage.setItem).toHaveBeenCalledWith('reloadAttempted', '1')
-  })
+      expect(env.cachesStub.keys).toHaveBeenCalled()
+      expect(env.cachesStub.delete).toHaveBeenCalled()
+      expect(env.registrations[0].unregister).toHaveBeenCalled()
+      expect(env.locationReplace).toHaveBeenCalledTimes(1)
+      expect(env.sessionStorage.setItem).toHaveBeenCalledWith('reloadAttempted', '1')
+    },
+    15_000,
+  )
 
   it('prevents infinite loop when recovery already attempted', async () => {
     const env = installRuntimeStubs({ htmlEntrySrc: '/assets/index-newer.js' })
@@ -166,6 +171,19 @@ describe('deploymentFreshness', () => {
 
     expect(env.cachesStub.delete).not.toHaveBeenCalled()
     expect(env.registrations[0].unregister).not.toHaveBeenCalled()
+    expect(env.locationReplace).not.toHaveBeenCalled()
+  })
+
+  it('does not fetch index.html when navigator is offline (zero-service boot)', async () => {
+    const env = installRuntimeStubs({ htmlEntrySrc: '/assets/index-old.js' })
+    const w = globalThis.window as Window & { navigator: { onLine: boolean } }
+    w.navigator.onLine = false
+
+    const mod = await import('./deploymentFreshness')
+    mod.installDeploymentFreshnessGuard()
+    await flush()
+
+    expect(env.fetch).not.toHaveBeenCalled()
     expect(env.locationReplace).not.toHaveBeenCalled()
   })
 

@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react'
 import type { MapMouseEvent } from 'maplibre-gl'
 import { useMapContext } from '../context/MapContext'
-import HudPanel from './HudPanel'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 import { touchFontMd } from './tokens'
 
-export default function CoordDisplay() {
+/** Map viewport center readout (same hooks as legacy Coordinates panel). */
+export function CoordReadoutBody() {
   const { map } = useMapContext()
 
   const [coords, setCoords] = useState({
@@ -57,26 +57,18 @@ export default function CoordDisplay() {
   const fontMd = touchFontMd(isMobile)
 
   return (
-    <HudPanel
-      panelId="coords"
-      title="Coordinates"
-      initialPos={{ x: 16, y: 280 }}
-      initialWidth={280}
-      minHeight={72}
+    <div
+      style={{
+        padding: '6px 10px',
+        color: '#c7cec6',
+        borderRadius: 6,
+        fontFamily: 'monospace',
+        fontSize: fontMd,
+      }}
     >
-      <div
-        style={{
-          padding: '6px 10px',
-          color: '#c7cec6',
-          borderRadius: 6,
-          fontFamily: 'monospace',
-          fontSize: fontMd,
-        }}
-      >
-        {ready
-          ? `Lng: ${coords.lng.toFixed(5)} | Lat: ${coords.lat.toFixed(5)}`
-          : 'Loading coords...'}
-      </div>
-    </HudPanel>
+      {ready
+        ? `Lng: ${coords.lng.toFixed(5)} | Lat: ${coords.lat.toFixed(5)}`
+        : 'Loading coords...'}
+    </div>
   )
 }

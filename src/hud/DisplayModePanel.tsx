@@ -1,7 +1,6 @@
 import type { CSSProperties } from 'react'
-import HudPanel from './HudPanel'
 import { useCockpit } from '../context/CockpitContext'
-import type { ScreenHueMode } from '../types/cockpit'
+import type { CockpitPrefs, ScreenHueMode } from '../types/cockpit'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 import { touchFontSm, touchGapMd, touchMinTarget } from './tokens'
 
@@ -14,56 +13,34 @@ const HUE_BUTTONS: { mode: ScreenHueMode; label: string; hint: string }[] = [
   { mode: 'red_tactical', label: 'RED OPS', hint: 'night-adapted HUD; panels use brighter red text & borders' },
 ]
 
-export default function DisplayModePanel() {
-  const { prefs, setScreenHue, setDisplayTuning } = useCockpit()
-  const active = prefs.screen_hue
-  const isMobile = getDeviceProfile().interactionMode === 'mobile'
-  const fontSm = touchFontSm(isMobile)
-  const gapMd = touchGapMd(isMobile)
-  const tapMin = touchMinTarget(isMobile)
-  // 🔒 CONTRACT: Display mode calibration is locked.
-  // - Red Ops color + contrast must remain unchanged
-  // - Low Light minimum must remain readable
-  // - Slider range and scaling must remain as calibrated
-  // - Sliders override presets
-  // Do NOT modify brightness math or scaling
-  const sliderStyle: CSSProperties = {
-    width: '100%',
-    accentColor: active === 'red_tactical' ? '#ff5c7a' : '#9fe4ad',
-  }
-  const resetCurrentMode = () => {
-    if (active === 'low_light') {
-      setDisplayTuning({ low_hud_brightness: 0.96, low_map_brightness: 0.2 })
-      return
-    }
-    if (active === 'bright_day') {
-      setDisplayTuning({ bright_hud_brightness: 1.32, bright_map_brightness: 1.18 })
-      return
-    }
-    if (active === 'red_tactical') {
-      setDisplayTuning({ red_hue_rotate: -50, red_saturation: 0.6, red_brightness: 0.68 })
-    }
-  }
-  const applyNightPreset = () => {
-    setDisplayTuning({
-      low_hud_brightness: 0.98,
-      low_map_brightness: 0.34,
-      bright_hud_brightness: 1.32,
-      bright_map_brightness: 1.18,
-      red_hue_rotate: -50,
-      red_saturation: 0.6,
-      red_brightness: 0.66,
-    })
-  }
+type DisplayBodyProps = {
+  active: ScreenHueMode
+  fontSm: number
+  gapMd: number
+  tapMin: number
+  sliderStyle: CSSProperties
+  prefs: CockpitPrefs
+  setScreenHue: (m: ScreenHueMode) => void
+  setDisplayTuning: ReturnType<typeof useCockpit>['setDisplayTuning']
+  applyNightPreset: () => void
+  resetCurrentMode: () => void
+}
 
+/** Shared display-mode UI (Positional Awareness suite). */
+export function DisplayModePanelBodyInner({
+  active,
+  fontSm,
+  gapMd,
+  tapMin,
+  sliderStyle,
+  prefs,
+  setScreenHue,
+  setDisplayTuning,
+  applyNightPreset,
+  resetCurrentMode,
+}: DisplayBodyProps) {
   return (
-    <HudPanel
-      panelId="display"
-      title="Display Modes"
-      initialPos={{ x: 940, y: 60 }}
-      initialWidth={280}
-      minHeight={150}
-    >
+    <>
       <div style={{ display: 'grid', gap: gapMd }}>
         {HUE_BUTTONS.map(({ mode, label, hint }) => {
           const on = active === mode
@@ -74,7 +51,7 @@ export default function DisplayModePanel() {
               data-no-drag
               onClick={() => setScreenHue(mode)}
               style={{
-                minHeight: Math.max(tapMin, 46),
+                minHeight: tapMin,
                 borderRadius: 8,
                 border: on
                   ? '1px solid rgba(199,206,198,0.72)'
@@ -238,6 +215,57 @@ export default function DisplayModePanel() {
           </div>
         )}
       </div>
-    </HudPanel>
+    </>
+  )
+}
+
+export function DisplayModePanelBody() {
+  const { prefs, setScreenHue, setDisplayTuning } = useCockpit()
+  const active = prefs.screen_hue
+  const isMobile = getDeviceProfile().interactionMode === 'mobile'
+  const fontSm = touchFontSm(isMobile)
+  const gapMd = touchGapMd(isMobile)
+  const tapMin = Math.max(touchMinTarget(isMobile), 48)
+  const sliderStyle: CSSProperties = {
+    width: '100%',
+    accentColor: active === 'red_tactical' ? '#ff5c7a' : '#9fe4ad',
+  }
+  const resetCurrentMode = () => {
+    if (active === 'low_light') {
+      setDisplayTuning({ low_hud_brightness: 0.96, low_map_brightness: 0.2 })
+      return
+    }
+    if (active === 'bright_day') {
+      setDisplayTuning({ bright_hud_brightness: 1.32, bright_map_brightness: 1.18 })
+      return
+    }
+    if (active === 'red_tactical') {
+      setDisplayTuning({ red_hue_rotate: -50, red_saturation: 0.6, red_brightness: 0.68 })
+    }
+  }
+  const applyNightPreset = () => {
+    setDisplayTuning({
+      low_hud_brightness: 0.98,
+      low_map_brightness: 0.34,
+      bright_hud_brightness: 1.32,
+      bright_map_brightness: 1.18,
+      red_hue_rotate: -50,
+      red_saturation: 0.6,
+      red_brightness: 0.66,
+    })
+  }
+  return (
+    <DisplayModePanelBodyInner
+      active={active}
+      fontSm={fontSm}
+      gapMd={gapMd}
+      tapMin={tapMin}
+      sliderStyle={sliderStyle}
+      prefs={prefs}
+      setScreenHue={setScreenHue}
+      setDisplayTuning={setDisplayTuning}
+      applyNightPreset={applyNightPreset}
+      resetCurrentMode={resetCurrentMode}
+    />
   )
 }

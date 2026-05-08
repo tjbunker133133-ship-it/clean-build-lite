@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import HudPanel from './HudPanel'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useMapContext } from '../context/MapContext'
 import { usePanelData } from '../context/PanelDataContext'
 import { useGPS } from '../hooks/useGPS'
@@ -11,6 +10,19 @@ import {
   touchGapSm,
   touchMinTarget,
 } from './tokens'
+import {
+  getPermissionRecoveryPlatform,
+  locationBlockedPrimaryLine,
+  locationBlockedSecondaryLine,
+  locationErrorShortLine,
+  locationNotRequestedLine,
+  locationRequestingShortLine,
+} from '../lib/permissionRecoveryCopy'
+import {
+  tryOpenAndroidLocationSettings,
+  tryOpenIosLocationPrivacySettings,
+} from '../lib/systemSettingsLinks'
+import { emitHaptic } from '../runtime/haptics'
 
 type FollowZoomMode = 'fixed' | 'dynamic'
 
@@ -23,14 +35,19 @@ function zoomForAccuracy(accuracy: number | null): number {
   return 13
 }
 
-export default function LocationPanel() {
+export function LocationNavBody() {
   const { map } = useMapContext()
   const { userLocation } = usePanelData()
   const gps = useGPS()
   const { requestLocation } = gps
   const [followLock, setFollowLock] = useState(() => {
     try {
-      return localStorage.getItem('hud_follow_lock_v1') === '1'
+      const v = localStorage.getItem('hud_follow_lock_v1')
+      if (v === '1') return true
+      if (v === '0') return false
+      const mobile = getDeviceProfile().interactionMode === 'mobile'
+      if (mobile && localStorage.getItem('gpsPermission') === 'granted') return true
+      return false
     } catch {
       return false
     }
@@ -42,15 +59,45 @@ export default function LocationPanel() {
       return 'fixed'
     }
   })
+  const [recoveryMoreHelp, setRecoveryMoreHelp] = useState(false)
+  const [settingsNavHint, setSettingsNavHint] = useState<string | null>(null)
+  const [jumpHint, setJumpHint] = useState<string | null>(null)
   const lastFollowCenterRef = useRef<{ lat: number; lng: number } | null>(null)
+  const jumpHintTimerRef = useRef<number | null>(null)
 
   const isIOS = useMemo(() => getDeviceProfile().isIOS, [])
+  const recoveryPlatform = useMemo(() => getPermissionRecoveryPlatform(), [])
+  const settingsNavFallback = useCallback((message: string) => {
+    setSettingsNavHint(message)
+  }, [])
+
+  useEffect(() => {
+    if (!settingsNavHint) return
+    const t = window.setTimeout(() => setSettingsNavHint(null), 9000)
+    return () => window.clearTimeout(t)
+  }, [settingsNavHint])
+
+  useEffect(() => {
+    if (!jumpHint) return
+    if (jumpHintTimerRef.current != null) window.clearTimeout(jumpHintTimerRef.current)
+    jumpHintTimerRef.current = window.setTimeout(() => {
+      jumpHintTimerRef.current = null
+      setJumpHint(null)
+    }, 5000)
+    return () => {
+      if (jumpHintTimerRef.current != null) window.clearTimeout(jumpHintTimerRef.current)
+    }
+  }, [jumpHint])
+
+  useEffect(() => {
+    setRecoveryMoreHelp(false)
+  }, [gps.locationState])
   const isMobile = getDeviceProfile().interactionMode === 'mobile'
   const fontSm = touchFontSm(isMobile)
   const fontMd = touchFontMd(isMobile)
   const gapMd = touchGapMd(isMobile)
   const gapSm = touchGapSm(isMobile)
-  const tapMin = touchMinTarget(isMobile)
+  const tapMin = Math.max(touchMinTarget(isMobile), 48)
 
   useEffect(() => {
     if (!followLock) return
@@ -84,12 +131,31 @@ export default function LocationPanel() {
   }, [followLock, zoomMode])
 
   const jumpToMe = () => {
-    console.log('[LOCATE CLICK]', { lat: gps.lat, lng: gps.lng, source: gps.source })
-    if (!map) return
-    if (gps.lat == null || gps.lng == null) return
-    if (gps.locationState !== 'granted') return
+    if (import.meta.env.DEV) {
+      console.log('[LOCATE CLICK]', { lat: gps.lat, lng: gps.lng, source: gps.source })
+    }
+    if (!map) {
+      setJumpHint('Map not ready yet.')
+      emitHaptic('commandFailure', 'jump.no-map')
+      return
+    }
+    const pendingFix =
+      gps.locationState === 'requesting' ||
+      (gps.locationState === 'granted' && (gps.lat == null || gps.lng == null))
+    if (pendingFix) {
+      setJumpHint('Waiting for GPS fix…')
+      emitHaptic('wakeWord', 'jump.pending-fix')
+      return
+    }
+    if (gps.lat == null || gps.lng == null || gps.locationState !== 'granted') {
+      setJumpHint('Enable location and wait for a fix, then try again.')
+      emitHaptic('commandFailure', 'jump.no-fix')
+      return
+    }
+    setJumpHint(null)
     lastFollowCenterRef.current = { lat: gps.lat, lng: gps.lng }
     const zoom = zoomMode === 'dynamic' ? zoomForAccuracy(gps.accuracy) : Math.max(14, map.getZoom())
+    emitHaptic('wakeWord', 'jump.center')
     map.flyTo({
       center: [gps.lng, gps.lat],
       zoom,
@@ -100,7 +166,9 @@ export default function LocationPanel() {
   const hasFix = gps.lat != null && gps.lng != null && gps.locationState === 'granted'
 
   const gpsStatusText =
-    gps.locationState === 'granted'
+    gps.locationState === 'granted' && (gps.lat == null || gps.lng == null)
+      ? 'ACQUIRING FIX…'
+      : gps.locationState === 'granted'
       ? 'LOCATION ON'
       : gps.locationState === 'requesting'
         ? 'REQUESTING…'
@@ -111,7 +179,7 @@ export default function LocationPanel() {
             : 'OFF'
 
   const btnBase: CSSProperties = {
-    minHeight: Math.max(tapMin, 44),
+    minHeight: Math.max(tapMin, 48),
     borderRadius: 8,
     border: '1px solid rgba(199,206,198,0.35)',
     fontSize: fontSm,
@@ -120,25 +188,54 @@ export default function LocationPanel() {
     cursor: 'pointer',
   }
 
+  const requestLocationTap = () => {
+    emitHaptic('wakeWord', 'location.panel.request')
+    void requestLocation()
+  }
+
   return (
-    <HudPanel
-      panelId="location"
-      title="Location"
-      initialPos={{ x: 1220, y: 60 }}
-      initialWidth={300}
-      minHeight={170}
-    >
-      <div style={{ display: 'grid', gap: Math.max(gapMd, 10) }}>
+    <div style={{ display: 'grid', gap: Math.max(gapMd, 10) }}>
+        {settingsNavHint && (
+          <div
+            role="status"
+            style={{
+              margin: 0,
+              padding: '10px 12px',
+              borderRadius: 8,
+              border: '1px solid rgba(255,200,120,0.45)',
+              background: 'rgba(40,28,10,0.55)',
+              color: '#ffe8cc',
+              fontSize: fontSm,
+              lineHeight: 1.45,
+            }}
+          >
+            {settingsNavHint}
+          </div>
+        )}
+        {jumpHint && (
+          <div
+            role="status"
+            style={{
+              margin: 0,
+              padding: '10px 12px',
+              borderRadius: 8,
+              border: '1px solid rgba(125,200,255,0.4)',
+              background: 'rgba(10,20,40,0.55)',
+              color: '#d4e8ff',
+              fontSize: fontSm,
+              lineHeight: 1.45,
+            }}
+          >
+            {jumpHint}
+          </div>
+        )}
         {gps.locationState === 'idle' && (
           <div style={{ display: 'grid', gap: gapMd }}>
-            <p style={{ margin: 0, fontSize: fontMd, color: '#9fb0c7', lineHeight: 1.45 }}>
-              Location is off. Enable it when you need GPS for weather, follow mode, and coordinates. Nothing is requested
-              until you tap below.
-            </p>
+            <p style={{ margin: 0, fontSize: fontMd, color: '#9fb0c7', lineHeight: 1.45 }}>{locationNotRequestedLine()}</p>
             <button
               type="button"
               data-no-drag
-              onClick={() => void requestLocation()}
+              onClick={requestLocationTap}
               style={{
                 ...btnBase,
                 background: 'rgba(125,255,138,0.18)',
@@ -152,48 +249,118 @@ export default function LocationPanel() {
         )}
 
         {gps.locationState === 'requesting' && (
-          <p style={{ margin: 0, fontSize: fontMd, color: '#c7cec6' }}>Waiting for browser location prompt…</p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: gapSm }}>
+            <span
+              aria-hidden
+              style={{
+                width: 14,
+                height: 14,
+                border: '2px solid rgba(199,206,198,0.35)',
+                borderTopColor: '#7dff8a',
+                borderRadius: '50%',
+                animation: 'hud-spin 0.85s linear infinite',
+              }}
+            />
+            <p style={{ margin: 0, fontSize: fontMd, color: '#c7cec6' }}>{locationRequestingShortLine()}</p>
+          </div>
         )}
 
-        {(gps.locationState === 'denied' || gps.locationState === 'error') && (
+        {gps.locationState === 'denied' && (
           <div
             style={{
               display: 'grid',
-              gap: Math.max(gapMd, 10),
-              padding: '10px 12px',
-              borderRadius: 8,
-              border: '1px solid rgba(255,107,135,0.45)',
-              background: 'rgba(40,12,20,0.4)',
+              gap: gapMd,
+              padding: '12px 12px',
+              borderRadius: 10,
+              border: '1px solid rgba(255,107,135,0.4)',
+              background: 'rgba(28,10,14,0.55)',
             }}
           >
-            <p style={{ margin: 0, fontSize: fontMd, color: '#ffd0d8' }}>Location access is blocked or failed.</p>
-            {isIOS && gps.locationState === 'denied' ? (
-              <div style={{ fontSize: fontSm, color: '#e2c2c8', lineHeight: 1.5 }}>
-                <p style={{ margin: '0 0 6px' }}>On iPhone / iPad (Safari):</p>
-                <ol style={{ margin: 0, paddingLeft: 18 }}>
-                  <li>Open Settings</li>
-                  <li>Go to Safari</li>
-                  <li>Enable Location Access for this site (or set to Ask / Allow)</li>
-                </ol>
-                <p style={{ margin: '8px 0 0', fontSize: touchFontSm(isMobile), color: '#b89da3' }}>
-                  You can also try: Settings → Privacy & Security → Location Services → Safari Websites.
-                </p>
-              </div>
-            ) : (
-              <p style={{ margin: 0, fontSize: fontSm, color: '#e2c2c8', lineHeight: 1.45 }}>
-                To enable: use your browser site settings and allow location for this app. On desktop: check the lock icon
-                in the address bar.
-              </p>
-            )}
-            {gps.error && (
-              <p style={{ margin: 0, fontSize: fontSm, color: '#b89da3', fontFamily: 'var(--font-mono, monospace)' }}>
-                {gps.error}
-              </p>
-            )}
+            <p style={{ margin: 0, fontSize: fontMd, color: '#f5dee2', lineHeight: 1.45 }}>
+              {locationBlockedPrimaryLine()} {locationBlockedSecondaryLine(recoveryPlatform)}
+            </p>
             <button
               type="button"
               data-no-drag
-              onClick={() => void requestLocation()}
+              onClick={requestLocationTap}
+              style={{
+                ...btnBase,
+                background: 'rgba(125,255,138,0.16)',
+                borderColor: 'rgba(125,255,138,0.5)',
+                color: '#e8fff0',
+              }}
+            >
+              TRY AGAIN
+            </button>
+            <button
+              type="button"
+              data-no-drag
+              onClick={() => setRecoveryMoreHelp((v) => !v)}
+              style={{
+                ...btnBase,
+                background: 'rgba(10,12,13,0.75)',
+                color: '#b8c4c4',
+                borderColor: 'rgba(199,206,198,0.25)',
+              }}
+            >
+              {recoveryMoreHelp ? 'Hide more help' : 'More help'}
+            </button>
+            {recoveryMoreHelp && (
+              <div style={{ fontSize: fontSm, color: '#d8ccd0', lineHeight: 1.5 }}>
+                {isIOS ? (
+                  <>
+                    <p style={{ margin: '0 0 8px' }}>iPhone / iPad (Safari):</p>
+                    <ol style={{ margin: 0, paddingLeft: 18 }}>
+                      <li>Settings → Safari → Location (set to Ask or Allow for this site)</li>
+                      <li>Or Settings → Privacy and Security → Location Services → Safari Websites</li>
+                    </ol>
+                    <div style={{ marginTop: gapMd, display: 'flex', flexWrap: 'wrap', gap: gapSm }}>
+                      <button
+                        type="button"
+                        data-no-drag
+                        onClick={() => tryOpenIosLocationPrivacySettings(settingsNavFallback)}
+                        style={{ ...btnBase, flex: '1 1 140px' }}
+                      >
+                        OPEN SETTINGS
+                      </button>
+                    </div>
+                  </>
+                ) : recoveryPlatform === 'android' ? (
+                  <>
+                    <p style={{ margin: '0 0 8px' }}>Android (Chrome): allow location for this site in Chrome site settings.</p>
+                    <button
+                      type="button"
+                      data-no-drag
+                      onClick={() => tryOpenAndroidLocationSettings(settingsNavFallback)}
+                      style={{ ...btnBase }}
+                    >
+                      OPEN LOCATION SETTINGS
+                    </button>
+                  </>
+                ) : (
+                  <p style={{ margin: 0 }}>Use the site lock or menu in the address bar and allow location for this page.</p>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {gps.locationState === 'error' && (
+          <div
+            style={{
+              display: 'grid',
+              gap: gapMd,
+              padding: '12px 12px',
+              borderRadius: 10,
+              border: '1px solid rgba(255,180,120,0.45)',
+              background: 'rgba(36,22,10,0.45)',
+            }}
+          >
+            <p style={{ margin: 0, fontSize: fontMd, color: '#ffe8d8', lineHeight: 1.45 }}>{locationErrorShortLine()}</p>
+            <button
+              type="button"
+              data-no-drag
+              onClick={requestLocationTap}
               style={{
                 ...btnBase,
                 background: 'rgba(199,206,198,0.14)',
@@ -202,6 +369,26 @@ export default function LocationPanel() {
             >
               TRY AGAIN
             </button>
+            {gps.error && (
+              <button
+                type="button"
+                data-no-drag
+                onClick={() => setRecoveryMoreHelp((v) => !v)}
+                style={{
+                  ...btnBase,
+                  background: 'rgba(10,12,13,0.75)',
+                  color: '#b8c4c4',
+                  borderColor: 'rgba(199,206,198,0.25)',
+                }}
+              >
+                {recoveryMoreHelp ? 'Hide details' : 'Details'}
+              </button>
+            )}
+            {recoveryMoreHelp && gps.error ? (
+              <p style={{ margin: 0, fontSize: fontSm, color: '#cbb6a8', fontFamily: 'var(--font-mono, monospace)' }}>
+                {gps.error}
+              </p>
+            ) : null}
           </div>
         )}
 
@@ -252,7 +439,7 @@ export default function LocationPanel() {
           <button
             type="button"
             data-no-drag
-            onClick={() => void requestLocation()}
+            onClick={requestLocationTap}
             style={{
               ...btnBase,
               minHeight: tapMin,
@@ -269,15 +456,15 @@ export default function LocationPanel() {
             type="button"
             data-no-drag
             onClick={jumpToMe}
-            disabled={!hasFix}
+            title={hasFix ? 'Center map on your GPS position' : 'Tap for status if fix is still pending'}
             style={{
               flex: 1,
-              minHeight: tapMin,
+              minHeight: Math.max(tapMin, 48),
               borderRadius: 8,
               border: '1px solid rgba(199,206,198,0.35)',
               background: hasFix ? 'rgba(199,206,198,0.14)' : 'rgba(70,75,73,0.22)',
               color: hasFix ? '#d6ddd6' : '#7d8680',
-              cursor: hasFix ? 'pointer' : 'not-allowed',
+              cursor: 'pointer',
               fontSize: fontSm,
               letterSpacing: '0.08em',
             }}
@@ -291,7 +478,7 @@ export default function LocationPanel() {
             disabled={!hasFix}
             style={{
               flex: 1,
-              minHeight: tapMin,
+              minHeight: Math.max(tapMin, 48),
               borderRadius: 8,
               border: followLock
                 ? '1px solid rgba(125,255,138,0.7)'
@@ -326,6 +513,5 @@ export default function LocationPanel() {
           FOLLOW ZOOM: {zoomMode === 'dynamic' ? 'DYNAMIC' : 'FIXED'}
         </button>
       </div>
-    </HudPanel>
   )
 }

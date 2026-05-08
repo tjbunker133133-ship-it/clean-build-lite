@@ -350,6 +350,7 @@ function devLogCapability(map: Map, zoom: number, available: boolean, probe: Cap
   ].join('|')
   if (key === lastDevCapabilityKey) return
   lastDevCapabilityKey = key
+  if (!import.meta.env.DEV) return
   try {
     console.info('[snapToTrail] capability change', {
       styleName: probe.styleName,

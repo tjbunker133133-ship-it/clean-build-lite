@@ -22,22 +22,21 @@ export default function PresetPanel() {
       red_saturation: 0.5,
       red_brightness: 0.66,
     })
-    updatePanel('location', { x: 980, y: 60, docked: false })
+    updatePanel('positional', { x: 980, y: 60, docked: false, minimized: false })
     updatePanel('weather', { x: 980, y: 280, docked: false })
   }
 
   const applyDayNav = () => {
     setScreenHue('bright_day')
     setDisplayTuning({ low_hud_brightness: 0.9, low_map_brightness: 0.16, panel_gap_px: 0 })
-    updatePanel('layers', { x: 16, y: 60, docked: false })
-    updatePanel('waypoints', { x: 20, y: 420, docked: false })
+    updatePanel('positional', { x: 16, y: 60, docked: false, minimized: false })
   }
 
   const applyRecon = () => {
     setScreenHue('red_tactical')
     setDisplayTuning({ red_hue_rotate: -64, red_saturation: 0.52, red_brightness: 0.64, panel_gap_px: 0 })
     updatePanel('voice', { x: 1240, y: 280, docked: false })
-    updatePanel('location', { x: 1240, y: 60, docked: false })
+    updatePanel('positional', { x: 1240, y: 60, docked: false, minimized: false })
   }
 
   const applyIPhonePreset = () => {
@@ -52,7 +51,7 @@ export default function PresetPanel() {
       red_saturation: 0.5,
       red_brightness: 0.66,
     })
-    updatePanel('location', { x: 940, y: 60, docked: false, minimized: false })
+    updatePanel('positional', { x: 940, y: 60, docked: false, minimized: false })
     updatePanel('voice', { x: 940, y: 260, docked: false, minimized: false })
     updatePanel('sos', { x: 940, y: 470, docked: false, minimized: false })
   }
@@ -69,7 +68,7 @@ export default function PresetPanel() {
       red_saturation: 0.54,
       red_brightness: 0.68,
     })
-    updatePanel('location', { x: 980, y: 60, docked: false, minimized: false })
+    updatePanel('positional', { x: 980, y: 60, docked: false, minimized: false })
     updatePanel('voice', { x: 980, y: 280, docked: false, minimized: false })
     updatePanel('sos', { x: 980, y: 500, docked: false, minimized: false })
   }
@@ -86,8 +85,7 @@ export default function PresetPanel() {
       red_saturation: 0.52,
       red_brightness: 0.66,
     })
-    updatePanel('layers', { x: 16, y: 60, docked: false, minimized: false })
-    updatePanel('waypoints', { x: 20, y: 420, docked: false, minimized: false })
+    updatePanel('positional', { x: 16, y: 60, docked: false, minimized: false })
     updatePanel('voice', { x: 1180, y: 280, docked: false, minimized: false })
     updatePanel('sos', { x: 1180, y: 520, docked: false, minimized: false })
   }
@@ -104,10 +102,7 @@ export default function PresetPanel() {
       red_saturation: 0.52,
       red_brightness: 0.66,
     })
-    updatePanel('layers', { x: 16, y: 60, w: 180, docked: false, minimized: false })
-    updatePanel('waypoints', { x: 20, y: 420, w: 340, docked: false, minimized: false })
-    updatePanel('display', { x: 980, y: 60, w: 300, docked: false, minimized: false })
-    updatePanel('location', { x: 980, y: 260, w: 320, docked: false, minimized: false })
+    updatePanel('positional', { x: 16, y: 60, w: 380, docked: false, minimized: false })
     updatePanel('voice', { x: 980, y: 500, w: 340, docked: false, minimized: false })
   }
 

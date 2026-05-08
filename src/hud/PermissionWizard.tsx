@@ -13,6 +13,13 @@ import {
   type PermissionStateLike,
 } from '../lib/devicePermissions'
 import {
+  getPermissionRecoveryPlatform,
+  locationBlockedPrimaryLine,
+  locationBlockedSecondaryLine,
+  locationNotRequestedLine,
+  mergePersistedGeolocationState,
+} from '../lib/permissionRecoveryCopy'
+import {
   androidLocationFixClipboardLines,
   copyTextToClipboard,
   safariLocationFixClipboardLines,
@@ -126,6 +133,7 @@ export default function PermissionWizard({
   const [attempted, setAttempted] = useState<Partial<Record<WizardStepId, boolean>>>({})
   const [linkHint, setLinkHint] = useState<string | null>(null)
   const [showAdvanced, setShowAdvanced] = useState(false)
+  const [locationTroubleshoot, setLocationTroubleshoot] = useState(false)
   const [settingsFallback, setSettingsFallback] = useState<string | null>(null)
   const showSettingsFallback = useCallback(
     (msg: string) => setSettingsFallback(msg),
@@ -139,6 +147,8 @@ export default function PermissionWizard({
   const gapSm = touchGapSm(isMobile)
   const tapMin = touchMinTarget(isMobile)
   const btnBase = makeBtnBase(isMobile)
+  const recoveryPlatform = useMemo(() => getPermissionRecoveryPlatform(), [])
+  const locationBlocked = geo === 'denied' || locationDenied
 
   useEffect(() => {
     if (visible) {
@@ -146,6 +156,7 @@ export default function PermissionWizard({
       setAttempted({})
       setLinkHint(null)
       setShowAdvanced(false)
+      setLocationTroubleshoot(false)
     }
   }, [visible])
 
@@ -153,46 +164,74 @@ export default function PermissionWizard({
   const total = steps.length
   const stepNum = stepIndex + 1
 
-  const refreshSnapshot = useCallback(() => {
+  type SnapshotTrust = Partial<{ geo: PermissionStateLike; mic: PermissionStateLike }>
+
+  const refreshSnapshot = useCallback((trust?: SnapshotTrust) => {
     void getPermissionSnapshot().then((s) => {
-      setGeo(s.geolocation)
-      setMic(s.microphone)
+      let persistedGps: string | null = null
+      try {
+        persistedGps = localStorage.getItem('gpsPermission')
+      } catch {
+        /* ignore */
+      }
+      let g = mergePersistedGeolocationState(s.geolocation, persistedGps)
+      if (trust?.geo === 'granted' && g === 'prompt') g = 'granted'
+      let m = s.microphone
+      if (trust?.mic === 'granted' && m === 'prompt') m = 'granted'
+      setGeo(g)
+      setMic(m)
       setNotif(s.notifications)
     })
   }, [setGeo, setMic, setNotif])
+
+  const BUSY_PERMISSION_HINT = 'Wait for the current permission request to finish, then try again.'
 
   const runRequest = useCallback(
     async (fn: () => Promise<PermissionStateLike>, set: (s: PermissionStateLike) => void, id: WizardStepId) => {
       traceAction(`permission_request:${id}`, 'handler_enter')
       if (busy) {
         traceAction(`permission_request:${id}`, 'guard_reject', { reason: 'busy' })
+        setLinkHint(BUSY_PERMISSION_HINT)
+        window.setTimeout(() => {
+          setLinkHint((prev) => (prev === BUSY_PERMISSION_HINT ? null : prev))
+        }, 5500)
         return
       }
       setBusy(true)
       try {
         traceAction(`permission_request:${id}`, 'async_start')
-        set(await fn())
+        const r = await fn()
+        set(r)
         setAttempted((a) => ({ ...a, [id]: true }))
-        refreshSnapshot()
+        const trust: SnapshotTrust = {}
+        if (id === 'location') trust.geo = r
+        if (id === 'microphone') trust.mic = r
+        refreshSnapshot(trust)
         traceAction(`permission_request:${id}`, 'async_complete')
       } finally {
         setBusy(false)
       }
     },
-    [busy, setBusy, refreshSnapshot],
+    [busy, setBusy, refreshSnapshot, setLinkHint],
   )
 
   const runAllRemaining = useCallback(async () => {
     traceAction('permission_request:batch_remaining', 'handler_enter')
     if (busy) {
       traceAction('permission_request:batch_remaining', 'guard_reject', { reason: 'busy' })
+      setLinkHint(BUSY_PERMISSION_HINT)
+      window.setTimeout(() => {
+        setLinkHint((prev) => (prev === BUSY_PERMISSION_HINT ? null : prev))
+      }, 5500)
       return
     }
     setBusy(true)
     try {
       traceAction('permission_request:batch_remaining', 'async_start')
-      setGeo(await requestGeolocationPermission())
-      setMic(await requestMicrophonePermission())
+      const g = await requestGeolocationPermission()
+      const m = await requestMicrophonePermission()
+      setGeo(g)
+      setMic(m)
       setCamera(await requestCameraPermission())
       setNotif(await requestNotificationPermission())
       setOrient(await requestOrientationPermission())
@@ -206,24 +245,12 @@ export default function PermissionWizard({
         orientation: true,
         motion: true,
       }))
-      refreshSnapshot()
+      refreshSnapshot({ geo: g, mic: m })
       traceAction('permission_request:batch_remaining', 'async_complete')
     } finally {
       setBusy(false)
     }
-  }, [busy, setBusy, setGeo, setMic, setCamera, setNotif, setOrient, setMotion, refreshSnapshot])
-
-  const goNext = () => {
-    if (stepIndex < steps.length - 1) setStepIndex((i) => i + 1)
-  }
-  const goBack = () => {
-    if (stepIndex > 0) setStepIndex((i) => i - 1)
-  }
-
-  const markSkipped = (id: WizardStepId) => {
-    setAttempted((a) => ({ ...a, [id]: true }))
-    goNext()
-  }
+  }, [busy, setBusy, setGeo, setMic, setCamera, setNotif, setOrient, setMotion, refreshSnapshot, setLinkHint])
 
   const permissionResolved = (s: PermissionStateLike) =>
     s === 'granted' || s === 'denied' || s === 'unsupported'
@@ -238,6 +265,28 @@ export default function PermissionWizard({
     if (id === 'orientation') return permissionResolved(orient) || Boolean(attempted.orientation)
     if (id === 'motion') return permissionResolved(motion) || Boolean(attempted.motion)
     return true
+  }
+
+  const NEXT_BLOCKED_HINT =
+    'Finish this step (tap a request button or use Skip where shown) before using NEXT.'
+
+  const goNext = () => {
+    if (!canAdvanceFrom(stepId)) {
+      setLinkHint(NEXT_BLOCKED_HINT)
+      window.setTimeout(() => {
+        setLinkHint((prev) => (prev === NEXT_BLOCKED_HINT ? null : prev))
+      }, 6000)
+      return
+    }
+    if (stepIndex < steps.length - 1) setStepIndex((i) => i + 1)
+  }
+  const goBack = () => {
+    if (stepIndex > 0) setStepIndex((i) => i - 1)
+  }
+
+  const markSkipped = (id: WizardStepId) => {
+    setAttempted((a) => ({ ...a, [id]: true }))
+    if (stepIndex < steps.length - 1) setStepIndex((i) => i + 1)
   }
 
   if (!visible) return null
@@ -288,10 +337,9 @@ export default function PermissionWizard({
           <div style={{ fontSize: fontSm, color: '#b8c4b8', lineHeight: 1.5 }}>
             <p style={{ margin: '0 0 8px' }}>{platformHint}</p>
             <p style={{ margin: 0, color: '#9ec4a8' }}>
-              This wizard walks through <strong>location</strong>, <strong>microphone</strong>, <strong>camera</strong>,{' '}
-              <strong>notifications</strong>
-              {steps.includes('orientation') ? ', sensors' : ''} — one tap at a time. Grant what you need for your mission;
-              you can change choices later in system settings.
+              Next steps: location, microphone, camera, notifications
+              {steps.includes('orientation') ? ', motion / orientation' : ''}. One prompt at a time. You can change this
+              later in device settings.
             </p>
           </div>
           <button type="button" onClick={goNext} style={{ ...btnBase, borderColor: 'rgba(125,255,138,0.55)', background: 'rgba(125,255,138,0.16)' }}>
@@ -303,43 +351,92 @@ export default function PermissionWizard({
       {stepId === 'location' && (
         <>
           <div>
-            <div style={{ fontSize: fontMd, fontWeight: 800, color: '#d8e3d8', marginBottom: 6 }}>Location (GPS)</div>
-            <div style={{ fontSize: fontSm, color: '#9ea7a0', lineHeight: 1.45 }}>
-              Needed for coords, weather, elevation, and map follow. Status:{' '}
-              <strong style={{ color: geo === 'granted' ? '#7dff8a' : '#ffd166' }}>{stateLabel(geo)}</strong>
+            <div style={{ fontSize: fontMd, fontWeight: 800, color: '#d8e3d8', marginBottom: 8 }}>Location</div>
+            {locationBlocked ? (
+              <p style={{ margin: '0 0 8px', fontSize: fontSm, color: '#f2d4d8', lineHeight: 1.5 }}>
+                {locationBlockedPrimaryLine()}{' '}
+                <span style={{ color: '#c5dccf' }}>{locationBlockedSecondaryLine(recoveryPlatform)}</span>
+              </p>
+            ) : (
+              <p style={{ margin: '0 0 8px', fontSize: fontSm, color: '#c8ddd0', lineHeight: 1.5 }}>
+                {permissionResolved(geo)
+                  ? 'Used for map, weather, and coordinates when a fix is available.'
+                  : locationNotRequestedLine()}
+              </p>
+            )}
+            <div style={{ fontSize: fontSm, color: '#9ea7a0' }}>
+              Status:{' '}
+              <strong
+                style={{
+                  color: geo === 'granted' ? '#7dff8a' : locationBlocked ? '#ff9aac' : '#ffd166',
+                }}
+              >
+                {stateLabel(geo)}
+              </strong>
               {gps.lat != null && gps.lng != null && (
-                <span style={{ color: '#7dff8a' }}> · GPS fix OK</span>
+                <span style={{ color: '#7dff8a' }}> · Position ready</span>
               )}
             </div>
           </div>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void runRequest(requestGeolocationPermission, setGeo, 'location')}
+            style={{
+              ...btnBase,
+              borderColor: 'rgba(125,255,138,0.55)',
+              background: 'rgba(125,255,138,0.2)',
+              minHeight: tapMin,
+            }}
+          >
+            {busy ? 'WORKING…' : locationBlocked ? 'TRY AGAIN' : 'ENABLE LOCATION'}
+          </button>
           {(isAppleMobile || isAndroid) && (
+            <button
+              type="button"
+              onClick={() => setLocationTroubleshoot((o) => !o)}
+              style={{
+                ...btnBase,
+                minHeight: tapMin,
+                borderColor: 'rgba(199,206,198,0.2)',
+                background: 'rgba(10,14,16,0.65)',
+              }}
+            >
+              {locationTroubleshoot ? 'Hide extra help' : 'Having trouble?'}
+            </button>
+          )}
+          {locationTroubleshoot && (isAppleMobile || isAndroid) && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: gapSm }}>
               {isAppleMobile && (
                 <>
                   <button
                     type="button"
                     onClick={() => {
-                      setLinkHint('If Settings does not open, use COPY STEPS.')
-                      window.setTimeout(() => setLinkHint(null), 8000)
+                      setLinkHint('If Settings did not open, use Copy steps.')
+                      window.setTimeout(() => setLinkHint(null), 7000)
                       tryOpenIosLocationPrivacySettings(showSettingsFallback)
                     }}
-                    style={{ ...btnBase, flex: '1 1 140px', borderColor: 'rgba(125,255,138,0.5)', background: 'rgba(125,255,138,0.12)' }}
+                    style={{ ...btnBase, flex: '1 1 160px', borderColor: 'rgba(125,255,138,0.45)', background: 'rgba(125,255,138,0.1)' }}
                   >
-                    OPEN IPHONE SETTINGS
+                    OPEN SETTINGS
                   </button>
                   <button
                     type="button"
                     onClick={() => tryOpenIosLocationPrivacySettingsAlternate(showSettingsFallback)}
-                    style={{ ...btnBase, flex: '1 1 120px' }}
+                    style={{ ...btnBase, flex: '1 1 130px' }}
                   >
-                    ALT SETTINGS LINK
+                    ALT SETTINGS
                   </button>
                   <button
                     type="button"
-                    onClick={() => void copyTextToClipboard(safariLocationFixClipboardLines()).then((ok) => setLinkHint(ok ? 'Copied Safari steps.' : 'Copy failed.'))}
+                    onClick={() =>
+                      void copyTextToClipboard(safariLocationFixClipboardLines()).then((ok) =>
+                        setLinkHint(ok ? 'Steps copied.' : 'Copy failed.'),
+                      )
+                    }
                     style={{ ...btnBase, flex: '1 1 120px' }}
                   >
-                    COPY SAFARI STEPS
+                    COPY STEPS
                   </button>
                 </>
               )}
@@ -348,44 +445,26 @@ export default function PermissionWizard({
                   <button
                     type="button"
                     onClick={() => tryOpenAndroidLocationSettings(showSettingsFallback)}
-                    style={{ ...btnBase, flex: '1 1 160px', borderColor: 'rgba(125,255,138,0.5)' }}
+                    style={{ ...btnBase, flex: '1 1 200px', borderColor: 'rgba(125,255,138,0.45)' }}
                   >
-                    OPEN ANDROID LOCATION
+                    OPEN LOCATION SETTINGS
                   </button>
                   <button
                     type="button"
-                    onClick={() => void copyTextToClipboard(androidLocationFixClipboardLines())}
+                    onClick={() =>
+                      void copyTextToClipboard(androidLocationFixClipboardLines()).then((ok) =>
+                        setLinkHint(ok ? 'Steps copied.' : 'Copy failed.'),
+                      )
+                    }
                     style={{ ...btnBase, flex: '1 1 120px' }}
                   >
-                    COPY ANDROID STEPS
+                    COPY STEPS
                   </button>
                 </>
               )}
             </div>
           )}
           {linkHint && <div style={{ fontSize: fontSm, color: '#a8d4b8' }}>{linkHint}</div>}
-          {locationDenied && (
-            <div
-              style={{
-                padding: 10,
-                borderRadius: 8,
-                border: '1px solid rgba(255,107,135,0.45)',
-                background: 'rgba(40,12,20,0.45)',
-                fontSize: fontSm,
-                color: '#ffd0d8',
-              }}
-            >
-              Location is denied — use system settings above, then tap REQUEST LOCATION again.
-            </div>
-          )}
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void runRequest(requestGeolocationPermission, setGeo, 'location')}
-            style={{ ...btnBase, borderColor: 'rgba(125,255,138,0.55)', background: 'rgba(125,255,138,0.18)' }}
-          >
-            {busy ? 'REQUESTING…' : 'REQUEST LOCATION'}
-          </button>
         </>
       )}
 
@@ -532,23 +611,38 @@ export default function PermissionWizard({
       )}
 
       {stepId !== 'intro' && stepId !== 'done' && (
-        <div style={{ display: 'flex', gap: gapMd, flexWrap: 'wrap' }}>
-          <button type="button" onClick={goBack} style={{ ...btnBase, flex: '0 0 auto', minHeight: tapMin }}>
-            BACK
-          </button>
-          <button
-            type="button"
-            onClick={goNext}
-            style={{
-              ...btnBase,
-              flex: 1,
-              minHeight: tapMin,
-              borderColor: 'rgba(125,255,138,0.45)',
-              color: '#e4fcea',
-            }}
-          >
-            NEXT
-          </button>
+        <div style={{ display: 'grid', gap: gapSm }}>
+          <div style={{ display: 'flex', gap: gapMd, flexWrap: 'wrap' }}>
+            <button type="button" onClick={goBack} style={{ ...btnBase, flex: '0 0 auto', minHeight: tapMin }}>
+              BACK
+            </button>
+            <button
+              type="button"
+              disabled={!canAdvanceFrom(stepId)}
+              title={
+                canAdvanceFrom(stepId)
+                  ? undefined
+                  : 'Use the request button above, or wait for a status change, before continuing.'
+              }
+              onClick={goNext}
+              style={{
+                ...btnBase,
+                flex: 1,
+                minHeight: tapMin,
+                borderColor: 'rgba(125,255,138,0.45)',
+                color: '#e4fcea',
+                opacity: canAdvanceFrom(stepId) ? 1 : 0.45,
+                cursor: canAdvanceFrom(stepId) ? 'pointer' : 'not-allowed',
+              }}
+            >
+              NEXT
+            </button>
+          </div>
+          {!canAdvanceFrom(stepId) && (
+            <div style={{ fontSize: fontSm, color: '#9ea7a0', lineHeight: 1.45 }}>
+              Finish this step (request permission or use Skip where shown) before using NEXT.
+            </div>
+          )}
         </div>
       )}
 
@@ -558,7 +652,7 @@ export default function PermissionWizard({
           onClick={() => setShowAdvanced((v) => !v)}
           style={{ ...btnBase, minHeight: tapMin, fontSize: fontSm, borderColor: 'rgba(199,206,198,0.2)' }}
         >
-          {showAdvanced ? 'HIDE' : 'SHOW'} ALL PERMISSION BUTTONS (ADVANCED)
+          {showAdvanced ? 'Hide' : 'Advanced'} — request each sensor individually
         </button>
         {showAdvanced && (
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: gapSm }}>

@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import { useMapContext } from '../context/MapContext'
-import HudPanel from './HudPanel'
 import { usePanelData } from '../context/PanelDataContext'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 import { touchFontSm, touchFontMd } from './tokens'
@@ -32,7 +31,7 @@ function bandForFt(ft: number): Band {
 /**
  * Elevation from Open-Elevation (via PanelDataContext); trend/grade still sample map center motion.
  */
-export default function ElevationReadout() {
+export function ElevationReadoutBody() {
   const { map } = useMapContext()
   const panel = usePanelData()
   const [main, setMain] = useState('— ft')
@@ -164,14 +163,7 @@ export default function ElevationReadout() {
   const fontMd = touchFontMd(isMobile)
 
   return (
-    <HudPanel
-      panelId="elevation"
-      title="Elevation"
-      initialPos={{ x: 420, y: 60 }}
-      initialWidth={240}
-      minHeight={84}
-      accent={color}
-    >
+    <>
       {panel.panelsLocationBlocked && (
         <div
           style={{
@@ -213,6 +205,6 @@ export default function ElevationReadout() {
           <div style={{ fontSize: fontSm, opacity: 0.85, color: '#e7c29a' }}>{panel.elevationError}</div>
         )}
       </div>
-    </HudPanel>
+    </>
   )
 }

@@ -31,13 +31,35 @@ export default defineConfig({
         ],
       },
       workbox: {
-        // Keep HTML out of precache so the app shell revalidates from network
-        // and cannot pin stale chunk graphs across deployments.
-        globPatterns: ['**/*.{js,css,svg,png,ico,webp,webmanifest}'],
+        // Precache includes index.html so installed PWAs can cold-open offline after at least one
+        // online visit. Deployment mismatch is still handled by runtime deploymentFreshness when online.
+        globPatterns: ['**/*.{html,js,css,svg,png,ico,webp,webmanifest}'],
+        navigateFallback: '/index.html',
+        navigateFallbackDenylist: [/^\/[^/?]+\.[a-zA-Z0-9]+$/],
         cleanupOutdatedCaches: true,
         skipWaiting: true,
         clientsClaim: true,
         importScripts: ['/sw-message-handler.js'],
+        runtimeCaching: [
+          {
+            urlPattern: /^https:\/\/(?:api\.maptiler\.com|tiles\.maptiler\.com)\/.*/i,
+            handler: 'StaleWhileRevalidate',
+            options: {
+              cacheName: 'hud-maptiler-v1',
+              expiration: { maxEntries: 500, maxAgeSeconds: 60 * 60 * 24 * 30 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+          {
+            urlPattern: /^https:\/\/tile\.openstreetmap\.org\/.*/i,
+            handler: 'StaleWhileRevalidate',
+            options: {
+              cacheName: 'hud-osm-tiles-v1',
+              expiration: { maxEntries: 500, maxAgeSeconds: 60 * 60 * 24 * 14 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+        ],
       },
     }),
   ],

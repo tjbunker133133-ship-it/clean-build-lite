@@ -16,6 +16,7 @@ import {
 } from '../lib/corridor'
 import { useMapContext } from '../context/MapContext'
 import { getDeviceProfile } from '../runtime/deviceProfile'
+import { isRuntimeSnapshotInstalled } from '../runtime/runtimeSnapshot'
 import { emitHaptic } from '../runtime/haptics'
 import { touchFontSm, touchFontMd, touchGapMd, touchMinTarget } from './tokens'
 
@@ -87,7 +88,7 @@ export default function StatusRail() {
   const gapMd = touchGapMd(isMobile)
   const tapMin = touchMinTarget(isMobile)
   const wxAge = weatherAgeMin == null ? '--' : `${weatherAgeMin}m`
-  const runtimeGuards = typeof window !== 'undefined' && !!(window as any).__hudRuntimeGuards
+  const runtimeGuards = isRuntimeSnapshotInstalled()
   const buildStampRaw =
     (import.meta as any)?.env?.VITE_BUILD_STAMP && typeof (import.meta as any).env.VITE_BUILD_STAMP === 'string'
       ? (import.meta as any).env.VITE_BUILD_STAMP

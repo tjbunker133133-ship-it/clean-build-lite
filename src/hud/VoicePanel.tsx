@@ -23,6 +23,12 @@ import {
   touchGapSm as touchGapSmFn,
   touchMinTarget as touchMinTargetFn,
 } from './tokens'
+import { resolveVoiceOperationalIntent } from '../voice/voiceOperationalPhraseResolve'
+
+/** SR / parser debug only — keeps transcripts and intent objects out of production consoles. */
+function voiceDevLog(...args: unknown[]) {
+  if (import.meta.env.DEV) console.log(...args)
+}
 
 type VoiceState = 'sleeping' | 'listening' | 'processing' | 'success' | 'failure'
 
@@ -41,10 +47,21 @@ const WAKE_WORD = 'hud' as const
 // policy (the gate is reported 'enable' both for direct wake-word
 // utterances and for continuation consumption).
 const WAKE_CONTINUATION_MS = 2500
-const DUPLICATE_TRANSCRIPT_SUPPRESS_MS = 1800
-const DUPLICATE_COMMAND_SUPPRESS_MS = 1200
+const DUPLICATE_TRANSCRIPT_SUPPRESS_MS = 2200
+const DUPLICATE_COMMAND_SUPPRESS_MS = 1400
 const WAKE_ACK_COOLDOWN_MS = 1200
-const VOICE_INTENT_CONFIDENCE_MIN = 0.62
+/** Ignore identical wake+command finals within this window (stops “HUD HUD” re-entry churn). */
+const WAKE_PROCESS_DEBOUNCE_MS = 1100
+/**
+ * Intent matcher: execution-first. Fuzzy matches at or above this score run without
+ * clarification; below this we treat as unknown (optional “Did you mean” only when a
+ * single weak suggestion exists — see resolveIntentFromPhrase).
+ */
+const FUZZY_EXECUTE_MIN_SCORE = 0.5
+/** Only ask “Did you mean …?” when best fuzzy score is in this ambiguous band and a suggestion exists. */
+const CLARIFICATION_FUZZY_MAX = 0.52
+/** Brief on-screen preview before executing a voice command (ms). */
+const VOICE_COMMAND_PREVIEW_MS = 420
 // Final-transcript sanity bounds. Reject empty/whitespace/single-char
 // finals (common Android Chrome partial-flush garbage) and refuse to
 // consume the continuation window with long, multi-clause speech that
@@ -112,6 +129,17 @@ function stripWakeWordPrefix(input: string): { commandPart: string; wakeDetected
   return { commandPart: rest, wakeDetected: true }
 }
 
+/** Strip any repeated “hud ” prefixes SR may leave inside the command phrase. */
+function stripLeadingHudTokens(phrase: string): string {
+  let p = phrase.trim()
+  let prev = ''
+  while (p !== prev) {
+    prev = p
+    p = p.replace(/^(hud)\s+/i, '').trim()
+  }
+  return p
+}
+
 function levenshteinDistance(a: string, b: string): number {
   const aa = a.trim()
   const bb = b.trim()
@@ -165,6 +193,15 @@ function resolveIntentFromPhrase(
     'center gps': 'center',
     'center map': 'center',
     recenter: 'center',
+    'recenter gps': 'center',
+    'recenter map': 'center',
+    locate: 'center',
+    'locate me': 'center',
+    'where am i': 'center',
+    'where am i on the map': 'center',
+    'show my location': 'center',
+    'go to my location': 'center',
+    'find me': 'center',
     'my location': 'center',
     'night mode': 'night',
     'low light mode': 'low light',
@@ -174,6 +211,32 @@ function resolveIntentFromPhrase(
     'torch on': 'flashlight on',
     'torch off': 'flashlight off',
     'torch toggle': 'flashlight toggle',
+    'light on': 'flashlight on',
+    'light off': 'flashlight off',
+    'lights on': 'flashlight on',
+    'lights off': 'flashlight off',
+    'enable flashlight': 'flashlight on',
+    'disable flashlight': 'flashlight off',
+    'turn on flashlight': 'flashlight on',
+    'turn off flashlight': 'flashlight off',
+    'turn on the flashlight': 'flashlight on',
+    'turn off the flashlight': 'flashlight off',
+    status: 'status',
+    'system status': 'status',
+    'hud status': 'status',
+    'what is the status': 'status',
+    'add pin': 'add pin',
+    'drop pin': 'add pin',
+    'drop a pin': 'add pin',
+    'pin location': 'add pin',
+    'mark location': 'add pin',
+    'mark my location': 'add pin',
+    'add a pin': 'add pin',
+    'place pin': 'add pin',
+    weather: 'weather',
+    forecast: 'weather',
+    'show weather': 'weather',
+    'weather report': 'weather',
   }
   const synonym = synonymToIntent[normalized]
   if (synonym) return { command: synonym, confidence: 0.95, reason: 'synonym', suggestion: null }
@@ -195,13 +258,40 @@ function resolveIntentFromPhrase(
   }
   candidates.sort((a, b) => b.score - a.score)
   const top = candidates[0]
-  if (!top || top.score < 0.58) {
+  const second = candidates[1]
+  if (!top || top.score < FUZZY_EXECUTE_MIN_SCORE) {
     return { command: null, confidence: top?.score ?? 0, reason: 'unknown', suggestion: null }
   }
-  if (top.score < VOICE_INTENT_CONFIDENCE_MIN) {
-    return { command: null, confidence: top.score, reason: 'fuzzy', suggestion: top.cmd }
+  const ambiguousPair =
+    second != null &&
+    top.score < 0.72 &&
+    second.score >= FUZZY_EXECUTE_MIN_SCORE &&
+    top.score - second.score < 0.06
+  if (ambiguousPair) {
+    return {
+      command: null,
+      confidence: top.score,
+      reason: 'fuzzy',
+      suggestion: top.cmd,
+    }
+  }
+  if (top.score < CLARIFICATION_FUZZY_MAX) {
+    return { command: top.cmd, confidence: top.score, reason: 'fuzzy', suggestion: null }
   }
   return { command: top.cmd, confidence: top.score, reason: 'fuzzy', suggestion: null }
+}
+
+function isAffirmativeVoiceFollowUp(phrase: string): boolean {
+  const t = normalizeTranscript(phrase)
+  return (
+    /^(yes|yeah|yep|yup|correct|right|confirm|confirmed|proceed|arm|ok|okay|do it|go)$/i.test(t) ||
+    t === 'confirm sos'
+  )
+}
+
+function isNegativeVoiceFollowUp(phrase: string): boolean {
+  const t = normalizeTranscript(phrase)
+  return /^(no|nope|nah|cancel|stop|never mind|nevermind|ignore)$/i.test(t)
 }
 
 const QUICK_COMMAND_GROUPS: Array<{
@@ -210,40 +300,28 @@ const QUICK_COMMAND_GROUPS: Array<{
   items: Array<{ label: string; cmd: string }>
 }> = [
   {
-    group: 'SOS FAST ACCESS',
+    group: 'Safety',
     priority: true,
     items: [
-      { label: 'Morse Toggle', cmd: 'morse toggle' },
-      { label: 'Flashlight Toggle', cmd: 'flashlight toggle' },
       { label: 'Flashlight On', cmd: 'flashlight on' },
       { label: 'Flashlight Off', cmd: 'flashlight off' },
+      { label: 'Flashlight Toggle', cmd: 'flashlight toggle' },
     ],
   },
   {
-    group: 'Navigation',
+    group: 'Field ops',
     items: [
-      { label: 'Center GPS', cmd: 'center' },
-      { label: 'Zoom In', cmd: 'zoom in' },
-      { label: 'Zoom Out', cmd: 'zoom out' },
-      { label: 'Status', cmd: 'status' },
+      { label: 'Drop waypoint', cmd: 'drop waypoint' },
+      { label: 'Check-in send', cmd: 'check in' },
+      { label: 'Show weather', cmd: 'weather' },
+      { label: 'Start beacon', cmd: 'start beacon' },
+      { label: 'Stop beacon', cmd: 'stop beacon' },
+      { label: 'Clear trail', cmd: 'clear trail' },
     ],
   },
   {
-    group: 'Route',
-    items: [
-      { label: 'Add Pin', cmd: 'add pin' },
-      { label: 'Route Stats', cmd: 'route stats' },
-      { label: 'Reset Layout', cmd: 'reset' },
-    ],
-  },
-  {
-    group: 'Display & Weather',
-    items: [
-      { label: 'Weather', cmd: 'weather' },
-      { label: 'Night Mode', cmd: 'night' },
-      { label: 'Low Light', cmd: 'low light' },
-      { label: 'Bright', cmd: 'bright' },
-    ],
+    group: 'Voice help',
+    items: [{ label: 'Voice command help', cmd: 'help' }],
   },
 ]
 
@@ -289,6 +367,11 @@ export default function VoicePanel() {
   // continuous mode. The button toggles the same `armed` flag whether
   // continuous mode is on or off.
   const [statusText, setStatusText] = useState('🎤 HUD (tap to start)')
+  /** Strong visual ack that the wake word passed (independent of chime cooldown). */
+  const [wakeHudAck, setWakeHudAck] = useState(false)
+  const wakeHudTimerRef = useRef<number | null>(null)
+  /** Shown briefly before a voice command runs. */
+  const [commandEcho, setCommandEcho] = useState<string | null>(null)
   const [flashlightCapability, setFlashlightCapability] = useState<{
     supportState: 'unknown' | 'supported' | 'unsupported'
     permission: 'unknown' | 'granted' | 'denied'
@@ -314,8 +397,13 @@ export default function VoicePanel() {
    *  when no bare-wake-word ack is pending. Single-shot: cleared on
    *  consume, timeout, disarm, or SR teardown. */
   const pendingWakeUntilRef = useRef<number | null>(null)
+  const lastWakeProcessRef = useRef<{ key: string; ts: number }>({ key: '', ts: 0 })
   armedRef.current = armed
-  const parseAndRunRef = useRef<(text: string, confidence?: number) => Promise<void>>(async () => {})
+  const parseAndRunRef = useRef<
+    (text: string, confidence?: number, transcriptSource?: CommandSource) => Promise<void>
+  >(async () => {})
+  const sosVoicePendingRef = useRef(false)
+  const voiceClarifyCmdRef = useRef<string | null>(null)
   const supportsRec =
     typeof window !== 'undefined' &&
     !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)
@@ -382,6 +470,30 @@ export default function VoicePanel() {
     playChime()
   }
 
+  const flashWakeHudAck = () => {
+    setWakeHudAck(true)
+    if (wakeHudTimerRef.current != null) {
+      window.clearTimeout(wakeHudTimerRef.current)
+    }
+    wakeHudTimerRef.current = window.setTimeout(() => {
+      wakeHudTimerRef.current = null
+      setWakeHudAck(false)
+    }, 900)
+  }
+
+  /** Status hint without TTS (avoids mic feedback loops on soft errors). */
+  const reportSubtle = (text: string) => {
+    setStatusText(text)
+    setVoiceState('failure')
+    if (uiResetTimerRef.current != null) {
+      window.clearTimeout(uiResetTimerRef.current)
+    }
+    uiResetTimerRef.current = window.setTimeout(() => {
+      uiResetTimerRef.current = null
+      setVoiceState(armedRef.current ? 'listening' : 'sleeping')
+    }, 1400)
+  }
+
   const report = (text: string, ok = true) => {
     setStatusText(text)
     setVoiceState(ok ? 'success' : 'failure')
@@ -443,11 +555,16 @@ export default function VoicePanel() {
     report(res.message, res.ok)
   }
 
-  const parseAndRun = async (text: string, confidence = 1) => {
-    console.log('[VOICE RAW]', text)
+  const parseAndRun = async (
+    text: string,
+    confidence = 1,
+    transcriptSource: CommandSource = 'voice',
+  ) => {
+    const isVoice = transcriptSource === 'voice'
+    voiceDevLog('[VOICE RAW]', text)
     const norm = normalizeTranscript(text)
-    console.log('[VOICE NORMALIZED]', norm)
-    console.log('[VOICE CONFIDENCE]', confidence)
+    voiceDevLog('[VOICE NORMALIZED]', norm)
+    voiceDevLog('[VOICE CONFIDENCE]', confidence)
     if (!norm) return
 
     // Utterance continuity window: a recent bare "HUD" finalization left
@@ -497,11 +614,24 @@ export default function VoicePanel() {
     // never bypassed for arbitrary utterances.
     if (effective !== WAKE_WORD && !effective.startsWith(`${WAKE_WORD} `)) {
       reportPolicyAttempt('voice.wakeWordRequired', 'disable', 'parseAndRun.missing-wake-word')
-      console.log('[VOICE COMMAND]', '')
-      console.log('[VOICE PARSE REJECT]', 'missing_wake_word')
+      voiceDevLog('[VOICE COMMAND]', '')
+      voiceDevLog('[VOICE PARSE REJECT]', 'missing_wake_word')
       traceAction('wake_word_activation', 'guard_reject', { reason: 'missing_wake_word' })
       return
     }
+
+    const wakeDebounceKey = normalize(effective)
+    const wakeNow = Date.now()
+    if (
+      wakeDebounceKey.length > 0 &&
+      wakeDebounceKey === lastWakeProcessRef.current.key &&
+      wakeNow - lastWakeProcessRef.current.ts < WAKE_PROCESS_DEBOUNCE_MS
+    ) {
+      voiceDevLog('[VOICE WAKE]', { raw: text, processed: effective, ignoredDuplicate: true })
+      return
+    }
+    lastWakeProcessRef.current = { key: wakeDebounceKey, ts: wakeNow }
+    voiceDevLog('[VOICE WAKE]', { raw: text, processed: effective, ignoredDuplicate: false })
 
     // Direct wake-word utterance invalidates any prior bare-wake window
     // (the user re-asserted intent explicitly).
@@ -522,6 +652,7 @@ export default function VoicePanel() {
     )
     logInfo('VOICE', `wake-word.detected phrase="${effective.slice(0, 80)}"`)
     traceAction('wake_word_activation', 'state_result', { detected: true, viaContinuation: consumedContinuation })
+    flashWakeHudAck()
     const now = Date.now()
     if (now - lastWakeAckAtRef.current > WAKE_ACK_COOLDOWN_MS) {
       pulseWake()
@@ -557,38 +688,114 @@ export default function VoicePanel() {
       return
     }
     for (const p of parts) {
-      const intent = resolveIntentFromPhrase(p, commands)
-      console.log('[VOICE COMMAND]', intent.command ?? '')
-      console.log('[VOICE INTENT]', intent)
+      const part = stripLeadingHudTokens(p)
+      if (!part) continue
+
+      if (isVoice && sosVoicePendingRef.current) {
+        if (isAffirmativeVoiceFollowUp(part)) {
+          sosVoicePendingRef.current = false
+          voiceClarifyCmdRef.current = null
+          const cmd = 'sos confirm'
+          setCommandEcho(cmd)
+          await new Promise<void>((r) => {
+            window.setTimeout(r, VOICE_COMMAND_PREVIEW_MS)
+          })
+          setCommandEcho(null)
+          await dispatchAndReport(cmd, 'voice', `${WAKE_WORD} ${part}`)
+          continue
+        }
+        if (isNegativeVoiceFollowUp(part)) {
+          sosVoicePendingRef.current = false
+          reportSubtle('SOS arm cancelled.')
+          continue
+        }
+      }
+
+      if (isVoice && voiceClarifyCmdRef.current) {
+        if (isAffirmativeVoiceFollowUp(part)) {
+          const cmd = voiceClarifyCmdRef.current
+          voiceClarifyCmdRef.current = null
+          setCommandEcho(cmd)
+          await new Promise<void>((r) => {
+            window.setTimeout(r, VOICE_COMMAND_PREVIEW_MS)
+          })
+          setCommandEcho(null)
+          await dispatchAndReport(cmd, 'voice', `${WAKE_WORD} ${part}`)
+          continue
+        }
+        if (isNegativeVoiceFollowUp(part)) {
+          voiceClarifyCmdRef.current = null
+          reportSubtle('Cancelled.')
+          continue
+        }
+      }
+
+      const intent = isVoice
+        ? resolveVoiceOperationalIntent(part, commands, confidence)
+        : resolveIntentFromPhrase(part, commands)
+      voiceDevLog('[VOICE COMMAND]', intent.command ?? '')
+      voiceDevLog('[VOICE INTENT]', intent)
+
+      if (isVoice && sosVoicePendingRef.current && intent.command && intent.command !== 'sos') {
+        sosVoicePendingRef.current = false
+      }
+      if (isVoice && voiceClarifyCmdRef.current && intent.command && intent.command !== voiceClarifyCmdRef.current) {
+        voiceClarifyCmdRef.current = null
+      }
+
+      if (isVoice && intent.command === 'sos confirm' && !sosVoicePendingRef.current) {
+        reportSubtle('Say HUD SOS first, then confirm.')
+        continue
+      }
+
+      if (isVoice && intent.command === 'sos') {
+        sosVoicePendingRef.current = true
+        voiceClarifyCmdRef.current = null
+        reportSubtle('Arm emergency SOS? Say CONFIRM or YES.')
+        continue
+      }
+
       if (!intent.command) {
-        const reason =
-          intent.reason === 'fuzzy' && intent.suggestion
-            ? `Did you mean ${intent.suggestion}?`
-            : 'Unknown command. Try weather, bright mode, center gps, or night mode.'
-        console.log('[VOICE PARSE REJECT]', reason)
-        report(reason, false)
+        if (isVoice) {
+          if (intent.reason === 'fuzzy' && intent.suggestion) {
+            sosVoicePendingRef.current = false
+            voiceClarifyCmdRef.current = intent.suggestion
+            reportSubtle(`Did you mean "${intent.suggestion}"? Say yes or no.`)
+          } else {
+            sosVoicePendingRef.current = false
+            voiceClarifyCmdRef.current = null
+            reportSubtle('Command not recognized.')
+          }
+        } else {
+          const reason =
+            intent.reason === 'fuzzy' && intent.suggestion
+              ? `Did you mean ${intent.suggestion}?`
+              : 'Unknown command. Try weather, bright mode, center gps, or night mode.'
+          voiceDevLog('[VOICE PARSE REJECT]', reason)
+          report(reason, false)
+        }
         continue
       }
-      if (confidence < VOICE_INTENT_CONFIDENCE_MIN) {
-        const suggestion = intent.suggestion ?? intent.command
-        const msg = `Low confidence. Did you mean ${suggestion}?`
-        console.log('[VOICE PARSE REJECT]', msg)
-        report(msg, false)
-        continue
-      }
+
       const dedupeNow = Date.now()
       if (
         lastDispatchedCommandRef.current.cmd === intent.command &&
         dedupeNow - lastDispatchedCommandRef.current.ts < DUPLICATE_COMMAND_SUPPRESS_MS
       ) {
-        console.log('[VOICE DUPLICATE SUPPRESSED]', intent.command)
+        voiceDevLog('[VOICE DUPLICATE SUPPRESSED]', intent.command)
         continue
       }
       lastDispatchedCommandRef.current = { cmd: intent.command, ts: dedupeNow }
-      // Compose a stable `heard` value per part: "HUD <part>" — preserves
-      // the wake word in the structured log even when multiple commands
-      // are chained via "then".
-      await dispatchAndReport(intent.command, 'voice', `${WAKE_WORD} ${p}`)
+
+      if (isVoice) {
+        setCommandEcho(intent.command)
+        await new Promise<void>((r) => {
+          window.setTimeout(r, VOICE_COMMAND_PREVIEW_MS)
+        })
+        setCommandEcho(null)
+      }
+
+      await dispatchAndReport(intent.command, transcriptSource, `${WAKE_WORD} ${part}`)
     }
     if (armedRef.current) updateVoiceState('listening')
   }
@@ -597,31 +804,16 @@ export default function VoicePanel() {
   useEffect(() => {
     if (!import.meta.env.DEV) return
     const samples = [
-      'HUD weather',
-      'HUD bright',
-      'HUD bright mode',
-      'HUD center GPS',
-      'HUD zoom in',
-      'HUD recenter',
-      'HUD night mode',
-    ]
-    const rows = samples.map((s) => {
+      ['HUD drop waypoint', 'drop waypoint'],
+      ['HUD check in', 'check in'],
+      ['HUD show weather', 'weather'],
+      ['HUD flashlight on', 'flashlight on'],
+      ['HUD start beacon', 'start beacon'],
+      ['HUD clear trail', 'clear trail'],
+    ] as const
+    const rows = samples.map(([s, expected]) => {
       const stripped = stripWakeWordPrefix(s)
-      const intent = resolveIntentFromPhrase(stripped.commandPart, commands)
-      const expected =
-        s === 'HUD weather'
-          ? 'weather'
-          : s === 'HUD bright'
-            ? 'bright'
-            : s === 'HUD bright mode'
-              ? 'bright'
-              : s === 'HUD center GPS'
-                ? 'center'
-                : s === 'HUD zoom in'
-                  ? 'zoom in'
-                  : s === 'HUD recenter'
-                    ? 'center'
-                    : 'night'
+      const intent = resolveVoiceOperationalIntent(stripped.commandPart, commands, 1)
       return {
         sample: s,
         wakeDetected: stripped.wakeDetected,
@@ -763,7 +955,7 @@ export default function VoicePanel() {
           finalNorm === lastFinalTranscriptRef.current.norm &&
           now - lastFinalTranscriptRef.current.ts < DUPLICATE_TRANSCRIPT_SUPPRESS_MS
         if (duplicate) {
-          console.log('[VOICE DUPLICATE SUPPRESSED]', {
+          voiceDevLog('[VOICE DUPLICATE SUPPRESSED]', {
             transcript: finalNorm,
             windowMs: DUPLICATE_TRANSCRIPT_SUPPRESS_MS,
           })
@@ -774,7 +966,7 @@ export default function VoicePanel() {
         // handler so SR-emitted single-char / whitespace finalizations
         // (common Android Chrome partial-flush garbage) cannot consume
         // the continuation window or trigger the parser.
-        void parseAndRunRef.current(finalText, finalConfidence ?? 1)
+        void parseAndRunRef.current(finalText, finalConfidence ?? 1, 'voice')
       }
     }
     // Safety: any recognition error (incl. permission denial mid-session)
@@ -989,6 +1181,15 @@ export default function VoicePanel() {
   }, [armed, supportsRec, recoveryNonce])
 
   useEffect(() => {
+    return () => {
+      if (wakeHudTimerRef.current != null) {
+        window.clearTimeout(wakeHudTimerRef.current)
+        wakeHudTimerRef.current = null
+      }
+    }
+  }, [])
+
+  useEffect(() => {
     if (armed) return
     const rec = recognitionRef.current
     if (!rec) return
@@ -1076,7 +1277,55 @@ export default function VoicePanel() {
       minHeight={130}
       accent={voiceState === 'failure' ? '#ff3b4d' : undefined}
     >
-      <div style={{ display: 'grid', gap: touchGapMd }}>
+      <div style={{ position: 'relative', display: 'grid', gap: touchGapMd }}>
+        {(wakeHudAck || commandEcho) && (
+          <div
+            aria-live="polite"
+            style={{
+              pointerEvents: 'none',
+              position: 'absolute',
+              left: 4,
+              right: 4,
+              top: 0,
+              zIndex: 6,
+              display: 'grid',
+              gap: 6,
+            }}
+          >
+            {wakeHudAck && (
+              <div
+                style={{
+                  alignSelf: 'start',
+                  borderRadius: 6,
+                  padding: '6px 10px',
+                  fontSize: labelPx(10),
+                  letterSpacing: '0.06em',
+                  background: 'rgba(125,255,138,0.22)',
+                  border: '1px solid rgba(125,255,138,0.55)',
+                  color: '#c8ffd0',
+                }}
+              >
+                Wake recognized · HUD
+              </div>
+            )}
+            {commandEcho && (
+              <div
+                style={{
+                  alignSelf: 'start',
+                  borderRadius: 6,
+                  padding: '6px 10px',
+                  fontSize: labelPx(10),
+                  letterSpacing: '0.06em',
+                  background: 'rgba(90,180,255,0.2)',
+                  border: '1px solid rgba(120,200,255,0.45)',
+                  color: '#d0e8ff',
+                }}
+              >
+                Heard: {commandEcho}
+              </div>
+            )}
+          </div>
+        )}
         <button
           type="button"
           data-no-drag
@@ -1159,7 +1408,7 @@ export default function VoicePanel() {
               <button
                 type="button"
                 data-no-drag
-                onClick={() => parseAndRun(typed)}
+                onClick={() => void parseAndRun(typed, 1, 'ui')}
                 style={{
                   minHeight: btnMin(34),
                   borderRadius: 8,
@@ -1178,7 +1427,8 @@ export default function VoicePanel() {
         {expanded && (
           <div style={{ fontSize: labelPx(10), color: 'var(--cockpit-panel-subtle)', lineHeight: 1.5, display: 'grid', gap: touchGapMd }}>
             <div>
-              Wake word: <strong>HUD</strong>. Example: <code>HUD status</code>. Last: {lastHeard || '—'}
+              Wake word: <strong>HUD</strong>. Voice runs field actions only (waypoint, check-in, weather, flashlight,
+              beacon, trail, SOS+confirm). Example: <code>HUD drop waypoint</code>. Last: {lastHeard || '—'}
             </div>
             <div style={{ fontSize: labelPx(10), letterSpacing: '0.08em', color: 'var(--cockpit-panel-subtle)' }}>
               ONE-TAP COMMANDS (MOBILE READY)
@@ -1235,31 +1485,7 @@ export default function VoicePanel() {
               ))}
             </div>
             <div>
-              <strong>TIER 1</strong> Navigation: center, zoom in/out, north/south/east/west.
-            </div>
-            <div>
-              <strong>TIER 1</strong> GPS pin: attach, detach, recenter, distance.
-            </div>
-            <div>
-              <strong>TIER 1</strong> Compass: bearing, direction, calibrate.
-            </div>
-            <div>
-              <strong>TIER 1</strong> Route: add pin, delete last, clear route, save route, reverse route, route stats.
-            </div>
-            <div>
-              <strong>TIER 1</strong> Status: status, time, battery, signal, elevation.
-            </div>
-            <div>
-              <strong>TIER 1</strong> SOS: sos, emergency, rescue, morse yes/no/toggle, flashlight on/off/toggle.
-            </div>
-            <div>
-              <strong>TIER 1</strong> Corridor: corridor, corridor status.
-            </div>
-            <div>
-              <strong>TIER 1</strong> Display: night, low light, bright, reset.
-            </div>
-            <div>
-              <strong>TIER 2</strong>: weather (live when configured).
+              <strong>Command palette</strong> (keyboard) still exposes navigation, pins, panels, and display modes.
             </div>
             <div>
               <strong>TIER 2 (stub)</strong>: fire, water, deadman.

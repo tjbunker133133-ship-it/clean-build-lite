@@ -171,6 +171,23 @@ export interface DeploymentIntegritySnapshot {
   reloadAttempted: boolean
 }
 
+/** Basemap / vector cache heuristic for offline field use (not map engine state). */
+export type OfflineMapTileReadiness = 'unknown' | 'sufficient' | 'low' | 'empty'
+
+export interface OfflineReadinessSnapshot {
+  assessedAt: number | null
+  assessed: boolean
+  /** Unique cached URLs that look like MapTiler / OSM map traffic. */
+  mapRelatedCacheEntryCount: number
+  /** Heuristic: any precache entry looks like the HTML app shell. */
+  appShellLikelyCached: boolean
+  mapTileReadiness: OfflineMapTileReadiness
+  /** Operator-facing banner copy; null when nothing to surface. */
+  bannerMessage: string | null
+  /** True while navigator reports offline (informational). */
+  navigatorOffline: boolean
+}
+
 export interface RuntimeSnapshot {
   buildId: string
   /** Alias for external consumers that expect buildHash naming. */
@@ -226,6 +243,7 @@ export interface RuntimeSnapshot {
    *  `appinstalled`, and `display-mode: standalone` matchMedia changes. */
   installMode: InstallMode
   deploymentIntegrity: DeploymentIntegritySnapshot
+  offlineReadiness: OfflineReadinessSnapshot
 }
 
 export type DeadManTimerState =
@@ -354,6 +372,15 @@ const snapshot: RuntimeSnapshot = {
     updatePending: false,
     recoveryInFlight: false,
     reloadAttempted: false,
+  },
+  offlineReadiness: {
+    assessedAt: null,
+    assessed: false,
+    mapRelatedCacheEntryCount: 0,
+    appShellLikelyCached: false,
+    mapTileReadiness: 'unknown',
+    bannerMessage: null,
+    navigatorOffline: typeof navigator !== 'undefined' ? !navigator.onLine : false,
   },
 }
 
@@ -606,6 +633,14 @@ export function updateDeploymentIntegrity(
 ): void {
   snapshot.deploymentIntegrity = {
     ...snapshot.deploymentIntegrity,
+    ...patch,
+  }
+  notify()
+}
+
+export function updateOfflineReadiness(patch: Partial<OfflineReadinessSnapshot>): void {
+  snapshot.offlineReadiness = {
+    ...snapshot.offlineReadiness,
     ...patch,
   }
   notify()
@@ -1002,6 +1037,11 @@ export function recordCommandDispatch(entry: CommandTraceEntry): void {
 
 let installed = false
 
+/** True after `installRuntimeSnapshot()` completed in a browser context. Replaces ad-hoc `window` boot flags for UI. */
+export function isRuntimeSnapshotInstalled(): boolean {
+  return installed
+}
+
 /**
  * Wire the snapshot to the device profile and expose globals.
  * Idempotent and safe to call multiple times.
@@ -1115,9 +1155,8 @@ export function installRuntimeSnapshot(): void {
   window.addEventListener('online', onOnline)
   window.addEventListener('offline', onOffline)
 
-  // Cross-device validation: every 10 s, surface long-lived inconsistencies
-  // (voice armed but recognizer never reached `listening`; controller/device mismatch).
-  const VALIDATE_INTERVAL_MS = 10_000
+  // Cross-device validation: periodic consistency checks (battery-conscious on mobile).
+  const VALIDATE_INTERVAL_MS = 30_000
   window.setInterval(() => {
     const v = snapshot.voice
     if (

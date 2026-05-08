@@ -244,6 +244,14 @@ export default function DeadManPanel() {
 
   const sendDeadmanRescue = async () => {
     traceAction('deadman_dispatch', 'handler_enter')
+    if (import.meta.env.DEV) {
+      console.log('[SYSTEM TRACE]', {
+        step: 'deadman_dispatch_enter',
+        success: true,
+        data: { alreadySent: sentRef.current, expiresAt },
+        error: null,
+      })
+    }
     const alreadyDispatched = shouldSkipDeadmanDispatch(expiresAt)
     if (alreadyDispatched) {
       safeShowDispatch('RESCUE ALREADY DISPATCHED (THIS TAB)')
@@ -268,6 +276,14 @@ export default function DeadManPanel() {
       contactCount,
       endpoint,
     })
+    if (import.meta.env.DEV) {
+      console.log('[SYSTEM TRACE]', {
+        step: 'deadman_dispatch_eligibility',
+        success: eligibility.dispatchReady,
+        data: { contactCount, endpointConfigured: Boolean(endpoint), reason: eligibility.reason },
+        error: eligibility.dispatchReady ? null : eligibility.reason,
+      })
+    }
     if (import.meta.env.DEV) {
       console.info('[HUD DEV] deadman-eligibility', {
         contactCount,
@@ -297,16 +313,42 @@ export default function DeadManPanel() {
         signal: ac.signal,
       })
       if (res.ok) {
+        if (import.meta.env.DEV) {
+          console.log('[SYSTEM TRACE]', {
+            step: 'deadman_dispatch_post',
+            success: true,
+            data: { status: res.status, contactCount, expiresAt },
+            error: null,
+          })
+        }
         recordDeadmanDispatchSuccess(expiresAt)
         // Match SOS main-line wording: "SOS SENT TO N CONTACTS"
         safeShowDispatch(`DEADMAN SENT TO ${contactCount} CONTACTS`)
         traceAction('deadman_dispatch', 'async_complete', { status: res.status, contactCount })
-      } else safeShowDispatch(`DEADMAN SEND FAILED (${res.status})`)
+      } else {
+        if (import.meta.env.DEV) {
+          console.log('[SYSTEM TRACE]', {
+            step: 'deadman_dispatch_post',
+            success: false,
+            data: { status: res.status, contactCount, expiresAt },
+            error: `http_${res.status}`,
+          })
+        }
+        safeShowDispatch(`DEADMAN SEND FAILED (${res.status})`)
+      }
       if (!res.ok) {
         traceAction('deadman_dispatch', 'failure', { reason: 'http_error', status: res.status })
       }
     } catch (e: unknown) {
       if ((e as { name?: string })?.name === 'AbortError') return
+      if (import.meta.env.DEV) {
+        console.log('[SYSTEM TRACE]', {
+          step: 'deadman_dispatch_post',
+          success: false,
+          data: { contactCount, expiresAt },
+          error: 'network_error',
+        })
+      }
       safeShowDispatch('DEADMAN SEND FAILED (NETWORK)')
       traceAction('deadman_dispatch', 'failure', { reason: 'network_error' })
     } finally {
@@ -711,7 +753,7 @@ export default function DeadManPanel() {
               })
               setStatusText('OPENING CONTACT CONFIG')
             }}
-            style={btnStyle('#7dff8a', isMobile)}
+            style={{ ...btnStyle('#7dff8a', isMobile), opacity: 1 }}
           >
             OPEN CONTACT CONFIG
           </button>

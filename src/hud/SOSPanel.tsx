@@ -1,6 +1,8 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import HudPanel from './HudPanel'
 import { useGPS } from '../hooks/useGPS'
+import { useCheckInBeacon } from '../hooks/useCheckInBeacon'
+import { fetchCheckInContacts, type CheckInContact } from '../lib/checkIn/checkInContacts'
 import { useAppContext } from '../context/AppContext'
 import { useCockpit } from '../context/CockpitContext'
 import { emitHaptic } from '../runtime/haptics'
@@ -119,7 +121,7 @@ export default function SOSPanel() {
   //     so future operational signals can flow without re-wiring.
   // Do NOT "clean up" by deleting these calls.
   useAppContext()
-  useGPS()
+  const gps = useGPS()
   const { panels, raisePanel, updatePanel } = useCockpit()
   const [holding, setHolding] = useState(false)
   const [holdProgress, setHoldProgress] = useState(0)
@@ -138,6 +140,12 @@ export default function SOSPanel() {
   // the "TEST AUDIBLE ALARM" button mutate this flag. SOS arming, the
   // launch countdown, and rescue dispatch never touch it.
   const [alarmActive, setAlarmActive] = useState(false)
+
+  const [routineCheckInContacts, setRoutineCheckInContacts] = useState<CheckInContact[]>([])
+  const [routineCheckInLoading, setRoutineCheckInLoading] = useState(true)
+  const [routineCheckInNote, setRoutineCheckInNote] = useState('')
+  const [routineCheckInBusy, setRoutineCheckInBusy] = useState(false)
+  const [routineCheckInHint, setRoutineCheckInHint] = useState('')
 
   const holdStartRef = useRef<number>(0)
   const rafRef = useRef<number | null>(null)
@@ -199,6 +207,62 @@ export default function SOSPanel() {
   const sliderTravel = Math.max(60, 220 - knobSize)
   const panelPadding = isMobile ? 16 : 12
 
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      setRoutineCheckInLoading(true)
+      const { data } = await fetchCheckInContacts()
+      if (!cancelled) setRoutineCheckInContacts(data ?? [])
+      setRoutineCheckInLoading(false)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const getRoutineContacts = useCallback(
+    () =>
+      routineCheckInContacts.map((c) => ({
+        name: c.contact_name,
+        email: c.email.trim().toLowerCase(),
+      })),
+    [routineCheckInContacts],
+  )
+
+  const { sendManual: sendRoutineCheckInManual } = useCheckInBeacon(getRoutineContacts)
+
+  const onRoutineCheckInFromSos = async () => {
+    setRoutineCheckInHint('')
+    if (routineCheckInLoading) {
+      setRoutineCheckInHint('Loading check-in contacts…')
+      emitHaptic('wakeWord', 'sos.checkin.loading')
+      return
+    }
+    const gpsReady = gps.lat != null && gps.lng != null && gps.locationState === 'granted'
+    if (!gpsReady) {
+      void gps.requestLocation()
+      setRoutineCheckInHint('Enable location, wait for a fix, then tap again.')
+      return
+    }
+    if (!routineCheckInContacts.length) {
+      setRoutineCheckInHint('Add check-in contacts in the Routine check-in panel.')
+      raisePanel('checkin')
+      updatePanel('checkin', { minimized: false, docked: false })
+      return
+    }
+    setRoutineCheckInBusy(true)
+    const note = routineCheckInNote.trim() ? routineCheckInNote.trim().slice(0, 160) : null
+    const r = await sendRoutineCheckInManual(note)
+    setRoutineCheckInBusy(false)
+    if (!r.ok) {
+      setRoutineCheckInHint('Need a GPS fix and at least one check-in contact.')
+      raisePanel('checkin')
+      return
+    }
+    setRoutineCheckInHint(r.status === 'sent' ? 'Check-in sent.' : 'Check-in queued for send.')
+    setRoutineCheckInNote('')
+  }
+
   const stopAlarm = () => {
     if (alarmTimerRef.current) {
       window.clearInterval(alarmTimerRef.current)
@@ -228,12 +292,14 @@ export default function SOSPanel() {
       if (torchTrackRef.current) return torchTrackRef.current
       if (!navigator.mediaDevices?.getUserMedia) {
         setFlashlightSupport('unsupported')
-        console.log('[FLASHLIGHT]', {
-          supported: false,
-          permission: flashlightPermission,
-          active: false,
-          device: navigator.userAgent,
-        })
+        if (import.meta.env.DEV) {
+          console.log('[FLASHLIGHT]', {
+            supported: false,
+            permission: flashlightPermission,
+            active: false,
+            device: navigator.userAgent,
+          })
+        }
         return null
       }
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -259,22 +325,26 @@ export default function SOSPanel() {
       const caps = track.getCapabilities?.() as MediaTrackCapabilities & { torch?: boolean }
       if (!caps?.torch) {
         setFlashlightSupport('unsupported')
-        console.log('[FLASHLIGHT]', {
-          supported: false,
-          permission: flashlightPermission,
-          active: false,
-          device: navigator.userAgent,
-        })
+        if (import.meta.env.DEV) {
+          console.log('[FLASHLIGHT]', {
+            supported: false,
+            permission: flashlightPermission,
+            active: false,
+            device: navigator.userAgent,
+          })
+        }
         return false
       }
       await track.applyConstraints({ advanced: [{ torch: on } as MediaTrackConstraintSet] })
       setFlashlightSupport('supported')
-      console.log('[FLASHLIGHT]', {
-        supported: true,
-        permission: flashlightPermission === 'unknown' ? 'granted' : flashlightPermission,
-        active: on,
-        device: navigator.userAgent,
-      })
+      if (import.meta.env.DEV) {
+        console.log('[FLASHLIGHT]', {
+          supported: true,
+          permission: flashlightPermission === 'unknown' ? 'granted' : flashlightPermission,
+          active: on,
+          device: navigator.userAgent,
+        })
+      }
       return true
     } catch {
       setFlashlightSupport('unsupported')
@@ -410,6 +480,8 @@ export default function SOSPanel() {
       morseStopRef.current = true
       setFlashInvert(false)
       void stopTorch()
+      setStatus('Select MORSE SCREEN or MORSE FLASHLIGHT (YES) to run this pattern.')
+      emitHaptic('wakeWord', 'sos.morse.needs-channel')
       return
     }
     morseStopRef.current = false
@@ -558,6 +630,13 @@ export default function SOSPanel() {
     traceAction('sos_long_hold', 'handler_enter')
     if (holding || isArmed) {
       traceAction('sos_long_hold', 'guard_reject', { reason: 'already_holding_or_armed' })
+      if (isArmed) {
+        setStatus('SOS already armed — DISARM / STOP ALL to cancel, then slide again.')
+        emitHaptic('commandFailure', 'sos.hold.already-armed')
+      } else {
+        setStatus('Hold already in progress — release to cancel.')
+        emitHaptic('wakeWord', 'sos.hold.in-progress')
+      }
       return
     }
     holdStartRef.current = performance.now()
@@ -595,6 +674,22 @@ export default function SOSPanel() {
   }
 
   const disarmAll = async () => {
+    const idle =
+      !isArmed &&
+      !holding &&
+      morsePattern === 'off' &&
+      !alarmActive &&
+      (launchCountdown == null || launchCountdown <= 0) &&
+      !torchActive &&
+      !flashInvert &&
+      mode === 'off' &&
+      flashScreen === 'no' &&
+      flashTorch === 'no'
+    if (idle) {
+      setStatus('ALL CLEAR — nothing to stop')
+      emitHaptic('wakeWord', 'sos.disarm.idle')
+      return
+    }
     if (launchTimerRef.current) {
       window.clearInterval(launchTimerRef.current)
       launchTimerRef.current = null
@@ -620,6 +715,14 @@ export default function SOSPanel() {
 
   const launchRescuePacket = async () => {
     traceAction('sos_dispatch', 'handler_enter')
+    if (import.meta.env.DEV) {
+      console.log('[SYSTEM TRACE]', {
+        step: 'sos_dispatch_enter',
+        success: true,
+        data: { launchSent: launchSentRef.current },
+        error: null,
+      })
+    }
     if (launchSentRef.current) {
       traceAction('sos_dispatch', 'guard_reject', { reason: 'already_sent_for_arm_window' })
       return
@@ -645,6 +748,14 @@ export default function SOSPanel() {
       if (mountedRef.current) setStatus(s)
     }
     const eligibility = getRescueEligibility({ contactCount, endpoint })
+    if (import.meta.env.DEV) {
+      console.log('[SYSTEM TRACE]', {
+        step: 'sos_dispatch_eligibility',
+        success: eligibility.dispatchReady,
+        data: { contactCount, endpointConfigured: Boolean(endpoint), reason: eligibility.reason },
+        error: eligibility.dispatchReady ? null : eligibility.reason,
+      })
+    }
     if (!eligibility.dispatchReady && eligibility.reason === 'no_contacts') {
       if (import.meta.env.DEV) {
         console.info('[HUD DEV] sos-fallback-reason', { reason: 'no_contacts', contactCount })
@@ -672,14 +783,38 @@ export default function SOSPanel() {
         signal: ac.signal,
       })
       if (res.ok) {
+        if (import.meta.env.DEV) {
+          console.log('[SYSTEM TRACE]', {
+            step: 'sos_dispatch_post',
+            success: true,
+            data: { status: res.status, contactCount },
+            error: null,
+          })
+        }
         safeSetStatus(`SOS SENT TO ${contactCount} CONTACTS`)
         traceAction('sos_dispatch', 'async_complete', { status: res.status, contactCount })
       } else {
+        if (import.meta.env.DEV) {
+          console.log('[SYSTEM TRACE]', {
+            step: 'sos_dispatch_post',
+            success: false,
+            data: { status: res.status, contactCount },
+            error: `http_${res.status}`,
+          })
+        }
         safeSetStatus(`SOS SEND FAILED (${res.status})`)
         traceAction('sos_dispatch', 'failure', { reason: 'http_error', status: res.status })
       }
     } catch (e: unknown) {
       if ((e as { name?: string })?.name === 'AbortError') return
+      if (import.meta.env.DEV) {
+        console.log('[SYSTEM TRACE]', {
+          step: 'sos_dispatch_post',
+          success: false,
+          data: { contactCount },
+          error: 'network_error',
+        })
+      }
       safeSetStatus('SOS SEND FAILED (NETWORK)')
       traceAction('sos_dispatch', 'failure', { reason: 'network_error' })
     } finally {
@@ -765,6 +900,8 @@ export default function SOSPanel() {
         accent={alarmColor}
       >
         <div
+          role="region"
+          aria-label="SOS arm, routine check-in, and rescue actions"
           style={{
             fontFamily: 'var(--font-ui, system-ui)',
             fontSize: fontMd,
@@ -773,6 +910,85 @@ export default function SOSPanel() {
             overflowY: 'auto',
           }}
         >
+          <div
+            style={{
+              marginBottom: gapLg,
+              padding: gapMd,
+              borderRadius: 10,
+              border: '1px solid rgba(90, 212, 196, 0.42)',
+              background: 'rgba(10, 32, 36, 0.55)',
+            }}
+          >
+            <div
+              style={{
+                fontSize: fontSm,
+                letterSpacing: '0.12em',
+                fontWeight: 800,
+                color: '#7ee0d3',
+                marginBottom: gapSm,
+              }}
+            >
+              NOT AN EMERGENCY
+            </div>
+            <p
+              style={{
+                margin: 0,
+                marginBottom: gapMd,
+                fontSize: fontSm,
+                color: '#9ec4bf',
+                lineHeight: 1.45,
+              }}
+            >
+              Send your position to routine check-in contacts only. Separate from SOS — no alert, no
+              emergency dispatch.
+            </p>
+            <input
+              type="text"
+              value={routineCheckInNote}
+              onChange={(e) => setRoutineCheckInNote(e.target.value)}
+              placeholder="Short note (optional)"
+              maxLength={160}
+              aria-label="Optional check-in note"
+              style={{
+                width: '100%',
+                boxSizing: 'border-box',
+                marginBottom: gapMd,
+                minHeight: safeMinPx - 10,
+                borderRadius: 8,
+                border: '1px solid rgba(90, 212, 196, 0.35)',
+                background: 'rgba(6, 18, 22, 0.65)',
+                color: '#dffaf6',
+                fontSize: fontSm,
+                padding: '0 10px',
+              }}
+            />
+            <button
+              type="button"
+              data-no-drag
+              onClick={() => void onRoutineCheckInFromSos()}
+              disabled={routineCheckInBusy || routineCheckInLoading}
+              style={{
+                width: '100%',
+                minHeight: safeMinPx,
+                borderRadius: 10,
+                border: '1px solid rgba(90, 212, 196, 0.75)',
+                background: 'linear-gradient(180deg, rgba(28, 110, 100, 0.5), rgba(8, 36, 40, 0.9))',
+                color: '#f0fffc',
+                fontWeight: 800,
+                letterSpacing: '0.1em',
+                fontSize: isMobile ? 14 : 13,
+                cursor: routineCheckInBusy || routineCheckInLoading ? 'wait' : 'pointer',
+              }}
+            >
+              {routineCheckInBusy ? 'SENDING…' : "I'M OK — SEND CHECK-IN"}
+            </button>
+            {routineCheckInHint ? (
+              <p style={{ margin: 0, marginTop: gapSm, fontSize: fontSm, color: '#c6ebe4', lineHeight: 1.4 }}>
+                {routineCheckInHint}
+              </p>
+            ) : null}
+          </div>
+
           <div
             style={{
               color: '#ff9aac',
@@ -862,7 +1078,17 @@ export default function SOSPanel() {
                     data-no-drag
                     onClick={(e) => {
                       e.stopPropagation()
-                      setMorsePattern((prev) => (prev === p ? 'off' : p))
+                      if (morsePattern === p) {
+                        setMorsePattern('off')
+                        setStatus(`MORSE ${p.toUpperCase()} OFF`)
+                        emitHaptic('wakeWord', 'sos.morse.pattern-off')
+                        return
+                      }
+                      setMorsePattern(p)
+                      setStatus(
+                        `MORSE ${p.toUpperCase()} — set MORSE SCREEN or MORSE FLASHLIGHT to YES to run`,
+                      )
+                      emitHaptic('wakeWord', 'sos.morse.pattern-on')
                     }}
                     style={{
                       flex: 1,
@@ -893,7 +1119,14 @@ export default function SOSPanel() {
                 data-no-drag
                 onClick={(e) => {
                   e.stopPropagation()
+                  if (flashScreen === 'yes') {
+                    setStatus('MORSE SCREEN flash already ON')
+                    emitHaptic('wakeWord', 'sos.flashScreen.redundant-yes')
+                    return
+                  }
                   setFlashScreen('yes')
+                  setStatus('MORSE SCREEN flash ON')
+                  emitHaptic('wakeWord', 'sos.flashScreen.on')
                 }}
                 style={{
                   flex: 1,
@@ -916,7 +1149,14 @@ export default function SOSPanel() {
                 data-no-drag
                 onClick={(e) => {
                   e.stopPropagation()
+                  if (flashScreen === 'no') {
+                    setStatus('MORSE SCREEN flash already OFF')
+                    emitHaptic('wakeWord', 'sos.flashScreen.redundant-no')
+                    return
+                  }
                   setFlashScreen('no')
+                  setStatus('MORSE SCREEN flash OFF')
+                  emitHaptic('wakeWord', 'sos.flashScreen.off')
                 }}
                 style={{
                   flex: 1,
@@ -944,7 +1184,14 @@ export default function SOSPanel() {
                 data-no-drag
                 onClick={(e) => {
                   e.stopPropagation()
+                  if (flashTorch === 'yes') {
+                    setStatus('MORSE FLASHLIGHT already ON')
+                    emitHaptic('wakeWord', 'sos.flashTorch.redundant-yes')
+                    return
+                  }
                   setFlashTorch('yes')
+                  setStatus('MORSE FLASHLIGHT ON (torch when pattern runs)')
+                  emitHaptic('wakeWord', 'sos.flashTorch.on')
                 }}
                 style={{
                   flex: 1,
@@ -967,7 +1214,14 @@ export default function SOSPanel() {
                 data-no-drag
                 onClick={(e) => {
                   e.stopPropagation()
+                  if (flashTorch === 'no') {
+                    setStatus('MORSE FLASHLIGHT already OFF')
+                    emitHaptic('wakeWord', 'sos.flashTorch.redundant-no')
+                    return
+                  }
                   setFlashTorch('no')
+                  setStatus('MORSE FLASHLIGHT OFF')
+                  emitHaptic('wakeWord', 'sos.flashTorch.off')
                 }}
                 style={{
                   flex: 1,
@@ -1041,6 +1295,7 @@ export default function SOSPanel() {
                 fontSize: fontSm,
                 letterSpacing: '0.08em',
                 cursor: 'pointer',
+                opacity: 1,
               }}
             >
               OPEN CONTACT CONFIG

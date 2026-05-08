@@ -54,7 +54,7 @@ export default function CockpitHudShell({ children }: { children: ReactNode }) {
           (el.textContent ?? '').trim().replace(/\s+/g, ' ').slice(0, 64) ||
           el.getAttribute('id') ||
           el.tagName.toLowerCase()
-        console.log('[UI ACTION]', name)
+        if (import.meta.env.DEV) console.log('[UI ACTION]', name)
       }}
       style={{
         position: 'absolute',

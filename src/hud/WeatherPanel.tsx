@@ -81,10 +81,12 @@ export default function WeatherPanel() {
           data-no-drag
           disabled={!coordsReady}
           onClick={() => {
-            console.log('[WEATHER REQUEST]', {
-              lat: gps.lat,
-              lng: gps.lng,
-            })
+            if (import.meta.env.DEV) {
+              console.log('[WEATHER REQUEST]', {
+                lat: gps.lat,
+                lng: gps.lng,
+              })
+            }
             void refreshPanelData()
           }}
           style={{

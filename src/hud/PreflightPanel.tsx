@@ -29,10 +29,12 @@ import { clampMobileToReachableViewport, isPanelReachableInViewport } from '../l
 import { cockpitViewport } from '../lib/viewport'
 import { useAppContext } from '../context/AppContext'
 import {
+  backendReady,
   getSupabaseDiagnostics,
   probeSupabaseReachability,
   type SupabaseEnvReadiness,
 } from '../lib/supabase'
+import { mergePersistedGeolocationState } from '../lib/permissionRecoveryCopy'
 
 type CheckState = 'pass' | 'warn' | 'fail'
 type ManualCheckKey =
@@ -210,6 +212,19 @@ export default function PreflightPanel() {
 
   useEffect(() => {
     if (!import.meta.env.DEV) return
+    const t = window.setTimeout(() => {
+      console.log('[CONTACT FORM STATE]', {
+        name: contactForm.name,
+        email: contactForm.email,
+        phone: contactForm.phone,
+        relationship: contactForm.relationship,
+      })
+    }, 320)
+    return () => window.clearTimeout(t)
+  }, [contactForm])
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
     const profile = getDeviceProfile()
     const layout = panels.preflight
     const { vw, vh } = cockpitViewport()
@@ -313,10 +328,20 @@ export default function PreflightPanel() {
     let alive = true
     void getPermissionSnapshot().then((snapshot) => {
       if (!alive) return
-      setGeoPerm(snapshot.geolocation === 'unsupported' ? 'unknown' : snapshot.geolocation)
+      let persistedGps: string | null = null
+      try {
+        persistedGps = localStorage.getItem('gpsPermission')
+      } catch {
+        persistedGps = null
+      }
+      const rawGeo = snapshot.geolocation
+      const geoQuery = rawGeo === 'unsupported' ? 'unknown' : rawGeo
+      const geoMerged = mergePersistedGeolocationState(geoQuery, persistedGps)
+      const geoForUi = geoMerged === 'unsupported' ? 'unknown' : geoMerged
+      setGeoPerm(geoForUi)
       setMicPerm(snapshot.microphone === 'unsupported' ? 'unknown' : snapshot.microphone)
       setNotifPerm(snapshot.notifications)
-      updatePermission('geolocation', snapshot.geolocation as never)
+      updatePermission('geolocation', geoMerged as never)
       updatePermission('microphone', snapshot.microphone as never)
       updatePermission('notifications', snapshot.notifications as never)
     })
@@ -555,7 +580,7 @@ export default function PreflightPanel() {
     }
     setContacts(data)
     setContactsStatus('ok')
-    console.log('[EmergencyContacts] loaded', data)
+    if (import.meta.env.DEV) console.log('[EmergencyContacts] loaded', data)
   }
 
   const handleAddContact = async () => {
@@ -571,16 +596,43 @@ export default function PreflightPanel() {
     if (!name || !email) {
       setContactError('Name and email required')
       traceAction('emergency_contact_add', 'guard_reject', { reason: 'validation_missing_fields' })
+      if (import.meta.env.DEV) {
+        console.log('[ADD CONTACT FLOW]', {
+          backendReady,
+          payload: { name, email, phone, relationship, id: contactForm.id },
+          validationPassed: false,
+          supabaseCalled: false,
+          error: 'validation_missing_fields',
+        })
+      }
       return
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       setContactError('Invalid email format')
       traceAction('emergency_contact_add', 'guard_reject', { reason: 'validation_invalid_email' })
+      if (import.meta.env.DEV) {
+        console.log('[ADD CONTACT FLOW]', {
+          backendReady,
+          payload: { name, email, phone, relationship, id: contactForm.id },
+          validationPassed: false,
+          supabaseCalled: false,
+          error: 'validation_invalid_email',
+        })
+      }
       return
     }
     setContactBusy(true)
     setContactError(null)
     traceAction('emergency_contact_add', 'async_start')
+    if (import.meta.env.DEV) {
+      console.log('[ADD CONTACT FLOW]', {
+        backendReady,
+        payload: { name, email, phone, relationship, id: contactForm.id },
+        validationPassed: true,
+        supabaseCalled: true,
+        error: null,
+      })
+    }
     const action = contactForm.id
       ? updateEmergencyContact(contactForm.id, {
           contact_name: name,
@@ -598,6 +650,15 @@ export default function PreflightPanel() {
     if (error) {
       setContactError(error.message)
       traceAction('emergency_contact_add', 'failure', { reason: 'backend_error' })
+      if (import.meta.env.DEV) {
+        console.log('[ADD CONTACT FLOW]', {
+          backendReady,
+          payload: { name, email, phone, relationship, id: contactForm.id },
+          validationPassed: true,
+          supabaseCalled: true,
+          error: error.message,
+        })
+      }
       setContactBusy(false)
       return
     }
@@ -606,7 +667,17 @@ export default function PreflightPanel() {
     }
     setContactForm({ id: null, name: '', email: '', phone: '', relationship: '' })
     await reloadContacts()
-    console.log('[EmergencyContacts] saved count', contacts.length + (contactForm.id ? 0 : 1))
+    if (import.meta.env.DEV) {
+      console.log('[EmergencyContacts] saved count', contacts.length + (contactForm.id ? 0 : 1))
+      console.log('[ADD CONTACT FLOW]', {
+        backendReady,
+        payload: { name, email, phone, relationship },
+        validationPassed: true,
+        supabaseCalled: true,
+        error: null,
+        result: 'success',
+      })
+    }
     traceAction('emergency_contact_add', 'async_complete', { hydratedCount: contacts.length + 1 })
     setContactBusy(false)
   }
@@ -631,7 +702,9 @@ export default function PreflightPanel() {
     const nextPhones = { ...contactPhoneMap }
     delete nextPhones[id]
     persistContactPhoneMap(nextPhones)
-    console.log('[EmergencyContacts] saved count', Math.max(0, contacts.length - 1))
+    if (import.meta.env.DEV) {
+      console.log('[EmergencyContacts] saved count', Math.max(0, contacts.length - 1))
+    }
     traceAction('emergency_contact_remove', 'async_complete', { removed: true })
     setContactBusy(false)
   }
@@ -696,13 +769,15 @@ export default function PreflightPanel() {
         snap.deploymentIntegrity.staleStatus === 'stale_detected'
           ? 'recovery_reload'
           : 'force_update'
-      console.table({
-        beforeBuild,
-        afterBuild: 'pending_reload',
-        networkBuild: networkBuild ?? 'unknown',
-        updateTriggered: true,
-        reloadReason,
-      })
+      if (import.meta.env.DEV) {
+        console.table({
+          beforeBuild,
+          afterBuild: 'pending_reload',
+          networkBuild: networkBuild ?? 'unknown',
+          updateTriggered: true,
+          reloadReason,
+        })
+      }
       const result = await forceUpdateApp()
       if (!result.ok) {
         setRecoveryStatus(result.message)
@@ -735,10 +810,9 @@ export default function PreflightPanel() {
   }
 
   const isMobile = getDeviceProfile().interactionMode === 'mobile'
+  const hostLc = typeof window !== 'undefined' ? window.location.hostname.toLowerCase() : ''
   const deploymentProvider =
-    typeof window !== 'undefined' && window.location.hostname.includes('vercel.app')
-      ? 'vercel'
-      : 'netlify-or-other'
+    hostLc.includes('vercel.app') ? 'vercel' : hostLc === 'localhost' || hostLc === '127.0.0.1' ? 'local' : 'hosted'
   const fontSm = touchFontSm(isMobile)
   const fontMd = touchFontMd(isMobile)
   const gapMd = touchGapMd(isMobile)
@@ -823,6 +897,8 @@ export default function PreflightPanel() {
     }
   }, [])
 
+  const supabaseDiag = getSupabaseDiagnostics()
+
   return (
     <HudPanel panelId="preflight" title="Preflight Test" initialPos={{ x: 16, y: 180 }} initialWidth={320}>
       <div style={{ display: 'grid', gap: gapMd, fontSize: fontSm }}>
@@ -838,7 +914,14 @@ export default function PreflightPanel() {
           }}
         >
           <div>
-            <strong>Running on {deploymentProvider === 'vercel' ? 'Vercel' : 'Netlify/Other'}</strong>
+            <strong>
+              Running on{' '}
+              {deploymentProvider === 'vercel'
+                ? 'Vercel'
+                : deploymentProvider === 'local'
+                  ? 'Local dev'
+                  : 'Hosted'}
+            </strong>
           </div>
           <div>
             build <strong>{runtimeBuild.slice(0, 19)}</strong> • origin <strong>{window.location.origin}</strong>
@@ -848,13 +931,18 @@ export default function PreflightPanel() {
             <strong>{runtimeSnap.deploymentIntegrity.cacheGeneration || 'none'}</strong>
           </div>
           <div>
-            backend configured <strong>{getSupabaseDiagnostics().backendConfigured ? 'yes' : 'no'}</strong> • reachable{' '}
+            backend configured <strong>{supabaseDiag.backendConfigured ? 'yes' : 'no'}</strong> • reachable{' '}
             <strong>{backendReachable == null ? 'unknown' : backendReachable ? 'yes' : 'no'}</strong>
           </div>
           <div>
             env readiness <strong>{backendEnvReadiness}</strong> • provider{' '}
             <strong>{deploymentProvider}</strong>
           </div>
+          {!supabaseDiag.backendConfigured ? (
+            <div style={{ fontSize: fontSm, lineHeight: 1.45, opacity: 0.95 }}>
+              {supabaseDiag.deployEnvHint}
+            </div>
+          ) : null}
           <div>
             build <strong>{runtimeBuild.slice(0, 19)}</strong> • backend check{' '}
             <strong>{backendLastCheckedAt ? new Date(backendLastCheckedAt).toLocaleTimeString() : 'pending'}</strong>
@@ -1128,8 +1216,9 @@ export default function PreflightPanel() {
             <div style={{ color: '#9ea7a0', fontSize: fontSm, padding: '4px 4px' }}>Loading…</div>
           )}
           {contactsStatus === 'unavailable' && (
-            <div style={{ color: stateColor('warn'), fontSize: fontSm, padding: '4px 4px' }}>
-              Backend unavailable — contacts cannot be loaded
+            <div style={{ color: stateColor('warn'), fontSize: fontSm, padding: '4px 4px', lineHeight: 1.45 }}>
+              Could not load contacts from Supabase (network, RLS, or table error). Check the browser console for{' '}
+              <code>[SYSTEM TRACE]</code> steps. You can still edit the form; retry after fixing the backend.
             </div>
           )}
           {contactsStatus === 'ok' && contacts.length === 0 && (
@@ -1216,7 +1305,7 @@ export default function PreflightPanel() {
               placeholder="Contact name"
               value={contactForm.name}
               onChange={(e) => setContactForm((f) => ({ ...f, name: e.target.value }))}
-              disabled={contactBusy || contactsStatus === 'unavailable'}
+              disabled={contactBusy}
               style={{
                 minHeight: tapMin,
                 borderRadius: 6,
@@ -1233,7 +1322,7 @@ export default function PreflightPanel() {
               placeholder="Email"
               value={contactForm.email}
               onChange={(e) => setContactForm((f) => ({ ...f, email: e.target.value }))}
-              disabled={contactBusy || contactsStatus === 'unavailable'}
+              disabled={contactBusy}
               style={{
                 minHeight: tapMin,
                 borderRadius: 6,
@@ -1250,7 +1339,7 @@ export default function PreflightPanel() {
               placeholder="Phone (optional)"
               value={contactForm.phone}
               onChange={(e) => setContactForm((f) => ({ ...f, phone: e.target.value }))}
-              disabled={contactBusy || contactsStatus === 'unavailable'}
+              disabled={contactBusy}
               style={{
                 minHeight: tapMin,
                 borderRadius: 6,
@@ -1267,7 +1356,7 @@ export default function PreflightPanel() {
               placeholder="Relationship (optional)"
               value={contactForm.relationship}
               onChange={(e) => setContactForm((f) => ({ ...f, relationship: e.target.value }))}
-              disabled={contactBusy || contactsStatus === 'unavailable'}
+              disabled={contactBusy}
               style={{
                 minHeight: tapMin,
                 borderRadius: 6,
@@ -1282,7 +1371,7 @@ export default function PreflightPanel() {
               type="button"
               data-no-drag
               onClick={() => void handleAddContact()}
-              disabled={contactBusy || contactsStatus === 'unavailable'}
+              disabled={contactBusy}
               style={{
                 minHeight: tapMin,
                 borderRadius: 8,
@@ -1297,6 +1386,14 @@ export default function PreflightPanel() {
             >
               {contactBusy ? 'SAVING…' : contactForm.id ? 'SAVE CONTACT' : 'ADD CONTACT'}
             </button>
+            {!backendReady ? (
+              <div style={{ color: '#a9c4a9', fontSize: fontSm, lineHeight: 1.45 }}>
+                Supabase is not configured for this build — contacts are saved to <strong>this device only</strong>{' '}
+                (local roster). For cloud sync and multi-device SOS, add{' '}
+                <code style={{ fontSize: '0.85em' }}>VITE_SUPABASE_URL</code> and{' '}
+                <code style={{ fontSize: '0.85em' }}>VITE_SUPABASE_ANON_KEY</code> in your host env and redeploy.
+              </div>
+            ) : null}
             {contactForm.id && (
               <button
                 type="button"

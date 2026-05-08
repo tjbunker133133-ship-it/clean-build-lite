@@ -33,7 +33,7 @@ type RecoveryResult = { ok: boolean; message: string }
 
 export async function resetAppState(): Promise<RecoveryResult> {
   traceAction('reset_app', 'handler_enter')
-  console.log('[ResetApp] button pressed')
+  if (import.meta.env.DEV) console.log('[ResetApp] button pressed')
   if (isResetting) {
     traceAction('reset_app', 'guard_reject', { reason: 'already_resetting' })
     return { ok: false, message: 'Reset already running' }
@@ -46,7 +46,7 @@ export async function resetAppState(): Promise<RecoveryResult> {
   }
 
   try {
-    console.log('[APP RESET] Starting')
+    if (import.meta.env.DEV) console.log('[APP RESET] Starting')
 
     const confirmed = window.confirm(
       'Reset app and reload? This will clear all saved data and restart setup.',
@@ -63,12 +63,12 @@ export async function resetAppState(): Promise<RecoveryResult> {
     }
 
     traceAction('reset_app', 'async_start', { step: 'storage_clear' })
-    console.log('[ResetApp] clearing caches')
+    if (import.meta.env.DEV) console.log('[ResetApp] clearing caches')
     if ('caches' in window && window.caches) {
       const keys = await window.caches.keys()
       await Promise.all(keys.map((k) => window.caches.delete(k)))
     }
-    console.log('[ResetApp] clearing local storage')
+    if (import.meta.env.DEV) console.log('[ResetApp] clearing local storage')
     localStorage.clear()
     sessionStorage.clear()
 
@@ -90,7 +90,7 @@ export async function resetAppState(): Promise<RecoveryResult> {
       traceAction('reset_app', 'async_complete', { step: 'sw_unregister', registrations: regs.length })
     }
 
-    console.log('[APP RESET] Completed')
+    if (import.meta.env.DEV) console.log('[APP RESET] Completed')
     traceAction('reset_app', 'state_result', { cleared: true })
   } catch (err) {
     console.warn('[APP RESET ERROR]', err)
@@ -139,7 +139,7 @@ export async function resetAppState(): Promise<RecoveryResult> {
     } catch {
       // ignore
     }
-    console.log('[ResetApp] reload triggered')
+    if (import.meta.env.DEV) console.log('[ResetApp] reload triggered')
     traceAction('reset_app', 'runtime_effect', { reloadRequested: true })
     window.location.reload()
   }, 300)

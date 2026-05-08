@@ -171,6 +171,14 @@ function readLastKnownCoordinates(): RescueCoordinates | null {
 export async function buildRescuePacket(
   triggerType: RescueTriggerType,
 ): Promise<RescuePacket> {
+  if (import.meta.env.DEV) {
+    console.log('[SYSTEM TRACE]', {
+      step: 'rescue_packet_build_start',
+      success: true,
+      data: { triggerType },
+      error: null,
+    })
+  }
   let contacts: RescueContactPair[] = []
   try {
     const { data, error } = await fetchEmergencyContacts()
@@ -181,9 +189,34 @@ export async function buildRescuePacket(
           name: c.contact_name,
           email: c.email,
         }))
+      if (import.meta.env.DEV) {
+        console.log('[SYSTEM TRACE]', {
+          step: 'rescue_packet_contacts_resolved',
+          success: true,
+          data: { triggerType, contactCount: contacts.length },
+          error: null,
+        })
+      }
+    } else {
+      if (import.meta.env.DEV) {
+        console.log('[SYSTEM TRACE]', {
+          step: 'rescue_packet_contacts_resolved',
+          success: false,
+          data: { triggerType, contactCount: 0 },
+          error: error?.message ?? 'contacts_fetch_error',
+        })
+      }
     }
   } catch {
     contacts = []
+    if (import.meta.env.DEV) {
+      console.log('[SYSTEM TRACE]', {
+        step: 'rescue_packet_contacts_resolved',
+        success: false,
+        data: { triggerType, contactCount: 0 },
+        error: 'contacts_fetch_throw',
+      })
+    }
   }
 
   const base: RescuePacket = {

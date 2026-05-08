@@ -31,7 +31,7 @@ function useDefaultWaypointMarkerDebug(): boolean {
 
 export default function WaypointLayer() {
   const { map } = useMapContext()
-  const { state, removeWaypoint, updateWaypoint } = useAppContext()
+  const { state, removeWaypointWithUndo, updateWaypoint } = useAppContext()
   const { waypoints, showMapLabels, showMapDistances } = state
 
   const markersRef = useRef<Record<string, maplibregl.Marker>>({})
@@ -111,8 +111,7 @@ export default function WaypointLayer() {
           marker.getElement().addEventListener('contextmenu', (ev) => {
             ev.preventDefault()
             ev.stopPropagation()
-            const ok = window.confirm(`Delete waypoint "${wp.label}"?`)
-            if (ok) removeWaypoint(wp.id)
+            removeWaypointWithUndo(wp.id)
           })
           markersRef.current[wp.id] = marker
           if (overlaysReady && showMapLabels) {
@@ -121,7 +120,7 @@ export default function WaypointLayer() {
             if (!lowPowerMode) {
               labelEl.style.boxShadow = '0 1px 4px rgba(0,0,0,0.45)'
             }
-            labelEl.innerText = wp.label ?? ''
+            labelEl.innerText = `${wp.lifecycle === 'arrived' ? '✓ ' : ''}${wp.label ?? ''}`
             const labelMarker = new maplibregl.Marker({
               element: labelEl,
               anchor: 'top',
@@ -139,6 +138,12 @@ export default function WaypointLayer() {
         const root = document.createElement('div')
         root.className = 'marker'
         root.dataset.lowPower = lowPowerMode ? '1' : '0'
+        const life = wp.lifecycle ?? 'active'
+        if (life === 'arrived') {
+          root.style.boxShadow = '0 0 0 3px rgba(34,197,94,0.9), 0 0 18px rgba(34,197,94,0.45)'
+        } else if (life === 'completed') {
+          root.style.opacity = '0.58'
+        }
 
         const icon = document.createElement('div')
         icon.className = 'marker-icon'
@@ -157,12 +162,17 @@ export default function WaypointLayer() {
         deleteBadge.className = 'marker-badge'
         deleteBadge.textContent = '×'
         deleteBadge.setAttribute('aria-label', `Delete waypoint ${wp.label}`)
+        deleteBadge.style.minWidth = '48px'
+        deleteBadge.style.minHeight = '48px'
+        deleteBadge.style.fontSize = '22px'
+        deleteBadge.style.lineHeight = '1'
+        deleteBadge.style.display = 'flex'
+        deleteBadge.style.alignItems = 'center'
+        deleteBadge.style.justifyContent = 'center'
         root.appendChild(deleteBadge)
 
         const askDelete = () => {
-          const ok = window.confirm(`Delete waypoint "${wp.label}"?`)
-          if (!ok) return
-          removeWaypoint(wp.id)
+          removeWaypointWithUndo(wp.id)
         }
         deleteBadge.addEventListener('pointerdown', (ev) => {
           ev.preventDefault()
@@ -207,7 +217,7 @@ export default function WaypointLayer() {
           if (!lowPowerMode) {
             labelEl.style.boxShadow = '0 1px 4px rgba(0,0,0,0.45)'
           }
-          labelEl.innerText = wp.label ?? ''
+          labelEl.innerText = `${wp.lifecycle === 'arrived' ? '✓ ' : ''}${wp.label ?? ''}`
           const labelMarker = new maplibregl.Marker({
             element: labelEl,
             anchor: 'top',
@@ -263,7 +273,7 @@ export default function WaypointLayer() {
         rebuildRafRef.current = null
       }
     }
-  }, [waypoints, map, showMapLabels, showMapDistances, overlaysReady, lowPowerMode, removeWaypoint, updateWaypoint])
+  }, [waypoints, map, showMapLabels, showMapDistances, overlaysReady, lowPowerMode, removeWaypointWithUndo, updateWaypoint])
 
   useEffect(() => {
     return () => {

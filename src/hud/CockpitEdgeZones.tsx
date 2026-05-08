@@ -2,11 +2,11 @@ import { useCallback, useRef } from 'react'
 import { useCockpit } from '../context/CockpitContext'
 
 /**
- * Edge swipe targets (fluid tactile): left = layer hub, right = data inspector focus.
+ * Edge swipe targets (fluid tactile): both edges open the Situation (positional) hub.
  * Touch-first; narrow zones avoid stealing map pan.
  */
 export default function CockpitEdgeZones() {
-  const { raisePanel } = useCockpit()
+  const { raisePanel, updatePanel } = useCockpit()
   const edge = useRef({ active: false, edge: null as 'L' | 'R' | null, x0: 0, y0: 0 })
 
   const onTouchStart = useCallback((e: React.TouchEvent, side: 'L' | 'R') => {
@@ -27,11 +27,17 @@ export default function CockpitEdgeZones() {
       const dy = t.clientY - edge.current.y0
       edge.current.active = false
       if (Math.abs(dx) < 56 || Math.abs(dx) < Math.abs(dy)) return
-      if (edge.current.edge === 'L' && dx > 0) raisePanel('layers')
-      if (edge.current.edge === 'R' && dx < 0) raisePanel('waypoints')
+      if (edge.current.edge === 'L' && dx > 0) {
+        updatePanel('positional', { minimized: false })
+        raisePanel('positional')
+      }
+      if (edge.current.edge === 'R' && dx < 0) {
+        updatePanel('positional', { minimized: false })
+        raisePanel('positional')
+      }
       edge.current.edge = null
     },
-    [raisePanel],
+    [raisePanel, updatePanel],
   )
 
   return (

@@ -13,7 +13,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "verify": "tsc --noEmit && vitest run && vite build",
-    "smoke": "npm run verify"
+    "smoke": "npm run verify",
+    "vercel:sync-env": "node scripts/syncVercelEnvProduction.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.105.3",

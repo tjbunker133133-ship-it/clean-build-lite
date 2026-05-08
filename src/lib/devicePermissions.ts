@@ -1,3 +1,5 @@
+import { GEO_EXTERNAL_GRANT_EVENT } from './geoExternalGrant'
+
 export type PermissionStateLike = PermissionState | 'unsupported' | 'unknown'
 
 async function queryPermission(name: PermissionName): Promise<PermissionStateLike> {
@@ -22,11 +24,23 @@ export async function getPermissionSnapshot() {
   return { geolocation, microphone, notifications }
 }
 
+const GPS_PERMISSION_STORAGE_KEY = 'gpsPermission'
+
 export async function requestGeolocationPermission(): Promise<PermissionStateLike> {
   if (!navigator.geolocation) return 'unsupported'
   return new Promise((resolve) => {
     navigator.geolocation.getCurrentPosition(
-      () => resolve('granted'),
+      () => {
+        try {
+          localStorage.setItem(GPS_PERMISSION_STORAGE_KEY, 'granted')
+        } catch {
+          /* ignore */
+        }
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent(GEO_EXTERNAL_GRANT_EVENT))
+        }
+        resolve('granted')
+      },
       (err) => resolve(err?.code === 1 ? 'denied' : 'prompt'),
       { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 },
     )
