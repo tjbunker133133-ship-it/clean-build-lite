@@ -45,11 +45,24 @@ export default defineConfig({
     port: 5173,
   },
   build: {
+    // Tactical HUD includes a large mapping runtime bundle (MapLibre + worker graph).
+    // Keep warning signal focused on true regressions rather than known map-core size.
+    chunkSizeWarningLimit: 1200,
     rollupOptions: {
       output: {
         manualChunks(id) {
-          if (id.includes('node_modules/maplibre-gl')) return 'map-core'
+          if (
+            id.includes('node_modules/maplibre-gl') ||
+            id.includes('node_modules/@mapbox/') ||
+            id.includes('node_modules/pbf') ||
+            id.includes('node_modules/supercluster') ||
+            id.includes('node_modules/kdbush') ||
+            id.includes('node_modules/geojson-vt')
+          ) {
+            return 'map-core'
+          }
           if (id.includes('node_modules/react-dom') || id.includes('node_modules/react')) return 'react-core'
+          if (id.includes('node_modules/@supabase/')) return 'supabase-core'
           if (id.includes('node_modules')) return 'vendor'
           return undefined
         },

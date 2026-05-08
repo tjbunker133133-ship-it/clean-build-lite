@@ -24,9 +24,61 @@ import {
   SW_DEFERRED_RELOAD_KEY,
 } from './runtime/forceUpdateMeta'
 import { traceAction } from './runtime/actionTrace'
+import { hasSupabaseAnon, hasSupabaseUrl } from './lib/supabase'
 
 console.log('[BUILD ID]', __BUILD_ID__)
 console.log('[DEVICE DETECT]', getDeviceEnvironment())
+if (typeof window !== 'undefined') {
+  const provider = window.location.hostname.includes('vercel.app') ? 'vercel' : 'netlify-or-other'
+  const swScope = navigator.serviceWorker?.controller?.scriptURL ?? 'none'
+  console.table({
+    hasSupabaseUrl,
+    hasSupabaseAnon,
+    origin: window.location.origin,
+    swScope,
+    buildId: __BUILD_ID__,
+    deploymentProvider: provider,
+  })
+  if (import.meta.env.DEV) {
+    console.table([
+      {
+        feature: 'Contact Config (Dead Man)',
+        wired: true,
+        handler: 'openContactConfig(source=deadman)',
+      },
+      {
+        feature: 'Contact Config (SOS)',
+        wired: true,
+        handler: 'openContactConfig(source=sos)',
+      },
+    ])
+    const harnessSeen = new Set<string>()
+    const onHarnessResult = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ source?: string }>).detail
+      if (detail?.source) harnessSeen.add(detail.source)
+    }
+    window.addEventListener('hud:contact-config-opened', onHarnessResult)
+    window.setTimeout(() => {
+      window.dispatchEvent(new Event('hud:test-open-contact-deadman'))
+      window.dispatchEvent(new Event('hud:test-open-contact-sos'))
+    }, 1200)
+    window.setTimeout(() => {
+      console.table([
+        {
+          feature: 'Contact Config (Dead Man) smoke',
+          wired: harnessSeen.has('deadman'),
+          handler: 'openContactConfig(source=deadman)',
+        },
+        {
+          feature: 'Contact Config (SOS) smoke',
+          wired: harnessSeen.has('sos'),
+          handler: 'openContactConfig(source=sos)',
+        },
+      ])
+      window.removeEventListener('hud:contact-config-opened', onHarnessResult)
+    }, 2600)
+  }
+}
 
 if (import.meta.env.DEV && typeof window !== 'undefined') {
   try {

@@ -8,6 +8,7 @@ import { getDeviceProfile } from '../runtime/deviceProfile'
 import { buildRescuePacket, rescuePacketDevLogSummary } from '../lib/rescue/buildRescuePacket'
 import { getRescueEligibility } from '../lib/rescue/eligibility'
 import { traceAction } from '../runtime/actionTrace'
+import { openContactConfig } from './openContactConfig'
 import {
   touchFontSm as touchFontSmFn,
   touchFontMd as touchFontMdFn,
@@ -119,7 +120,7 @@ export default function SOSPanel() {
   // Do NOT "clean up" by deleting these calls.
   useAppContext()
   useGPS()
-  const { raisePanel, updatePanel } = useCockpit()
+  const { panels, raisePanel, updatePanel } = useCockpit()
   const [holding, setHolding] = useState(false)
   const [holdProgress, setHoldProgress] = useState(0)
   const [mode, setMode] = useState<AlarmMode>('off')
@@ -478,6 +479,20 @@ export default function SOSPanel() {
       window.removeEventListener('hud:sos-disarm', onDisarm)
     }
   }, [])
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    const onHarnessOpen = () => {
+      openContactConfig({
+        source: 'sos',
+        panels,
+        updatePanel,
+        raisePanel,
+      })
+    }
+    window.addEventListener('hud:test-open-contact-sos', onHarnessOpen)
+    return () => window.removeEventListener('hud:test-open-contact-sos', onHarnessOpen)
+  }, [panels, updatePanel, raisePanel])
 
   useEffect(() => {
     const onVoiceMorse = (ev: Event) => {
@@ -1006,8 +1021,12 @@ export default function SOSPanel() {
               data-no-drag
               onClick={(e) => {
                 e.stopPropagation()
-                updatePanel('preflight', { docked: false, minimized: false })
-                raisePanel('preflight')
+                openContactConfig({
+                  source: 'sos',
+                  panels,
+                  updatePanel,
+                  raisePanel,
+                })
                 setStatus('OPENING CONTACT CONFIG')
               }}
               style={{

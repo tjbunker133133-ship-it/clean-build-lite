@@ -114,7 +114,7 @@ export default function InstallHelperBanner() {
             Tap <strong>Share</strong> → <strong>Add to Home Screen</strong>
           </div>
         ) : (
-          <div>For offline GPS + voice continuity</div>
+          <div>For offline GPS + voice continuity. If migrating from Netlify, uninstall old HUD app first.</div>
         )}
       </div>
       {platform === 'android' && promptAvailable ? (

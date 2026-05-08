@@ -28,6 +28,11 @@ import { useCockpit } from '../context/CockpitContext'
 import { clampMobileToReachableViewport, isPanelReachableInViewport } from '../lib/mobilePanelHelpers'
 import { cockpitViewport } from '../lib/viewport'
 import { useAppContext } from '../context/AppContext'
+import {
+  getSupabaseDiagnostics,
+  probeSupabaseReachability,
+  type SupabaseEnvReadiness,
+} from '../lib/supabase'
 
 type CheckState = 'pass' | 'warn' | 'fail'
 type ManualCheckKey =
@@ -153,6 +158,11 @@ export default function PreflightPanel() {
   const [recoveryStatus, setRecoveryStatus] = useState<string | null>(null)
   const [contactPhoneMap, setContactPhoneMap] = useState<Record<string, string>>({})
   const [runtimeSnap, setRuntimeSnap] = useState(() => getRuntimeSnapshot())
+  const [backendReachable, setBackendReachable] = useState<boolean | null>(null)
+  const [backendLastCheckedAt, setBackendLastCheckedAt] = useState<number | null>(null)
+  const [backendEnvReadiness, setBackendEnvReadiness] = useState<SupabaseEnvReadiness>(
+    getSupabaseDiagnostics().envReadiness,
+  )
 
   const persistContactPhoneMap = (next: Record<string, string>) => {
     setContactPhoneMap(next)
@@ -725,6 +735,10 @@ export default function PreflightPanel() {
   }
 
   const isMobile = getDeviceProfile().interactionMode === 'mobile'
+  const deploymentProvider =
+    typeof window !== 'undefined' && window.location.hostname.includes('vercel.app')
+      ? 'vercel'
+      : 'netlify-or-other'
   const fontSm = touchFontSm(isMobile)
   const fontMd = touchFontMd(isMobile)
   const gapMd = touchGapMd(isMobile)
@@ -745,6 +759,15 @@ export default function PreflightPanel() {
   useEffect(() => {
     return subscribeRuntimeSnapshot((snap) => setRuntimeSnap({ ...snap }))
   }, [])
+
+  useEffect(() => {
+    const diag = getSupabaseDiagnostics()
+    setBackendEnvReadiness(diag.envReadiness)
+    void probeSupabaseReachability().then((ok) => {
+      setBackendReachable(ok)
+      setBackendLastCheckedAt(Date.now())
+    })
+  }, [recheckTick])
 
   useEffect(() => {
     if (!import.meta.env.DEV) return
@@ -803,6 +826,40 @@ export default function PreflightPanel() {
   return (
     <HudPanel panelId="preflight" title="Preflight Test" initialPos={{ x: 16, y: 180 }} initialWidth={320}>
       <div style={{ display: 'grid', gap: gapMd, fontSize: fontSm }}>
+        <div
+          style={{
+            display: 'grid',
+            gap: 2,
+            padding: '6px 8px',
+            borderRadius: 8,
+            border: '1px solid rgba(125,209,255,0.38)',
+            background: 'rgba(125,209,255,0.12)',
+            color: '#d8eefc',
+          }}
+        >
+          <div>
+            <strong>Running on {deploymentProvider === 'vercel' ? 'Vercel' : 'Netlify/Other'}</strong>
+          </div>
+          <div>
+            build <strong>{runtimeBuild.slice(0, 19)}</strong> • origin <strong>{window.location.origin}</strong>
+          </div>
+          <div>
+            SW <strong>{runtimeSnap.serviceWorker.status}</strong> • cache generation{' '}
+            <strong>{runtimeSnap.deploymentIntegrity.cacheGeneration || 'none'}</strong>
+          </div>
+          <div>
+            backend configured <strong>{getSupabaseDiagnostics().backendConfigured ? 'yes' : 'no'}</strong> • reachable{' '}
+            <strong>{backendReachable == null ? 'unknown' : backendReachable ? 'yes' : 'no'}</strong>
+          </div>
+          <div>
+            env readiness <strong>{backendEnvReadiness}</strong> • provider{' '}
+            <strong>{deploymentProvider}</strong>
+          </div>
+          <div>
+            build <strong>{runtimeBuild.slice(0, 19)}</strong> • backend check{' '}
+            <strong>{backendLastCheckedAt ? new Date(backendLastCheckedAt).toLocaleTimeString() : 'pending'}</strong>
+          </div>
+        </div>
         {isMobile && (
           <button
             type="button"
@@ -1365,6 +1422,20 @@ export default function PreflightPanel() {
               {row.label}
             </label>
           ))}
+        </div>
+        <div
+          style={{
+            padding: '8px 10px',
+            borderRadius: 8,
+            border: '1px solid rgba(255,209,102,0.35)',
+            background: 'rgba(255,209,102,0.1)',
+            color: '#ffe6b3',
+            fontSize: fontSm,
+            lineHeight: 1.5,
+          }}
+        >
+          Android migration safety flow: uninstall old Netlify-installed PWA, clear old Netlify site storage, open the
+          Vercel URL in Chrome, verify the provider banner/build ID/origin above, then install the fresh Vercel PWA.
         </div>
         <div
           style={{

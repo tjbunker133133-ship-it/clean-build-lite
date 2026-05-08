@@ -36,6 +36,7 @@ import {
   fetchEmergencyContacts,
   type EmergencyContact,
 } from '../lib/emergencyContacts'
+import { openContactConfig } from './openContactConfig'
 import { buildRescuePacket } from '../lib/rescue/buildRescuePacket'
 import {
   clearDeadmanDispatchLock,
@@ -149,7 +150,7 @@ export default function DeadManPanel() {
   // Do NOT "clean up" by deleting these calls.
   useGPS()
   useAppContext()
-  const { updatePanel, raisePanel } = useCockpit()
+  const { panels, updatePanel, raisePanel } = useCockpit()
   const {
     formattedTime, remainingMs, isExpired, isCritical, isWarning,
     isActive, reset, extend, activate, durationMs,
@@ -488,6 +489,20 @@ export default function DeadManPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isExpired, isActive])
 
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    const onHarnessOpen = () => {
+      openContactConfig({
+        source: 'deadman',
+        panels,
+        updatePanel,
+        raisePanel,
+      })
+    }
+    window.addEventListener('hud:test-open-contact-deadman', onHarnessOpen)
+    return () => window.removeEventListener('hud:test-open-contact-deadman', onHarnessOpen)
+  }, [panels, updatePanel, raisePanel])
+
   const statusLine = useMemo(() => {
     if (dispatchResult) return dispatchResult
     if (!isActive) return '○ STANDBY'
@@ -688,8 +703,12 @@ export default function DeadManPanel() {
           <button
             onClick={(e) => {
               e.stopPropagation()
-              updatePanel('preflight', { docked: false, minimized: false })
-              raisePanel('preflight')
+              openContactConfig({
+                source: 'deadman',
+                panels,
+                updatePanel,
+                raisePanel,
+              })
               setStatusText('OPENING CONTACT CONFIG')
             }}
             style={btnStyle('#7dff8a', isMobile)}

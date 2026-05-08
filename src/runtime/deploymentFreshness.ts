@@ -181,8 +181,12 @@ async function runNetworkFreshnessCheck(source: string): Promise<void> {
   })
 
   if (import.meta.env.DEV) {
+    const deploymentProvider = window.location.hostname.includes('vercel.app') ? 'vercel' : 'netlify-or-other'
     console.table({
       source,
+      origin: window.location.origin,
+      deploymentProvider,
+      swScope: navigator.serviceWorker?.controller?.scriptURL ?? 'none',
       currentBuildId: RUNTIME_BUILD_ID,
       latestBuildId: latestEntry ?? 'unknown',
       swState,

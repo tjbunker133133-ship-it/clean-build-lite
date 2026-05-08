@@ -5,6 +5,7 @@ import {
   subscribeRuntimeSnapshot,
   type RuntimeSnapshot,
 } from './runtimeSnapshot'
+import { getSupabaseDiagnostics } from '../lib/supabase'
 
 /**
  * Toggleable in-app runtime overlay.
@@ -126,6 +127,9 @@ function Body({ snap, onClose }: { snap: RuntimeSnapshot; onClose: () => void })
   const p = snap.permissions
   const trace = snap.commandTrace
   const ageSec = Math.round((Date.now() - snap.startedAt) / 1000)
+  const origin = typeof window !== 'undefined' ? window.location.origin : 'unknown'
+  const provider = origin.includes('vercel.app') ? 'vercel' : 'netlify-or-other'
+  const backend = getSupabaseDiagnostics()
 
   return (
     <div style={containerStyle} role="region" aria-label="HUD Runtime Overlay">
@@ -152,6 +156,22 @@ function Body({ snap, onClose }: { snap: RuntimeSnapshot; onClose: () => void })
       <Section title="build">
         <Row k="id" v={snap.buildId.slice(0, 19)} />
         <Row k="age" v={`${ageSec}s`} />
+        <Row k="origin" v={origin} />
+        <Row k="provider" v={provider} />
+      </Section>
+
+      <Section title="backend">
+        <Row
+          k="configured"
+          v={String(backend.backendConfigured)}
+          color={backend.backendConfigured ? '#7dff8a' : '#ff6464'}
+        />
+        <Row k="env-readiness" v={backend.envReadiness} color={backend.envReadiness === 'ready' ? '#7dff8a' : '#ff6464'} />
+        <Row
+          k="reachable"
+          v={backend.reachable == null ? 'unknown' : String(backend.reachable)}
+          color={backend.reachable == null ? '#ffd76b' : backend.reachable ? '#7dff8a' : '#ff6464'}
+        />
       </Section>
 
       <Section title="device">

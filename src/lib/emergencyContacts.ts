@@ -25,9 +25,16 @@ export type ContactsResult<T> = { data: T; error: Error | null }
 const SELECT_COLS =
   'id, operator_id, contact_name, email, relationship, priority, created_at'
 
+function backendUnavailableError() {
+  return new Error('Supabase is not configured for this deployment.')
+}
+
 export async function fetchEmergencyContacts(
   operatorId?: string | null,
 ): Promise<ContactsResult<EmergencyContact[]>> {
+  if (!supabase) {
+    return { data: [], error: backendUnavailableError() }
+  }
   try {
     let query = supabase
       .from('emergency_contacts')
@@ -53,6 +60,9 @@ export async function fetchEmergencyContacts(
 export async function createEmergencyContact(
   input: EmergencyContactInput,
 ): Promise<ContactsResult<EmergencyContact | null>> {
+  if (!supabase) {
+    return { data: null, error: backendUnavailableError() }
+  }
   try {
     const { data, error } = await supabase
       .from('emergency_contacts')
@@ -81,6 +91,9 @@ export async function updateEmergencyContact(
   id: string,
   input: EmergencyContactInput,
 ): Promise<ContactsResult<EmergencyContact | null>> {
+  if (!supabase) {
+    return { data: null, error: backendUnavailableError() }
+  }
   try {
     const { data, error } = await supabase
       .from('emergency_contacts')
@@ -107,6 +120,9 @@ export async function updateEmergencyContact(
 export async function deleteEmergencyContact(
   id: string,
 ): Promise<{ error: Error | null }> {
+  if (!supabase) {
+    return { error: backendUnavailableError() }
+  }
   try {
     const { error } = await supabase
       .from('emergency_contacts')
