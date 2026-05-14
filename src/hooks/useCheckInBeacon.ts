@@ -7,15 +7,7 @@ import {
 } from '../lib/checkIn/sendRoutineCheckInOrQueue'
 import { ROUTINE_CHECKIN_SCHEMA } from '../lib/checkIn/routineCheckInTypes'
 import type { RoutineCheckInContact, RoutineCheckInPayload } from '../lib/checkIn/routineCheckInTypes'
-import {
-  BEACON_INTERVAL_CHOICES,
-  loadBeacon,
-  saveBeacon,
-  type BeaconPersistedState,
-} from '../lib/checkIn/beaconPersisted'
 import { buildRescuePacket, resolveRapidEndpoint, resolveCheckInWebhook } from '../lib/rescue/buildRescuePacket'
-
-export type { BeaconPersistedState }
 
 export function useCheckInBeacon(getContacts: () => RoutineCheckInContact[]) {
   const gps = useGPS()
@@ -24,7 +16,6 @@ export function useCheckInBeacon(getContacts: () => RoutineCheckInContact[]) {
   const getContactsRef = useRef(getContacts)
   getContactsRef.current = getContacts
 
-  const [beacon, setBeacon] = useState<BeaconPersistedState>(() => loadBeacon())
   const [outboxCount, setOutboxCount] = useState(() => readCheckInOutbox().length)
 
   const refreshOutbox = useCallback(() => {
@@ -36,12 +27,6 @@ export function useCheckInBeacon(getContacts: () => RoutineCheckInContact[]) {
     window.addEventListener('hud:checkin-outbox-changed', fn)
     return () => window.removeEventListener('hud:checkin-outbox-changed', fn)
   }, [refreshOutbox])
-
-  useEffect(() => {
-    const onSync = () => setBeacon(loadBeacon())
-    window.addEventListener('hud:checkin-beacon-sync', onSync)
-    return () => window.removeEventListener('hud:checkin-beacon-sync', onSync)
-  }, [])
 
   useEffect(() => {
     const onOnline = () => {
@@ -78,11 +63,6 @@ export function useCheckInBeacon(getContacts: () => RoutineCheckInContact[]) {
     }
   }, [])
 
-  const setBeaconPersisted = useCallback((next: BeaconPersistedState) => {
-    saveBeacon(next)
-    setBeacon(next)
-  }, [])
-
   const buildPayload = useCallback(
     (kind: 'manual' | 'beacon', message: string | null): RoutineCheckInPayload | null => {
       const g = gpsRef.current
@@ -104,20 +84,6 @@ export function useCheckInBeacon(getContacts: () => RoutineCheckInContact[]) {
     [],
   )
 
-  useEffect(() => {
-    if (!beacon.active || beacon.paused) return
-    const ms = beacon.intervalMinutes * 60_000
-    const tick = async () => {
-      const payload = buildPayload('beacon', null)
-      if (!payload) return
-      // Direct Outbound Flow
-      await performDirectDispatch(null)
-      void sendRoutineCheckInOrQueue(payload).then(refreshOutbox)
-    }
-    const id = window.setInterval(tick, ms)
-    return () => window.clearInterval(id)
-  }, [beacon.active, beacon.paused, beacon.intervalMinutes, buildPayload, refreshOutbox, performDirectDispatch])
-
   const sendManual = useCallback(
     async (message: string | null) => {
       const payload = buildPayload('manual', message)
@@ -138,9 +104,6 @@ export function useCheckInBeacon(getContacts: () => RoutineCheckInContact[]) {
   }, [refreshOutbox])
 
   return {
-    beacon,
-    setBeaconPersisted,
-    intervalChoices: BEACON_INTERVAL_CHOICES,
     outboxCount,
     refreshOutbox,
     sendManual,

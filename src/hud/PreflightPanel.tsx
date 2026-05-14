@@ -914,23 +914,21 @@ export default function PreflightPanel() {
             SW <strong>{runtimeSnap.serviceWorker.status}</strong> • cache generation{' '}
             <strong>{runtimeSnap.deploymentIntegrity.cacheGeneration || 'none'}</strong>
           </div>
-          <div>
-            backend configured <strong>{supabaseDiag.backendConfigured ? 'yes' : 'no'}</strong> • reachable{' '}
-            <strong>{backendReachable == null ? 'unknown' : backendReachable ? 'yes' : 'no'}</strong>
+          <div style={{ marginTop: 4, paddingTop: 4, borderTop: '1px solid rgba(125,209,255,0.2)' }}>
+            <span style={{ color: supabaseDiag.backendConfigured ? '#7dff8a' : '#ff6b87' }}>
+              backend configured: <strong>{supabaseDiag.backendConfigured ? 'yes' : 'no'}</strong>
+            </span>
+            {backendReachable !== null && (
+              <span style={{ marginLeft: 8 }}>
+                • {backendReachable ? 'REACHABLE' : 'UNREACHABLE'}
+              </span>
+            )}
           </div>
-          <div>
-            env readiness <strong>{backendEnvReadiness}</strong> • provider{' '}
-            <strong>{deploymentProvider}</strong>
-          </div>
-          {!supabaseDiag.backendConfigured ? (
-            <div style={{ fontSize: fontSm, lineHeight: 1.45, opacity: 0.95 }}>
-              {supabaseDiag.deployEnvHint}
+          {!supabaseDiag.backendConfigured && (
+            <div style={{ fontSize: fontSm, color: '#ffb570', marginTop: 4 }}>
+              Operational in local-only mode. Cloud sync is disabled for this build.
             </div>
-          ) : null}
-          <div>
-            build <strong>{runtimeBuild.slice(0, 19)}</strong> • backend check{' '}
-            <strong>{backendLastCheckedAt ? new Date(backendLastCheckedAt).toLocaleTimeString() : 'pending'}</strong>
-          </div>
+          )}
         </div>
         {isMobile && (
           <button
@@ -1161,9 +1159,6 @@ export default function PreflightPanel() {
             <strong style={{ color: '#d6ddd6' }}>{runtimeSnap.deploymentIntegrity.staleStatus}</strong>
           </div>
           <div>
-            Legacy local contacts: <strong style={{ color: '#d6ddd6' }}>{legacySavedContactsCount}</strong>
-          </div>
-          <div>
             Last optimized:{' '}
             <strong style={{ color: '#d6ddd6' }}>
               {deviceTuneMeta?.ts ? new Date(deviceTuneMeta.ts).toLocaleString() : 'not recorded'}
@@ -1370,14 +1365,6 @@ export default function PreflightPanel() {
             >
               {contactBusy ? 'SAVING…' : contactForm.id ? 'SAVE CONTACT' : 'ADD CONTACT'}
             </button>
-            {!backendReady ? (
-              <div style={{ color: '#a9c4a9', fontSize: fontSm, lineHeight: 1.45 }}>
-                Supabase is not configured for this build — contacts are saved to <strong>this device only</strong>{' '}
-                (local roster). For cloud sync and multi-device SOS, add{' '}
-                <code style={{ fontSize: '0.85em' }}>VITE_SUPABASE_URL</code> and{' '}
-                <code style={{ fontSize: '0.85em' }}>VITE_SUPABASE_ANON_KEY</code> in your host env and redeploy.
-              </div>
-            ) : null}
             {contactForm.id && (
               <button
                 type="button"
@@ -1503,20 +1490,6 @@ export default function PreflightPanel() {
               {row.label}
             </label>
           ))}
-        </div>
-        <div
-          style={{
-            padding: '8px 10px',
-            borderRadius: 8,
-            border: '1px solid rgba(255,209,102,0.35)',
-            background: 'rgba(255,209,102,0.1)',
-            color: '#ffe6b3',
-            fontSize: fontSm,
-            lineHeight: 1.5,
-          }}
-        >
-          Android migration safety flow: uninstall old Netlify-installed PWA, clear old Netlify site storage, open the
-          Vercel URL in Chrome, verify the provider banner/build ID/origin above, then install the fresh Vercel PWA.
         </div>
         <div
           style={{

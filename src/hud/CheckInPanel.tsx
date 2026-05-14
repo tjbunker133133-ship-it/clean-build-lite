@@ -17,6 +17,7 @@ import {
   touchGapSm as touchGapSmFn,
   touchMinTarget as touchMinTargetFn,
 } from './tokens'
+import { backendReady, probeSupabaseReachability } from '../lib/supabase'
 
 const ACCENT = '#5ad4c4'
 const MUTED = '#8aa7b8'
@@ -42,13 +43,22 @@ export default function CheckInPanel() {
   const [note, setNote] = useState('')
   const [sending, setSending] = useState(false)
   const [flushing, setFlushing] = useState(false)
+  const [reachable, setReachable] = useState<boolean | null>(null)
+
+  const checkReachability = useCallback(async () => {
+    const ok = await probeSupabaseReachability()
+    setReachable(ok)
+  }, [])
+
+  useEffect(() => {
+    void checkReachability()
+    window.addEventListener('online', checkReachability)
+    return () => window.removeEventListener('online', checkReachability)
+  }, [checkReachability])
 
   const getRoutine = useCallback(() => toRoutineContacts(contacts), [contacts])
 
   const {
-    beacon,
-    setBeaconPersisted,
-    intervalChoices,
     outboxCount,
     sendManual,
     flushOutbox,
@@ -78,7 +88,22 @@ export default function CheckInPanel() {
     [gps.lat, gps.lng, gps.locationState],
   )
 
-  const canSend = hasFix && contacts.length > 0 && !sending
+  const onClearQueue = useCallback(() => {
+    if (!window.confirm('Permanently clear the pending check-in queue?')) return
+    try {
+      localStorage.removeItem('hud_checkin_outbox_v1')
+      setStatusLine('Queue cleared.')
+      window.location.reload()
+    } catch (e) {
+      setStatusLine('Error clearing queue.')
+    }
+  }, [])
+
+  const unifiedConnectivityState = backendReady && navigator.onLine && reachable === true
+
+  const QUEUE_CAP = 50
+  // canSend requires GPS fix, contacts, and unified connectivity (Config + Radio + Reachable)
+  const canSend = hasFix && contacts.length > 0 && !sending && unifiedConnectivityState && outboxCount < QUEUE_CAP
 
   const onAddContact = async () => {
     const name = newName.trim()
@@ -89,6 +114,10 @@ export default function CheckInPanel() {
     }
     if (!isEmail(email)) {
       setStatusLine('Enter a valid email address.')
+      return
+    }
+    if (!unifiedConnectivityState) {
+      setStatusLine('Backend unavailable. Cannot add contact.')
       return
     }
     const { data, error } = await createCheckInContact({ contact_name: name, email })
@@ -103,6 +132,10 @@ export default function CheckInPanel() {
   }
 
   const onDelete = async (id: string) => {
+    if (!unifiedConnectivityState) {
+      setStatusLine('Backend unavailable.')
+      return
+    }
     const { error } = await deleteCheckInContact(id)
     if (error) setStatusLine(error.message)
     await reloadContacts()
@@ -111,29 +144,26 @@ export default function CheckInPanel() {
   const onSendManual = async () => {
     if (!canSend) return
     setSending(true)
-    setStatusLine('')
+    setStatusLine('SENDING...')
     const r = await sendManual(note || null)
+    const radioOnline = navigator.onLine
+    
     setSending(false)
     if (!r.ok) {
-      setStatusLine('Need a GPS fix and at least one check-in contact.')
+      setStatusLine(radioOnline ? 'FAILED (BACKEND UNREACHABLE)' : 'QUEUED (OFFLINE CONFIRMED)')
       raisePanel('checkin')
       return
     }
-    setStatusLine(r.status === 'sent' ? 'Check-in sent.' : 'Check-in queued (offline or retry).')
+    setStatusLine(r.status === 'sent' ? 'SENT' : 'QUEUED (OFFLINE CONFIRMED)')
   }
 
   const onFlush = async () => {
     setFlushing(true)
+    setStatusLine('SENDING QUEUED MESSAGES...')
     const r = await flushOutbox()
     setFlushing(false)
-    setStatusLine(`Outbox: sent ${r.sent}, ${r.remaining} waiting.`)
+    setStatusLine(`SENT: ${r.sent}, REMAINING: ${r.remaining}`)
   }
-
-  const beaconSummary = beacon.active
-    ? beacon.paused
-      ? 'Timed beacon: paused'
-      : `Timed beacon: every ${beacon.intervalMinutes} min`
-    : 'Timed beacon: off'
 
   return (
     <HudPanel
@@ -148,10 +178,6 @@ export default function CheckInPanel() {
         <p style={{ margin: 0, fontSize: touchFontSm, lineHeight: 1.45 }}>
           Share your position for progress updates — not for emergencies. Uses the current GPS fix only
           (no extra acquisition). Separate roster from SOS.
-        </p>
-        <p style={{ margin: 0, fontSize: touchFontSm - 1, lineHeight: 1.4, opacity: 0.85 }}>
-          Outbound: set <code style={{ color: '#b8dcff' }}>VITE_CHECKIN_WEBHOOK_URL</code> (POST JSON) or
-          Supabase table <code style={{ color: '#b8dcff' }}>check_in_events</code> when no webhook is set.
         </p>
 
         {!hasFix && (
@@ -299,6 +325,19 @@ export default function CheckInPanel() {
           />
         </section>
 
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'center' }}>
+          {!backendReady && (
+            <div style={{ fontSize: touchFontSm, color: '#ff6b6b', fontWeight: 700 }}>
+              CHECK-IN DISABLED: BACKEND OFFLINE
+            </div>
+          )}
+          {outboxCount >= QUEUE_CAP && (
+            <div style={{ fontSize: touchFontSm, color: '#ff6b6b', fontWeight: 700 }}>
+              QUEUE FULL (MAX {QUEUE_CAP}): CLEAR TO CONTINUE
+            </div>
+          )}
+        </div>
+
         <button
           type="button"
           data-ui-action="checkin-send-manual"
@@ -318,118 +357,38 @@ export default function CheckInPanel() {
           {sending ? 'Sending…' : 'Send check-in now'}
         </button>
 
-        <section
-          style={{
-            borderTop: `1px solid ${ACCENT}33`,
-            paddingTop: touchGapMd,
-            display: 'flex',
-            flexDirection: 'column',
-            gap: touchGapSm,
-          }}
-        >
-          <div style={{ fontSize: touchFontSm, color: ACCENT }}>Timed beacon</div>
-          <div style={{ fontSize: touchFontSm }}>{beaconSummary}</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: touchGapSm, alignItems: 'center' }}>
-            <label style={{ fontSize: touchFontSm, display: 'flex', alignItems: 'center', gap: 6 }}>
-              Interval
-              <select
-                aria-label="Beacon interval"
-                value={beacon.intervalMinutes}
-                disabled={beacon.active && !beacon.paused}
-                onChange={(e) =>
-                  setBeaconPersisted({
-                    ...beacon,
-                    intervalMinutes: Number(e.target.value) as typeof beacon.intervalMinutes,
-                  })
-                }
-                style={{
-                  minHeight: 40,
-                  borderRadius: 6,
-                  border: `1px solid ${ACCENT}55`,
-                  background: FIELD_BG,
-                  color: '#dff8ff',
-                  fontSize: touchFontSm,
-                }}
-              >
-                {intervalChoices.map((m) => (
-                  <option key={m} value={m}>
-                    {m} min
-                  </option>
-                ))}
-              </select>
-            </label>
-            {!beacon.active ? (
+        <section style={{ fontSize: touchFontSm, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              Outbox: <strong style={{ color: outboxCount >= 40 ? '#ff6b6b' : '#c5dce8' }}>{outboxCount}</strong> pending
+            </div>
+            {outboxCount > 0 && (
               <button
                 type="button"
-                data-ui-action="checkin-beacon-start"
-                disabled={!hasFix || contacts.length === 0}
-                onClick={() => setBeaconPersisted({ ...beacon, active: true, paused: false })}
+                onClick={onClearQueue}
                 style={{
-                  minHeight: touchMin,
-                  padding: '0 12px',
-                  borderRadius: 8,
-                  border: `1px solid #7eb8ff`,
-                  background: 'rgba(100, 160, 220, 0.2)',
-                  color: '#b8dcff',
-                  cursor: hasFix && contacts.length > 0 ? 'pointer' : 'not-allowed',
-                  fontSize: touchFontSm,
+                  fontSize: touchFontSm - 2,
+                  color: '#ff6b6b',
+                  background: 'transparent',
+                  border: '1px solid #ff6b6b44',
+                  padding: '2px 8px',
+                  borderRadius: 4,
+                  cursor: 'pointer'
                 }}
               >
-                Start beacon
+                CLEAR QUEUE
               </button>
-            ) : (
-              <>
-                <button
-                  type="button"
-                  data-ui-action="checkin-beacon-pause"
-                  onClick={() => setBeaconPersisted({ ...beacon, paused: !beacon.paused })}
-                  style={{
-                    minHeight: touchMin,
-                    padding: '0 12px',
-                    borderRadius: 8,
-                    border: `1px solid ${ACCENT}77`,
-                    background: FIELD_BG,
-                    color: ACCENT,
-                    cursor: 'pointer',
-                    fontSize: touchFontSm,
-                  }}
-                >
-                  {beacon.paused ? 'Resume' : 'Pause'}
-                </button>
-                <button
-                  type="button"
-                  data-ui-action="checkin-beacon-stop"
-                  onClick={() => setBeaconPersisted({ active: false, paused: false, intervalMinutes: beacon.intervalMinutes })}
-                  style={{
-                    minHeight: touchMin,
-                    padding: '0 12px',
-                    borderRadius: 8,
-                    border: `1px solid ${MUTED}`,
-                    background: 'transparent',
-                    color: MUTED,
-                    cursor: 'pointer',
-                    fontSize: touchFontSm,
-                  }}
-                >
-                  Stop beacon
-                </button>
-              </>
             )}
-          </div>
-        </section>
-
-        <section style={{ fontSize: touchFontSm, display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <div>
-            Outbox: <strong style={{ color: '#c5dce8' }}>{outboxCount}</strong> pending
           </div>
           <button
             type="button"
             data-ui-action="checkin-flush-outbox"
-            disabled={outboxCount === 0 || flushing || !navigator.onLine}
+            disabled={outboxCount === 0 || flushing || !unifiedConnectivityState}
             onClick={() => void onFlush()}
             style={{
               alignSelf: 'flex-start',
               minHeight: 40,
+              width: '100%',
               padding: '0 12px',
               borderRadius: 8,
               border: `1px solid #7eb8ff66`,
@@ -439,7 +398,7 @@ export default function CheckInPanel() {
               fontSize: touchFontSm,
             }}
           >
-            {flushing ? 'Sending queued…' : 'Send queued now'}
+            {flushing ? 'SENDING QUEUE...' : 'SEND QUEUED NOW'}
           </button>
         </section>
 

@@ -8,6 +8,10 @@ function sysTraceFailure(payload: Record<string, unknown>): void {
   console.warn('[SYSTEM TRACE]', payload)
 }
 
+if (import.meta.env.PROD && (!import.meta.env.VITE_SUPABASE_URL || !import.meta.env.VITE_SUPABASE_ANON_KEY)) {
+  console.error('CRITICAL BUILD ERROR: Production environment variables (VITE_SUPABASE_URL/ANON_KEY) are missing. Backend features will fail.');
+}
+
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 
 const supabaseAnonKey =
@@ -17,11 +21,10 @@ function isNonEmptyString(v: unknown): v is string {
   return typeof v === 'string' && v.trim().length > 0
 }
 
-export const supabaseConfigValid =
-  isNonEmptyString(supabaseUrl) && isNonEmptyString(supabaseAnonKey)
-
 export const hasSupabaseUrl = isNonEmptyString(supabaseUrl)
 export const hasSupabaseAnon = isNonEmptyString(supabaseAnonKey)
+
+export const supabaseConfigValid = hasSupabaseUrl && hasSupabaseAnon
 
 /** Hostname only (for deploy debugging). Never logs keys or full URLs. */
 export function getSupabaseUrlHostnameForDiagnostics(): string | null {
@@ -104,6 +107,15 @@ export const supabase = supabaseClientInternal
 export const supabaseInitialized = supabase != null
 export const backendReady = supabaseConfigValid && supabaseInitialized
 
+/** 
+ * Derived connectivity truth. 
+ * Requires valid config, radio network, and successful recent reachability probe.
+ * Used to prevent silent queue growth during partial network failures.
+ */
+export function isBackendOperative(): boolean {
+  return backendReady && navigator.onLine && lastReachable === true
+}
+
 if (import.meta.env.DEV) {
   console.log('[SUPABASE INIT]', {
     urlExists: hasSupabaseUrl,
@@ -185,15 +197,9 @@ export async function probeSupabaseReachability(): Promise<boolean> {
 
 export function getSupabaseDiagnostics() {
   const backendReadySource = getBackendReadySource()
-  const onVercel =
-    typeof window !== 'undefined' && window.location.hostname.toLowerCase().includes('vercel.app')
-  const deployEnvHint = onVercel
-    ? 'Vercel: add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY under Project → Settings → Environment Variables (Production + Preview as needed). Redeploy required — Vite inlines VITE_* at build time only; runtime env vars without a rebuild will stay undefined in the bundle.'
-    : 'Build must receive VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY at vite build time (inlined). They are not read from the browser at runtime.'
   return {
     backendReady,
     backendReadySource,
-    backendFailureReason,
     supabaseClientInitError,
     hasSupabaseUrl,
     hasSupabaseAnon,
@@ -202,7 +208,6 @@ export function getSupabaseDiagnostics() {
     envReadiness: supabaseEnvReadiness,
     reachable: lastReachable,
     lastReachabilityAt,
-    deployEnvHint,
     buildTimeEnvMode: import.meta.env.MODE,
   }
 }

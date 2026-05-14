@@ -161,16 +161,9 @@ logInfo('RUNTIME', 'boot', {
   mode: getDeviceProfile().interactionMode,
 })
 if (!backendReady) {
-  const hint = getSupabaseDiagnostics().deployEnvHint
   console.warn('[BACKEND] degraded startup mode enabled', {
-    backendFailureReason: backendFailureReason ?? 'unknown',
-    backendReadySource: getBackendReadySource(),
-    deployEnvHint: hint,
+    reason: 'Environmental variables missing at build time'
   })
-  logInfo(
-    'RUNTIME',
-    'emergency contacts will use local device storage until Supabase is configured.',
-  )
 }
 
 if (typeof window !== 'undefined') {

@@ -126,6 +126,9 @@ export default function SwUpdateBanner() {
   const gapMd = touchGapMd(isMobile)
   const tapMin = touchMinTarget(isMobile)
 
+  const isSupabaseConfigured = Boolean(import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY)
+  const supabaseStatusText = isSupabaseConfigured ? 'CONNECTED' : 'BACKEND OFFLINE'
+
   const invokeReload = (fn: () => void) => {
     try {
       window.dispatchEvent(
@@ -246,6 +249,17 @@ export default function SwUpdateBanner() {
             textAlign: 'right',
           }}
         >
+          <span 
+            style={{ 
+              color: isSupabaseConfigured ? '#8a9a8c' : '#ff6b6b',
+              fontWeight: isSupabaseConfigured ? 400 : 700,
+              fontSize: Math.max(9, fontSm - 3),
+              textTransform: 'uppercase',
+              letterSpacing: '0.1em'
+            }}
+          >
+            {supabaseStatusText}
+          </span>
           <span>{phaseLabel}</span>
           {recoveryText && (
             <span

@@ -13,3 +13,5 @@ netlify-dist-deploy.zip
 
 scripts/rescue-smoke.cjs
 
+.vercel
+.env*.local
