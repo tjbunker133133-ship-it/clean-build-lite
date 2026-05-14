@@ -107,11 +107,11 @@ export const backendReady = supabaseConfigValid && supabaseInitialized
 
 /** 
  * Derived connectivity truth. 
- * Requires valid config, radio network, and successful recent reachability probe.
+ * Requires valid config and radio network.
  * Used to prevent silent queue growth during partial network failures.
  */
 export function isBackendOperative(): boolean {
-  return backendReady && navigator.onLine && lastReachable === true
+  return backendReady && navigator.onLine
 }
 
 if (import.meta.env.DEV) {

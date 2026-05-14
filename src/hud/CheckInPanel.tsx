@@ -17,7 +17,6 @@ import {
   touchGapSm as touchGapSmFn,
   touchMinTarget as touchMinTargetFn,
 } from './tokens'
-import { backendReady } from '../lib/supabase'
 
 const ACCENT = '#5ad4c4'
 const MUTED = '#8aa7b8'
@@ -89,9 +88,10 @@ export default function CheckInPanel() {
 
   /**
    * Unified state mirrors the working SOS/Deadman pipeline:
-   * requires initialized config and active radio.
+   * requires active radio for immediate dispatch. 
+   * Config validation happens during the fetch attempt.
    */
-  const unifiedConnectivityState = backendReady && navigator.onLine
+  const unifiedConnectivityState = navigator.onLine
 
   const QUEUE_CAP = 50
   // canSend requires GPS fix, contacts, and basic connectivity
@@ -108,10 +108,6 @@ export default function CheckInPanel() {
       setStatusLine('Enter a valid email address.')
       return
     }
-    if (!unifiedConnectivityState) {
-      setStatusLine('Backend unavailable. Cannot add contact.')
-      return
-    }
     const { data, error } = await createCheckInContact({ contact_name: name, email })
     if (error || !data) {
       setStatusLine(error?.message ?? 'Could not add contact.')
@@ -124,10 +120,6 @@ export default function CheckInPanel() {
   }
 
   const onDelete = async (id: string) => {
-    if (!unifiedConnectivityState) {
-      setStatusLine('Backend unavailable.')
-      return
-    }
     const { error } = await deleteCheckInContact(id)
     if (error) setStatusLine(error.message)
     await reloadContacts()
@@ -329,11 +321,6 @@ export default function CheckInPanel() {
         </section>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'center' }}>
-          {!backendReady && (
-            <div style={{ fontSize: touchFontSm, color: '#ff6b6b', fontWeight: 700 }}>
-              CHECK-IN DISABLED: BACKEND OFFLINE
-            </div>
-          )}
           {outboxCount >= QUEUE_CAP && (
             <div style={{ fontSize: touchFontSm, color: '#ff6b6b', fontWeight: 700 }}>
               QUEUE FULL (MAX {QUEUE_CAP}): CLEAR TO CONTINUE
