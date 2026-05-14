@@ -12,10 +12,8 @@ if (import.meta.env.PROD && (!import.meta.env.VITE_SUPABASE_URL || !import.meta.
   console.error('CRITICAL BUILD ERROR: Production environment variables (VITE_SUPABASE_URL/ANON_KEY) are missing. Backend features will fail.');
 }
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
-
-const supabaseAnonKey =
-  import.meta.env.VITE_SUPABASE_ANON_KEY
+const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL as string)?.trim()
+const supabaseAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY as string)?.trim()
 
 function isNonEmptyString(v: unknown): v is string {
   return typeof v === 'string' && v.trim().length > 0

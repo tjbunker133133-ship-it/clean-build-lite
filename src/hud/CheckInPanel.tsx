@@ -17,7 +17,7 @@ import {
   touchGapSm as touchGapSmFn,
   touchMinTarget as touchMinTargetFn,
 } from './tokens'
-import { backendReady, probeSupabaseReachability } from '../lib/supabase'
+import { backendReady } from '../lib/supabase'
 
 const ACCENT = '#5ad4c4'
 const MUTED = '#8aa7b8'
@@ -43,18 +43,6 @@ export default function CheckInPanel() {
   const [note, setNote] = useState('')
   const [sending, setSending] = useState(false)
   const [flushing, setFlushing] = useState(false)
-  const [reachable, setReachable] = useState<boolean | null>(null)
-
-  const checkReachability = useCallback(async () => {
-    const ok = await probeSupabaseReachability()
-    setReachable(ok)
-  }, [])
-
-  useEffect(() => {
-    void checkReachability()
-    window.addEventListener('online', checkReachability)
-    return () => window.removeEventListener('online', checkReachability)
-  }, [checkReachability])
 
   const getRoutine = useCallback(() => toRoutineContacts(contacts), [contacts])
 
@@ -99,10 +87,14 @@ export default function CheckInPanel() {
     }
   }, [])
 
-  const unifiedConnectivityState = backendReady && navigator.onLine && reachable === true
+  /**
+   * Unified state mirrors the working SOS/Deadman pipeline:
+   * requires initialized config and active radio.
+   */
+  const unifiedConnectivityState = backendReady && navigator.onLine
 
   const QUEUE_CAP = 50
-  // canSend requires GPS fix, contacts, and unified connectivity (Config + Radio + Reachable)
+  // canSend requires GPS fix, contacts, and basic connectivity
   const canSend = hasFix && contacts.length > 0 && !sending && unifiedConnectivityState && outboxCount < QUEUE_CAP
 
   const onAddContact = async () => {
@@ -150,11 +142,22 @@ export default function CheckInPanel() {
     
     setSending(false)
     if (!r.ok) {
-      setStatusLine(radioOnline ? 'FAILED (BACKEND UNREACHABLE)' : 'QUEUED (OFFLINE CONFIRMED)')
+      if ('error' in r && r.error === 'no_fix_or_contacts') {
+        setStatusLine('FAILED (NO GPS FIX OR CONTACTS)')
+      } else {
+        setStatusLine(radioOnline ? 'FAILED (BACKEND UNREACHABLE)' : 'QUEUED (OFFLINE CONFIRMED)')
+      }
       raisePanel('checkin')
       return
     }
-    setStatusLine(r.status === 'sent' ? 'SENT' : 'QUEUED (OFFLINE CONFIRMED)')
+
+    // Align with useHudCommands logic: if direct dispatch (SOS-style) 
+    // succeeded, it is SENT. Otherwise, it is safely queued.
+    if (r.dispatchOk) {
+      setStatusLine('SENT')
+    } else {
+      setStatusLine('QUEUED (OFFLINE CONFIRMED)')
+    }
   }
 
   const onFlush = async () => {
