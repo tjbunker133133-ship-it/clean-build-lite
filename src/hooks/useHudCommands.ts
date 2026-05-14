@@ -31,7 +31,6 @@ import { traceAction } from '../runtime/actionTrace'
 import { clearBreadcrumbSession } from '../lib/movement/breadcrumbSessionStore'
 import { fetchCheckInContacts, type CheckInContact } from '../lib/checkIn/checkInContacts'
 import { useCheckInBeacon } from './useCheckInBeacon' // Import useCheckInBeacon
-import { applyVoiceBeaconAction } from '../lib/checkIn/voiceBeaconControl'
 import { isVoiceOperationalCommandId } from '../voice/voiceOperationalIds'
 import { buildRescuePacket, resolveRapidEndpoint, resolveCheckInWebhook } from '../lib/rescue/buildRescuePacket'
 
@@ -79,8 +78,6 @@ export const VOICE_INTENT_REGISTRY: VoiceIntentRegistryEntry[] = [
   { intent: 'check_in', category: 'Check-In', aliases: ['check in', 'routine check in'] },
   { intent: 'weather', category: 'Weather', aliases: ['weather', 'show weather'] },
   { intent: 'flashlight_on', category: 'Safety', aliases: ['flashlight on', 'torch on'] },
-  { intent: 'flashlight_off', category: 'Safety', aliases: ['flashlight off', 'torch off'] },
-  { intent: 'flashlight_toggle', category: 'Safety', aliases: ['flashlight toggle', 'torch toggle'] },
   { intent: 'beacon_start', category: 'Check-In', aliases: ['start beacon', 'beacon on'] },
   { intent: 'beacon_stop', category: 'Check-In', aliases: ['stop beacon', 'beacon off'] },
   { intent: 'clear_trail', category: 'Route', aliases: ['clear trail', 'clear breadcrumb'] },
@@ -431,26 +428,6 @@ export function useHudCommands(): {
             r.status === 'sent' ? 'Check-in sent (relay).' :
             'Check-in queued for send.'
           )
-        },
-      },
-      {
-        id: 'start beacon',
-        label: 'Start check-in beacon',
-        aliases: ['beacon start', 'enable beacon'],
-        group: 'Check-In',
-        run: () => {
-          const r = applyVoiceBeaconAction('start')
-          return { ok: r.ok, message: r.message }
-        },
-      },
-      {
-        id: 'stop beacon',
-        label: 'Stop check-in beacon',
-        aliases: ['beacon stop', 'disable beacon'],
-        group: 'Check-In',
-        run: () => {
-          const r = applyVoiceBeaconAction('stop')
-          return { ok: r.ok, message: r.message }
         },
       },
       {
@@ -1018,8 +995,6 @@ export function useHudCommands(): {
       'drop waypoint',
       'clear trail',
       'check in',
-      'start beacon',
-      'stop beacon',
     ]
     const rows = requiredCommands.map((command) => {
       const hit = commands.find((c) => c.id === command || (c.aliases ?? []).includes(command))
