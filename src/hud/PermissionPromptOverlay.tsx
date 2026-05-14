@@ -274,6 +274,33 @@ export default function PermissionPromptOverlay() {
         onClose={close}
         onResetApp={() => void resetAppState()}
       />
+      <div
+        style={{
+          position: 'absolute',
+          bottom: 16,
+          left: 16,
+          right: 16,
+          display: 'flex',
+          justifyContent: 'center',
+        }}
+      >
+        <button
+          type="button"
+          onClick={close}
+          style={{
+            padding: '12px 24px',
+            fontSize: 16,
+            fontWeight: 'bold',
+            backgroundColor: '#007bff', // A distinct color for "Enter HUD"
+            color: 'white',
+            border: 'none',
+            borderRadius: 8,
+            cursor: 'pointer',
+          }}
+        >
+          Enter HUD (Skip Wizard)
+        </button>
+      </div>
     </div>
   )
 }

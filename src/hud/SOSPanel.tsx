@@ -7,7 +7,7 @@ import { useAppContext } from '../context/AppContext'
 import { useCockpit } from '../context/CockpitContext'
 import { emitHaptic } from '../runtime/haptics'
 import { getDeviceProfile } from '../runtime/deviceProfile'
-import { buildRescuePacket, rescuePacketDevLogSummary } from '../lib/rescue/buildRescuePacket'
+import { buildRescuePacket, rescuePacketDevLogSummary, resolveRapidEndpoint } from '../lib/rescue/buildRescuePacket'
 import { getRescueEligibility } from '../lib/rescue/eligibility'
 import { traceAction } from '../runtime/actionTrace'
 import { openContactConfig } from './openContactConfig'
@@ -78,38 +78,6 @@ function sleep(ms: number) {
 // `emergency_contacts_saved`, `titanium_route_contacts`,
 // `current_route_contacts`). The dispatch path is now backend-truth-only via
 // `buildRescuePacket()` → `fetchEmergencyContacts()`.
-
-// CONTRACT-SENSITIVE: dispatch endpoint resolver. The fallback order
-// (VITE_RESCUE_EMAIL_URL → VITE_RAPID_ENDPOINT_URL → localStorage
-// `heartbeatFnUrl`) is part of the operator contract — changing it can
-// silently misroute live SOS dispatches. Mirror any change in
-// `DeadManPanel.tsx::resolveRapidEndpoint` to keep both paths aligned.
-function resolveRapidEndpoint(): string {
-  const rescue = ((import.meta as any).env?.VITE_RESCUE_EMAIL_URL as string | undefined)?.trim()
-  if (rescue) return rescue
-  const env = ((import.meta as any).env?.VITE_RAPID_ENDPOINT_URL as string | undefined)?.trim()
-  if (env) return env
-  try {
-    for (let i = 0; i < localStorage.length; i += 1) {
-      const key = localStorage.key(i)
-      if (!key) continue
-      const value = localStorage.getItem(key)
-      if (!value) continue
-      try {
-        const parsed = JSON.parse(value)
-        if (parsed && typeof parsed.heartbeatFnUrl === 'string' && parsed.heartbeatFnUrl.trim()) {
-          return parsed.heartbeatFnUrl.trim()
-        }
-      } catch {
-        // noop
-      }
-    }
-  } catch {
-    // noop
-  }
-  return ''
-}
-
 export default function SOSPanel() {
   // CONTRACT-SENSITIVE (subscriptions): both calls are intentional. They
   // do not appear to be used inside this component, but removing them
@@ -209,14 +177,22 @@ export default function SOSPanel() {
 
   useEffect(() => {
     let cancelled = false
-    void (async () => {
+    const load = async () => {
       setRoutineCheckInLoading(true)
       const { data } = await fetchCheckInContacts()
       if (!cancelled) setRoutineCheckInContacts(data ?? [])
       setRoutineCheckInLoading(false)
-    })()
+    }
+    void load()
+    
+    const onVisible = () => { if (document.visibilityState === 'visible') void load() }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('pageshow', onVisible)
+
     return () => {
       cancelled = true
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('pageshow', onVisible)
     }
   }, [])
 
@@ -252,14 +228,22 @@ export default function SOSPanel() {
     }
     setRoutineCheckInBusy(true)
     const note = routineCheckInNote.trim() ? routineCheckInNote.trim().slice(0, 160) : null
+
+    // Stable Outbound Flow: the hook handles both direct dispatch and persistence
     const r = await sendRoutineCheckInManual(note)
+    
     setRoutineCheckInBusy(false)
     if (!r.ok) {
       setRoutineCheckInHint('Need a GPS fix and at least one check-in contact.')
       raisePanel('checkin')
       return
     }
-    setRoutineCheckInHint(r.status === 'sent' ? 'Check-in sent.' : 'Check-in queued for send.')
+    
+    setRoutineCheckInHint(
+      r.dispatchOk ? 'Check-in sent (direct).' :
+      r.status === 'sent' ? 'Check-in sent (relay).' :
+      'Check-in queued for send.'
+    )
     setRoutineCheckInNote('')
   }
 
@@ -1331,4 +1315,3 @@ export default function SOSPanel() {
     </>
   )
 }
-

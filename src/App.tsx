@@ -1,8 +1,9 @@
-import React, { Suspense, lazy } from 'react'
+import React, { Suspense, lazy, useEffect } from 'react'
 import { AppProvider } from './context/AppContext'
 import { CockpitProvider } from './context/CockpitContext'
 import { MapProvider } from './context/MapContext'
 import { PanelDataProvider } from './context/PanelDataContext'
+import { stopGPS } from './hooks/useGPS'
 import TopBar from './hud/TopBar'
 import DeadManPanel from './hud/DeadManPanel'
 import ScanlineOverlay from './hud/ScanlineOverlay'
@@ -35,6 +36,13 @@ const PreflightPanel = lazy(() => import('./hud/PreflightPanel'))
 const InstallHelperBanner = lazy(() => import('./hud/InstallHelperBanner'))
 
 export default function App() {
+  // Ensure GPS cleanup on app unmount (guards against orphaned timers/listeners)
+  useEffect(() => {
+    return () => {
+      stopGPS()
+    }
+  }, [])
+
   return (
     <AppProvider>
       <CockpitProvider>

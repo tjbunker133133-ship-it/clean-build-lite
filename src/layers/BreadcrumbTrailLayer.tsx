@@ -30,9 +30,11 @@ function toGeoJson(s: BreadcrumbSessionSnapshot): GeoJSON.FeatureCollection {
 export default function BreadcrumbTrailLayer() {
   const { map } = useMapContext()
   const snapRef = useRef<BreadcrumbSessionSnapshot | null>(null)
+  const isMountedRef = useRef(true)
 
   useEffect(() => {
     if (!map) return
+    isMountedRef.current = true
     let raf: number | null = null
 
     const apply = (s: BreadcrumbSessionSnapshot) => {
@@ -40,30 +42,36 @@ export default function BreadcrumbTrailLayer() {
       if (raf != null) window.cancelAnimationFrame(raf)
       raf = window.requestAnimationFrame(() => {
         raf = null
-        const geojson = toGeoJson(snapRef.current ?? getBreadcrumbSessionSnapshot())
-        let source = map.getSource(BREADCRUMB_SOURCE_ID) as maplibregl.GeoJSONSource | undefined
-        if (!source) {
-          map.addSource(BREADCRUMB_SOURCE_ID, { type: 'geojson', data: geojson })
-          source = map.getSource(BREADCRUMB_SOURCE_ID) as maplibregl.GeoJSONSource
-        } else {
-          source.setData(geojson as GeoJSON.GeoJSON)
-        }
-        if (!map.getLayer(BREADCRUMB_LAYER_ID)) {
-          map.addLayer({
-            id: BREADCRUMB_LAYER_ID,
-            type: 'line',
-            source: BREADCRUMB_SOURCE_ID,
-            layout: {
-              'line-join': 'round',
-              'line-cap': 'round',
-            },
-            paint: {
-              'line-color': '#9aaab8',
-              'line-width': 2,
-              'line-opacity': 0.36,
-              'line-dasharray': [1.2, 3],
-            },
-          })
+        // Guard: do not execute if component has unmounted or map is gone
+        if (!isMountedRef.current || !map) return
+        try {
+          const geojson = toGeoJson(snapRef.current ?? getBreadcrumbSessionSnapshot())
+          let source = map.getSource(BREADCRUMB_SOURCE_ID) as maplibregl.GeoJSONSource | undefined
+          if (!source) {
+            map.addSource(BREADCRUMB_SOURCE_ID, { type: 'geojson', data: geojson })
+            source = map.getSource(BREADCRUMB_SOURCE_ID) as maplibregl.GeoJSONSource
+          } else {
+            source.setData(geojson as GeoJSON.GeoJSON)
+          }
+          if (!map.getLayer(BREADCRUMB_LAYER_ID)) {
+            map.addLayer({
+              id: BREADCRUMB_LAYER_ID,
+              type: 'line',
+              source: BREADCRUMB_SOURCE_ID,
+              layout: {
+                'line-join': 'round',
+                'line-cap': 'round',
+              },
+              paint: {
+                'line-color': '#9aaab8',
+                'line-width': 2,
+                'line-opacity': 0.36,
+                'line-dasharray': [1.2, 3],
+              },
+            })
+          }
+        } catch {
+          /* silently ignore map errors during cleanup */
         }
       })
     }
@@ -75,6 +83,7 @@ export default function BreadcrumbTrailLayer() {
     map.on('styledata', onStyleData)
 
     return () => {
+      isMountedRef.current = false
       unsub()
       map.off('styledata', onStyleData)
       if (raf != null) window.cancelAnimationFrame(raf)

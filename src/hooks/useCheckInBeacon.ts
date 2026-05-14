@@ -13,6 +13,7 @@ import {
   saveBeacon,
   type BeaconPersistedState,
 } from '../lib/checkIn/beaconPersisted'
+import { buildRescuePacket, resolveRapidEndpoint, resolveCheckInWebhook } from '../lib/rescue/buildRescuePacket'
 
 export type { BeaconPersistedState }
 
@@ -51,6 +52,32 @@ export function useCheckInBeacon(getContacts: () => RoutineCheckInContact[]) {
     return () => window.removeEventListener('online', onOnline)
   }, [refreshOutbox])
 
+  /**
+   * Direct high-reliability dispatch transport. 
+   * Signed HMAC POST to rapid endpoint or specific webhook.
+   */
+  const performDirectDispatch = useCallback(async (message: string | null): Promise<boolean> => {
+    const checkinUrl = resolveCheckInWebhook()
+    const endpoint = checkinUrl || resolveRapidEndpoint()
+    if (!endpoint) return false
+
+    try {
+      const contacts = getContactsRef.current()
+      const packet = await buildRescuePacket('CHECKIN', {
+        contacts,
+        note: message || undefined
+      })
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(packet)
+      })
+      return res.ok
+    } catch (err) {
+      return false
+    }
+  }, [])
+
   const setBeaconPersisted = useCallback((next: BeaconPersistedState) => {
     saveBeacon(next)
     setBeacon(next)
@@ -80,24 +107,28 @@ export function useCheckInBeacon(getContacts: () => RoutineCheckInContact[]) {
   useEffect(() => {
     if (!beacon.active || beacon.paused) return
     const ms = beacon.intervalMinutes * 60_000
-    const tick = () => {
+    const tick = async () => {
       const payload = buildPayload('beacon', null)
       if (!payload) return
+      // Direct Outbound Flow
+      await performDirectDispatch(null)
       void sendRoutineCheckInOrQueue(payload).then(refreshOutbox)
     }
     const id = window.setInterval(tick, ms)
     return () => window.clearInterval(id)
-  }, [beacon.active, beacon.paused, beacon.intervalMinutes, buildPayload, refreshOutbox])
+  }, [beacon.active, beacon.paused, beacon.intervalMinutes, buildPayload, refreshOutbox, performDirectDispatch])
 
   const sendManual = useCallback(
     async (message: string | null) => {
       const payload = buildPayload('manual', message)
       if (!payload) return { ok: false as const, error: 'no_fix_or_contacts' }
+      // Direct Outbound Flow
+      const dispatchOk = await performDirectDispatch(message)
       const r = await sendRoutineCheckInOrQueue(payload)
       refreshOutbox()
-      return { ok: true as const, status: r.status }
+      return { ok: true as const, status: r.status, dispatchOk }
     },
-    [buildPayload, refreshOutbox],
+    [buildPayload, refreshOutbox, performDirectDispatch],
   )
 
   const flushOutbox = useCallback(async () => {

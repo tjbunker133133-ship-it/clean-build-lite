@@ -1,0 +1,151 @@
+[1mdiff --git a/src/hooks/useCheckInBeacon.ts b/src/hooks/useCheckInBeacon.ts[m
+[1mindex bb70e69..4b6d43d 100644[m
+[1m--- a/src/hooks/useCheckInBeacon.ts[m
+[1m+++ b/src/hooks/useCheckInBeacon.ts[m
+[36m@@ -13,6 +13,7 @@[m [mimport {[m
+   saveBeacon,[m
+   type BeaconPersistedState,[m
+ } from '../lib/checkIn/beaconPersisted'[m
+[32m+[m[32mimport { buildRescuePacket, resolveRapidEndpoint, resolveCheckInWebhook } from '../lib/rescue/buildRescuePacket'[m
+ [m
+ export type { BeaconPersistedState }[m
+ [m
+[36m@@ -51,6 +52,32 @@[m [mexport function useCheckInBeacon(getContacts: () => RoutineCheckInContact[]) {[m
+     return () => window.removeEventListener('online', onOnline)[m
+   }, [refreshOutbox])[m
+ [m
+[32m+[m[32m  /**[m
+[32m+[m[32m   * Direct high-reliability dispatch transport.[m[41m [m
+[32m+[m[32m   * Signed HMAC POST to rapid endpoint or specific webhook.[m
+[32m+[m[32m   */[m
+[32m+[m[32m  const performDirectDispatch = useCallback(async (message: string | null): Promise<boolean> => {[m
+[32m+[m[32m    const checkinUrl = resolveCheckInWebhook()[m
+[32m+[m[32m    const endpoint = checkinUrl || resolveRapidEndpoint()[m
+[32m+[m[32m    if (!endpoint) return false[m
+[32m+[m
+[32m+[m[32m    try {[m
+[32m+[m[32m      const contacts = getContactsRef.current()[m
+[32m+[m[32m      const packet = await buildRescuePacket('CHECKIN', {[m
+[32m+[m[32m        contacts,[m
+[32m+[m[32m        note: message || undefined[m
+[32m+[m[32m      })[m
+[32m+[m[32m      const res = await fetch(endpoint, {[m
+[32m+[m[32m        method: 'POST',[m
+[32m+[m[32m        headers: { 'Content-Type': 'application/json' },[m
+[32m+[m[32m        body: JSON.stringify(packet)[m
+[32m+[m[32m      })[m
+[32m+[m[32m      return res.ok[m
+[32m+[m[32m    } catch (err) {[m
+[32m+[m[32m      return false[m
+[32m+[m[32m    }[m
+[32m+[m[32m  }, [])[m
+[32m+[m
+   const setBeaconPersisted = useCallback((next: BeaconPersistedState) => {[m
+     saveBeacon(next)[m
+     setBeacon(next)[m
+[36m@@ -80,24 +107,28 @@[m [mexport function useCheckInBeacon(getContacts: () => RoutineCheckInContact[]) {[m
+   useEffect(() => {[m
+     if (!beacon.active || beacon.paused) return[m
+     const ms = beacon.intervalMinutes * 60_000[m
+[31m-    const tick = () => {[m
+[32m+[m[32m    const tick = async () => {[m
+       const payload = buildPayload('beacon', null)[m
+       if (!payload) return[m
+[32m+[m[32m      // Direct Outbound Flow[m
+[32m+[m[32m      await performDirectDispatch(null)[m
+       void sendRoutineCheckInOrQueue(payload).then(refreshOutbox)[m
+     }[m
+     const id = window.setInterval(tick, ms)[m
+     return () => window.clearInterval(id)[m
+[31m-  }, [beacon.active, beacon.paused, beacon.intervalMinutes, buildPayload, refreshOutbox])[m
+[32m+[m[32m  }, [beacon.active, beacon.paused, beacon.intervalMinutes, buildPayload, refreshOutbox, performDirectDispatch])[m
+ [m
+   const sendManual = useCallback([m
+     async (message: string | null) => {[m
+       const payload = buildPayload('manual', message)[m
+       if (!payload) return { ok: false as const, error: 'no_fix_or_contacts' }[m
+[32m+[m[32m      // Direct Outbound Flow[m
+[32m+[m[32m      const dispatchOk = await performDirectDispatch(message)[m
+       const r = await sendRoutineCheckInOrQueue(payload)[m
+       refreshOutbox()[m
+[31m-      return { ok: true as const, status: r.status }[m
+[32m+[m[32m      return { ok: true as const, status: r.status, dispatchOk }[m
+     },[m
+[31m-    [buildPayload, refreshOutbox],[m
+[32m+[m[32m    [buildPayload, refreshOutbox, performDirectDispatch],[m
+   )[m
+ [m
+   const flushOutbox = useCallback(async () => {[m
+[1mdiff --git a/src/hooks/useDeadMan.ts b/src/hooks/useDeadMan.ts[m
+[1mindex 72f63e4..b18d32d 100644[m
+[1m--- a/src/hooks/useDeadMan.ts[m
+[1m+++ b/src/hooks/useDeadMan.ts[m
+[36m@@ -159,9 +159,12 @@[m [mexport function useDeadMan(onExpire?: () => void): UseDeadManReturn {[m
+   }, [isActive, expiresAt])[m
+ [m
+   // ── Persist ──────────────────────────────────────────────────────────────[m
+[32m+[m[32m  // Only persist when timer is active. When deactivated, storage is cleared[m
+[32m+[m[32m  // and must NOT be re-written. This ensures deactivate() persists across reloads.[m
+   useEffect(() => {[m
+[31m-    if (isActive) save({ expiresAt, extended, durationMs })[m
+[31m-    else save({ expiresAt, extended, durationMs })[m
+[32m+[m[32m    if (isActive) {[m
+[32m+[m[32m      save({ expiresAt, extended, durationMs })[m
+[32m+[m[32m    }[m
+   }, [expiresAt, extended, isActive, durationMs])[m
+ [m
+   // ── Actions ──────────────────────────────────────────────────────────────[m
+[1mdiff --git a/src/hooks/useHudCommands.ts b/src/hooks/useHudCommands.ts[m
+[1mindex 771c58f..6e4837e 100644[m
+[1m--- a/src/hooks/useHudCommands.ts[m
+[1m+++ b/src/hooks/useHudCommands.ts[m
+[36m@@ -29,9 +29,11 @@[m [mimport {[m
+ } from '../runtime/commandExecution'[m
+ import { traceAction } from '../runtime/actionTrace'[m
+ import { clearBreadcrumbSession } from '../lib/movement/breadcrumbSessionStore'[m
+[31m-import { sendVoiceRoutineCheckIn } from '../lib/checkIn/voiceRoutineCheckIn'[m
+[32m+[m[32mimport { fetchCheckInContacts, type CheckInContact } from '../lib/checkIn/checkInContacts'[m
+[32m+[m[32mimport { useCheckInBeacon } from './useCheckInBeacon' // Import useCheckInBeacon[m
+ import { applyVoiceBeaconAction } from '../lib/checkIn/voiceBeaconControl'[m
+ import { isVoiceOperationalCommandId } from '../voice/voiceOperationalIds'[m
+[32m+[m[32mimport { buildRescuePacket, resolveRapidEndpoint, resolveCheckInWebhook } from '../lib/rescue/buildRescuePacket'[m
+ [m
+ /**[m
+  * Single source of truth for HUD commands.[m
+[36m@@ -116,6 +118,30 @@[m [mexport function useHudCommands(): {[m
+   const { state, addWaypoint, removeWaypoint, setWaypoints } = useAppContext()[m
+   const { setScreenHue, resetLayout, raisePanel, updatePanel } = useCockpit()[m
+ [m
+[32m+[m[32m  const [routineContacts, setRoutineContacts] = useState<CheckInContact[]>([])[m
+[32m+[m[32m  useEffect(() => {[m
+[32m+[m[32m    const loadContacts = () => fetchCheckInContacts().then(({ data }) => {[m
+[32m+[m[32m      if (data) setRoutineContacts(data)[m
+[32m+[m[32m    })[m
+[32m+[m[32m    void loadContacts()[m
+[32m+[m
+[32m+[m[32m    // Sync contacts on app resume for voice dispatch accuracy[m
+[32m+[m[32m    const onVisible = () => { if (document.visibilityState === 'visible') void loadContacts() }[m
+[32m+[m[32m    document.addEventListener('visibilitychange', onVisible)[m
+[32m+[m[32m    window.addEventListener('pageshow', onVisible)[m
+[32m+[m[32m    return () => {[m
+[32m+[m[32m      document.removeEventListener('visibilitychange', onVisible)[m
+[32m+[m[32m      window.removeEventListener('pageshow', onVisible)[m
+[32m+[m[32m    }[m
+[32m+[m[32m  }, [])[m
+[32m+[m
+[32m+[m[32m  const getContacts = useCallback(() => routineContacts.map(c => ({[m
+[32m+[m[32m    name: c.contact_name,[m
+[32m+[m[32m    email: c.email.trim().toLowerCase()[m
+[32m+[m[32m  })), [routineContacts])[m
+[32m+[m
+[32m+[m[32m  const { sendManual: sendRoutineCheckInManual } = useCheckInBeacon(getContacts)[m
+[32m+[m
+   const [attachedPinId, setAttachedPinId] = useState<string | null>(null)[m
+   const [morseEnabled, setMorseEnabled] = useState(false)[m
+   const [flashlightEnabled, setFlashlightEnabled] = useState(false)[m
+[36m@@ -335,12 +361,16 @@[m [mexport function useHudCommands(): {[m
+         aliases: ['add a pin', 'drop pin', 'drop a pin'],[m
+         group: 'Route',[m
+         run: () => {[m
+[31m-          if (gps.lat == null || gps.lng == null) return fail('GPS fix required.')[m
+[32m+[m[32m          const gpsReady = gps.lat != nul

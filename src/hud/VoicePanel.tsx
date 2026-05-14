@@ -1086,7 +1086,7 @@ export default function VoicePanel() {
       updateVoiceState('inactive_clean', { lastError: 'interrupted: pagehide' })
       detachHandlers(rec)
       try {
-        rec.stop()
+        rec.abort()
       } catch {
         // ignore
       }
@@ -1100,7 +1100,7 @@ export default function VoicePanel() {
         updateVoiceState('inactive_clean', { lastError: 'interrupted: hidden' })
         detachHandlers(rec)
         try {
-          rec.stop()
+          rec.abort()
         } catch {
           // ignore
         }
@@ -1168,7 +1168,7 @@ export default function VoicePanel() {
       pendingWakeUntilRef.current = null
       detachHandlers(rec)
       try {
-        rec.stop()
+        rec.abort()
       } catch {
         // ignore
       }

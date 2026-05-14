@@ -60,8 +60,8 @@ function persist() {
       sessionMeters: snapshot.sessionMeters,
     }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
-  } catch {
-    /* ignore */
+  } catch (error) {
+    console.warn('[localStorage] breadcrumb persist failed', { key: STORAGE_KEY, error })
   }
 }
 
@@ -163,8 +163,8 @@ export function clearBreadcrumbSession(): void {
   snapshot = { startedAt: Date.now(), points: [], sessionMeters: 0 }
   try {
     localStorage.removeItem(STORAGE_KEY)
-  } catch {
-    /* ignore */
+  } catch (error) {
+    console.warn('[localStorage] breadcrumb clear failed', { key: STORAGE_KEY, error })
   }
   emit()
 }

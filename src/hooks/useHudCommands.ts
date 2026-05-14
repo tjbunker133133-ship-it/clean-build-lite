@@ -29,9 +29,11 @@ import {
 } from '../runtime/commandExecution'
 import { traceAction } from '../runtime/actionTrace'
 import { clearBreadcrumbSession } from '../lib/movement/breadcrumbSessionStore'
-import { sendVoiceRoutineCheckIn } from '../lib/checkIn/voiceRoutineCheckIn'
+import { fetchCheckInContacts, type CheckInContact } from '../lib/checkIn/checkInContacts'
+import { useCheckInBeacon } from './useCheckInBeacon' // Import useCheckInBeacon
 import { applyVoiceBeaconAction } from '../lib/checkIn/voiceBeaconControl'
 import { isVoiceOperationalCommandId } from '../voice/voiceOperationalIds'
+import { buildRescuePacket, resolveRapidEndpoint, resolveCheckInWebhook } from '../lib/rescue/buildRescuePacket'
 
 /**
  * Single source of truth for HUD commands.
@@ -115,6 +117,30 @@ export function useHudCommands(): {
   const gps = useGPS()
   const { state, addWaypoint, removeWaypoint, setWaypoints } = useAppContext()
   const { setScreenHue, resetLayout, raisePanel, updatePanel } = useCockpit()
+
+  const [routineContacts, setRoutineContacts] = useState<CheckInContact[]>([])
+  useEffect(() => {
+    const loadContacts = () => fetchCheckInContacts().then(({ data }) => {
+      if (data) setRoutineContacts(data)
+    })
+    void loadContacts()
+
+    // Sync contacts on app resume for voice dispatch accuracy
+    const onVisible = () => { if (document.visibilityState === 'visible') void loadContacts() }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('pageshow', onVisible)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('pageshow', onVisible)
+    }
+  }, [])
+
+  const getContacts = useCallback(() => routineContacts.map(c => ({
+    name: c.contact_name,
+    email: c.email.trim().toLowerCase()
+  })), [routineContacts])
+
+  const { sendManual: sendRoutineCheckInManual } = useCheckInBeacon(getContacts)
 
   const [attachedPinId, setAttachedPinId] = useState<string | null>(null)
   const [morseEnabled, setMorseEnabled] = useState(false)
@@ -335,12 +361,16 @@ export function useHudCommands(): {
         aliases: ['add a pin', 'drop pin', 'drop a pin'],
         group: 'Route',
         run: () => {
-          if (gps.lat == null || gps.lng == null) return fail('GPS fix required.')
+          const gpsReady = gps.lat != null && gps.lng != null && gps.locationState === 'granted'
+          if (!gpsReady) {
+            void gps.requestLocation()
+            return fail('GPS fix required. Enable location, wait for a fix, then try again.')
+          }
           const idx = state.waypoints.length + 1
           addWaypoint({
-            id: `wp_voice_${Date.now()}`,
-            lat: gps.lat,
-            lng: gps.lng,
+            id: `wp_voice_${Date.now()}`, // Unique ID for voice-dropped waypoints
+            lat: gps.lat!, // Assert non-null after check
+            lng: gps.lng!, // Assert non-null after check
             label: `VOICE-${idx}`,
             type: 'default',
             createdAt: Date.now(),
@@ -354,12 +384,16 @@ export function useHudCommands(): {
         aliases: ['drop way point', 'mark waypoint', 'place waypoint'],
         group: 'Route',
         run: () => {
-          if (gps.lat == null || gps.lng == null) return fail('GPS fix required.')
+          const gpsReady = gps.lat != null && gps.lng != null && gps.locationState === 'granted'
+          if (!gpsReady) {
+            void gps.requestLocation()
+            return fail('GPS fix required. Enable location, wait for a fix, then try again.')
+          }
           const idx = state.waypoints.length + 1
           addWaypoint({
-            id: `wp_voice_${Date.now()}`,
-            lat: gps.lat,
-            lng: gps.lng,
+            id: `wp_voice_${Date.now()}`, // Unique ID for voice-dropped waypoints
+            lat: gps.lat!, // Assert non-null after check
+            lng: gps.lng!, // Assert non-null after check
             label: `WP-${idx}`,
             type: 'default',
             createdAt: Date.now(),
@@ -383,15 +417,20 @@ export function useHudCommands(): {
         aliases: ['routine check in', 'send check in', 'send check-in'],
         group: 'Check-In',
         run: async () => {
-          if (gps.lat == null || gps.lng == null) return fail('GPS fix required.')
-          const r = await sendVoiceRoutineCheckIn({
-            lat: gps.lat,
-            lng: gps.lng,
-            locationState: gps.locationState,
-            accuracy: gps.accuracy ?? null,
-            elevation: gps.elevation ?? null,
-          })
-          return { ok: r.ok, message: r.message }
+          if (gps.lat == null || gps.lng == null || gps.locationState !== 'granted') {
+            void gps.requestLocation()
+            return fail('GPS fix required. Enable location, wait for a fix, then try again.')
+          }
+          // Use the centralized check-in beacon hook for dispatch
+          const r = await sendRoutineCheckInManual(null) // Voice check-in has no note
+          if (!r.ok) {
+            return fail(r.error === 'no_fix_or_contacts' ? 'No GPS fix or check-in contacts configured.' : 'Check-in failed.')
+          }
+          return ok(
+            r.dispatchOk ? 'Check-in sent (direct).' :
+            r.status === 'sent' ? 'Check-in sent (relay).' :
+            'Check-in queued for send.'
+          )
         },
       },
       {
@@ -956,6 +995,7 @@ export function useHudCommands(): {
     setScreenHue,
     setWaypoints,
     state.waypoints,
+    sendRoutineCheckInManual, // Added dependency for voice check-in
     updatePanel,
   ])
 

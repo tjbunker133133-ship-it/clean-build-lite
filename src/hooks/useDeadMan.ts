@@ -75,10 +75,18 @@ function load(): Stored | null {
   }
 }
 function save(d: Stored) {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(d)) } catch {}
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(d))
+  } catch (error) {
+    console.warn('[localStorage] deadman save failed', { key: STORAGE_KEY, error })
+  }
 }
 function clear() {
-  try { localStorage.removeItem(STORAGE_KEY) } catch {}
+  try {
+    localStorage.removeItem(STORAGE_KEY)
+  } catch (error) {
+    console.warn('[localStorage] deadman clear failed', { key: STORAGE_KEY, error })
+  }
 }
 
 export interface UseDeadManReturn {
@@ -151,9 +159,12 @@ export function useDeadMan(onExpire?: () => void): UseDeadManReturn {
   }, [isActive, expiresAt])
 
   // ── Persist ──────────────────────────────────────────────────────────────
+  // Only persist when timer is active. When deactivated, storage is cleared
+  // and must NOT be re-written. This ensures deactivate() persists across reloads.
   useEffect(() => {
-    if (isActive) save({ expiresAt, extended, durationMs })
-    else save({ expiresAt, extended, durationMs })
+    if (isActive) {
+      save({ expiresAt, extended, durationMs })
+    }
   }, [expiresAt, extended, isActive, durationMs])
 
   // ── Actions ──────────────────────────────────────────────────────────────

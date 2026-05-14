@@ -186,6 +186,25 @@ export default function PermissionWizard({
 
   const BUSY_PERMISSION_HINT = 'Wait for the current permission request to finish, then try again.'
 
+  /**
+   * Wraps permission requests with a timeout to prevent stuck loading states.
+   * If the request doesn't respond within 12 seconds, returns 'unknown' and allows retry.
+   * This ensures the UI never hard-locks on permission dialogs.
+   */
+  const withPermissionTimeout = useCallback(
+    (fn: () => Promise<PermissionStateLike>, timeoutMs: number = 12000): Promise<PermissionStateLike> => {
+      return Promise.race([
+        fn(),
+        new Promise<PermissionStateLike>((resolve) => {
+          setTimeout(() => {
+            resolve('unknown')
+          }, timeoutMs)
+        }),
+      ])
+    },
+    [],
+  )
+
   const runRequest = useCallback(
     async (fn: () => Promise<PermissionStateLike>, set: (s: PermissionStateLike) => void, id: WizardStepId) => {
       traceAction(`permission_request:${id}`, 'handler_enter')
@@ -200,7 +219,7 @@ export default function PermissionWizard({
       setBusy(true)
       try {
         traceAction(`permission_request:${id}`, 'async_start')
-        const r = await fn()
+        const r = await withPermissionTimeout(() => fn())
         set(r)
         setAttempted((a) => ({ ...a, [id]: true }))
         const trust: SnapshotTrust = {}
@@ -212,7 +231,7 @@ export default function PermissionWizard({
         setBusy(false)
       }
     },
-    [busy, setBusy, refreshSnapshot, setLinkHint],
+    [busy, setBusy, withPermissionTimeout, refreshSnapshot, setLinkHint],
   )
 
   const runAllRemaining = useCallback(async () => {
@@ -228,14 +247,14 @@ export default function PermissionWizard({
     setBusy(true)
     try {
       traceAction('permission_request:batch_remaining', 'async_start')
-      const g = await requestGeolocationPermission()
-      const m = await requestMicrophonePermission()
+      const g = await withPermissionTimeout(() => requestGeolocationPermission())
+      const m = await withPermissionTimeout(() => requestMicrophonePermission())
       setGeo(g)
       setMic(m)
-      setCamera(await requestCameraPermission())
-      setNotif(await requestNotificationPermission())
-      setOrient(await requestOrientationPermission())
-      setMotion(await requestMotionPermission())
+      setCamera(await withPermissionTimeout(() => requestCameraPermission()))
+      setNotif(await withPermissionTimeout(() => requestNotificationPermission()))
+      setOrient(await withPermissionTimeout(() => requestOrientationPermission()))
+      setMotion(await withPermissionTimeout(() => requestMotionPermission()))
       setAttempted((a) => ({
         ...a,
         location: true,
@@ -250,7 +269,7 @@ export default function PermissionWizard({
     } finally {
       setBusy(false)
     }
-  }, [busy, setBusy, setGeo, setMic, setCamera, setNotif, setOrient, setMotion, refreshSnapshot, setLinkHint])
+  }, [busy, setBusy, setGeo, setMic, setCamera, setNotif, setOrient, setMotion, withPermissionTimeout, refreshSnapshot, setLinkHint])
 
   const permissionResolved = (s: PermissionStateLike) =>
     s === 'granted' || s === 'denied' || s === 'unsupported'

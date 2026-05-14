@@ -61,6 +61,7 @@ if (typeof window !== 'undefined') {
     origin: window.location.origin,
     swScope,
     buildId: __BUILD_ID__,
+    buildStamp: import.meta.env.VITE_BUILD_STAMP ?? 'none',
     deploymentProvider,
   }
   if (import.meta.env.DEV) {

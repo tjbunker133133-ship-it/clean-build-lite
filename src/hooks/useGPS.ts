@@ -80,6 +80,26 @@ function altitudeMetersFromCoords(coords: GeolocationCoordinates): number | null
   return a
 }
 
+function safeLocalStorageSetItem(key: string, value: string, context: string): boolean {
+  try {
+    localStorage.setItem(key, value)
+    return true
+  } catch (error) {
+    console.warn(`[localStorage] failed setItem ${context}`, { key, error })
+    return false
+  }
+}
+
+function safeLocalStorageRemoveItem(key: string, context: string): boolean {
+  try {
+    localStorage.removeItem(key)
+    return true
+  } catch (error) {
+    console.warn(`[localStorage] failed removeItem ${context}`, { key, error })
+    return false
+  }
+}
+
 function loadSeedGps(): GPSData {
   try {
     const raw = localStorage.getItem(LAST_KNOWN_LOCATION_KEY)
@@ -245,28 +265,21 @@ function setShared(next: GPSData) {
 
 function persistCurrentFix() {
   lastGpsPersistAt = Date.now()
-  try {
-    localStorage.setItem(LAST_GPS_FIX_KEY, JSON.stringify(shared))
-  } catch {
-    /* ignore */
-  }
-  try {
-    if (shared.lat != null && shared.lng != null) {
-      localStorage.setItem(
-        LAST_KNOWN_LOCATION_KEY,
-        JSON.stringify({
-          lat: shared.lat,
-          lng: shared.lng,
-          timestamp: Date.now(),
-          source: shared.source ?? 'gps',
-        }),
-      )
-      localStorage.setItem(GPS_PERMISSION_KEY, 'granted')
-      updatePermission('geolocation', 'granted')
-      markLastKnownGoodSnapshotTime(lastGpsPersistAt)
-    }
-  } catch {
-    /* ignore */
+  safeLocalStorageSetItem(LAST_GPS_FIX_KEY, JSON.stringify(shared), 'GPS persistCurrentFix')
+  if (shared.lat != null && shared.lng != null) {
+    safeLocalStorageSetItem(
+      LAST_KNOWN_LOCATION_KEY,
+      JSON.stringify({
+        lat: shared.lat,
+        lng: shared.lng,
+        timestamp: Date.now(),
+        source: shared.source ?? 'gps',
+      }),
+      'GPS persist lastKnownLocation',
+    )
+    safeLocalStorageSetItem(GPS_PERMISSION_KEY, 'granted', 'GPS persist permission grant')
+    updatePermission('geolocation', 'granted')
+    markLastKnownGoodSnapshotTime(lastGpsPersistAt)
   }
   refreshOperationalMapResumeFromLocalStorage()
 }
@@ -631,11 +644,7 @@ function startWatching() {
         stopGPS()
         updateGpsRecoveryState('denied')
         updatePermission('geolocation', 'denied')
-        try {
-          localStorage.setItem(GPS_PERMISSION_KEY, 'denied')
-        } catch {
-          /* ignore */
-        }
+        safeLocalStorageSetItem(GPS_PERMISSION_KEY, 'denied', 'GPS watch permission denied')
         setShared({
           ...shared,
           locationState: 'denied',
@@ -735,15 +744,11 @@ export function requestLocation(): Promise<LocationState> {
         if (denied) {
           updateGpsRecoveryState('denied')
           updatePermission('geolocation', 'denied')
-          try {
-            localStorage.setItem(GPS_PERMISSION_KEY, 'denied')
-          } catch {
-            /* ignore */
-          }
+          safeLocalStorageSetItem(GPS_PERMISSION_KEY, 'denied', 'GPS request permission denied')
         } else {
           try {
             if (localStorage.getItem(GPS_PERMISSION_KEY) === 'granted') {
-              localStorage.removeItem(GPS_PERMISSION_KEY)
+              safeLocalStorageRemoveItem(GPS_PERMISSION_KEY, 'GPS clear denied permission fallback')
             }
           } catch {
             /* ignore */

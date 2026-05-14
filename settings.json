@@ -1,0 +1,38 @@
+{
+  "typescript.tsserver.maxMemory": 4096,
+  "typescript.tsserver.useSyntaxServer": "always",
+  "typescript.disableAutomaticTypeAcquisition": true,
+  "files.watcherExclude": {
+    "**/.git/objects/**": true,
+    "**/.git/subtree-cache/**": true,
+    "**/node_modules/**": true,
+    "**/dist/**": true,
+    "**/.vercel/**": true,
+    "**/supabase/.temp/**": true,
+    "**/build/**": true
+  },
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/dist": true,
+    "**/.vercel": true,
+    "**/supabase/.temp": true,
+    "**/package-lock.json": true,
+    "**/yarn.lock": true
+  },
+  "editor.minimap.enabled": false,
+  "editor.codeLens": false,
+  "git.autorefresh": true,
+  "git.autofetch": false,
+  "editor.suggest.showSnippets": false,
+  "editor.suggestSelection": "recentlyUsedByPrefix",
+  "editor.hover.delay": 1000,
+  "editor.hover.sticky": true,
+  "editor.formatOnSave": true,
+  "files.trimTrailingWhitespace": true,
+  "files.insertFinalNewline": true,
+  "files.exclude": {
+    "**/.git": true,
+    "**/.DS_Store": true,
+    "**/dist": true
+  }
+}

@@ -71,15 +71,18 @@ export default function WaypointLayer() {
 
     rebuildRafRef.current = window.requestAnimationFrame(() => {
       rebuildRafRef.current = null
-      // clear old markers safely
-      Object.values(markersRef.current).forEach((m) => m.remove())
-      markersRef.current = {}
-      Object.values(labelMarkersRef.current).forEach((m) => m.remove())
-      labelMarkersRef.current = {}
-      segmentMarkersRef.current.forEach((m) => m.remove())
-      segmentMarkersRef.current = []
+      // Guard: do not rebuild markers if map is no longer available
+      if (!map) return
+      try {
+        // clear old markers safely
+        Object.values(markersRef.current).forEach((m) => m.remove())
+        markersRef.current = {}
+        Object.values(labelMarkersRef.current).forEach((m) => m.remove())
+        labelMarkersRef.current = {}
+        segmentMarkersRef.current.forEach((m) => m.remove())
+        segmentMarkersRef.current = []
 
-      const debugDefaultMarker = useDefaultWaypointMarkerDebug()
+        const debugDefaultMarker = useDefaultWaypointMarkerDebug()
 
       // rebuild markers
       waypoints.forEach((wp) => {
@@ -266,6 +269,10 @@ export default function WaypointLayer() {
           segmentMarkersRef.current.push(segMarker)
         }
       }
+    } catch (e) {
+      // Suppress marker rebuild errors to prevent render loop crashes
+      console.debug('Marker rebuild error:', e)
+    }
     })
     return () => {
       if (rebuildRafRef.current != null) {
@@ -281,9 +288,13 @@ export default function WaypointLayer() {
         window.cancelAnimationFrame(rebuildRafRef.current)
         rebuildRafRef.current = null
       }
-      Object.values(markersRef.current).forEach((m) => m.remove())
-      Object.values(labelMarkersRef.current).forEach((m) => m.remove())
-      segmentMarkersRef.current.forEach((m) => m.remove())
+      try {
+        Object.values(markersRef.current).forEach((m) => m.remove())
+        Object.values(labelMarkersRef.current).forEach((m) => m.remove())
+        segmentMarkersRef.current.forEach((m) => m.remove())
+      } catch {
+        /* ignore cleanup errors */
+      }
       markersRef.current = {}
       labelMarkersRef.current = {}
       segmentMarkersRef.current = []

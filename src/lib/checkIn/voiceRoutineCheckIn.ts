@@ -1,6 +1,5 @@
 import { fetchCheckInContacts } from './checkInContacts'
 import type { CheckInContact } from './checkInContacts'
-import { sendRoutineCheckInOrQueue } from './sendRoutineCheckInOrQueue'
 import { ROUTINE_CHECKIN_SCHEMA } from './routineCheckInTypes'
 import type { RoutineCheckInContact, RoutineCheckInPayload } from './routineCheckInTypes'
 
@@ -16,19 +15,19 @@ export type VoiceCheckInGps = {
   elevation: number | null
 }
 
-export async function sendVoiceRoutineCheckIn(gps: VoiceCheckInGps): Promise<{ ok: boolean; message: string }> {
+export async function getVoiceRoutineCheckInPayload(gps: VoiceCheckInGps): Promise<RoutineCheckInPayload | null> {
   if (gps.locationState !== 'granted') {
-    return { ok: false, message: 'GPS permission required for check-in.' }
+    return null
   }
   const { data: rows, error } = await fetchCheckInContacts()
   if (error && rows.length === 0) {
-    return { ok: false, message: `Could not load check-in contacts: ${error.message}` }
+    return null
   }
   const contacts = toRoutineContacts(rows)
   if (!contacts.length) {
-    return { ok: false, message: 'No check-in contacts configured.' }
+    return null
   }
-  const payload: RoutineCheckInPayload = {
+  return {
     schema: ROUTINE_CHECKIN_SCHEMA,
     sentAt: Date.now(),
     kind: 'manual',
@@ -38,10 +37,5 @@ export async function sendVoiceRoutineCheckIn(gps: VoiceCheckInGps): Promise<{ o
     elevationM: gps.elevation ?? null,
     message: null,
     contacts,
-  }
-  const r = await sendRoutineCheckInOrQueue(payload)
-  return {
-    ok: true,
-    message: r.status === 'sent' ? 'Check-in sent.' : 'Check-in queued for when you are online.',
   }
 }

@@ -35,6 +35,7 @@ import {
   type SupabaseEnvReadiness,
 } from '../lib/supabase'
 import { mergePersistedGeolocationState } from '../lib/permissionRecoveryCopy'
+import { resolveRapidEndpoint } from '../lib/rescue/buildRescuePacket'
 
 type CheckState = 'pass' | 'warn' | 'fail'
 type ManualCheckKey =
@@ -83,30 +84,6 @@ function readinessBand(score: number): {
   if (score >= 70) return { label: 'YELLOW', color: '#ffd166', detail: 'Fix Soon' }
   if (score >= 60) return { label: 'ORANGE', color: '#ffb570', detail: 'Hold' }
   return { label: 'RED', color: '#ff6b87', detail: 'No-Go' }
-}
-
-function readRapidEndpoint(): string {
-  const env = ((import.meta as any).env?.VITE_RAPID_ENDPOINT_URL as string | undefined)?.trim()
-  if (env) return env
-  try {
-    for (let i = 0; i < localStorage.length; i += 1) {
-      const key = localStorage.key(i)
-      if (!key) continue
-      const value = localStorage.getItem(key)
-      if (!value) continue
-      try {
-        const parsed = JSON.parse(value)
-        if (parsed && typeof parsed.heartbeatFnUrl === 'string' && parsed.heartbeatFnUrl.trim()) {
-          return parsed.heartbeatFnUrl.trim()
-        }
-      } catch {
-        // noop
-      }
-    }
-  } catch {
-    // noop
-  }
-  return ''
 }
 
 export default function PreflightPanel() {
@@ -363,7 +340,7 @@ export default function PreflightPanel() {
     }
   }, [])
 
-  const endpoint = useMemo(() => readRapidEndpoint(), [])
+  const endpoint = useMemo(() => resolveRapidEndpoint(), [])
   const compileBuild = useMemo(
     () => (typeof __BUILD_ID__ === 'string' && __BUILD_ID__.length > 0 ? __BUILD_ID__ : 'unknown'),
     [],
@@ -748,11 +725,17 @@ export default function PreflightPanel() {
   const requestOne = async (fn: () => Promise<void>) => {
     if (requestingPerms) return
     setRequestingPerms(true)
+    let timeoutId: number | undefined
     try {
+      timeoutId = window.setTimeout(() => {
+        setRequestingPerms(false)
+        setContactError('Permission request timed out. Please try again.')
+      }, 12000)
       await fn()
       setLastRecheckAt(Date.now())
       setRecheckTick((v) => v + 1)
     } finally {
+      window.clearTimeout(timeoutId)
       setRequestingPerms(false)
     }
   }
@@ -850,6 +833,7 @@ export default function PreflightPanel() {
       runtimeBuild,
       preflightBuild,
       overlayBuild,
+      buildStamp: import.meta.env.VITE_BUILD_STAMP ?? 'none',
     })
   }, [compileBuild, runtimeBuild, preflightBuild, overlayBuild])
 
@@ -1588,9 +1572,26 @@ export default function PreflightPanel() {
               {recoveryStatus}
             </div>
           )}
+          {runtimeSnap.deploymentIntegrity.staleStatus !== 'fresh' && (
+            <div style={{ color: '#ffd166', fontSize: fontSm, lineHeight: 1.45, marginTop: gapSm }}>
+              <strong>Deployment Update Status:</strong> {runtimeSnap.deploymentIntegrity.staleStatus === 'stale_detected' ? 'New version available.' : runtimeSnap.deploymentIntegrity.staleStatus === 'recovering' ? 'Attempting to update...' : 'Unknown.'}
+              {runtimeSnap.deploymentIntegrity.updatePending && (
+                <>
+                  <br />
+                  Update is pending. It may be deferred due to active voice commands, recovery, or gestures.
+                  Click "FORCE UPDATE APP" if you believe it's safe to reload.
+                </>
+              )}
+              {runtimeSnap.deploymentIntegrity.reloadAttempted && !runtimeSnap.deploymentIntegrity.updatePending && (
+                <>
+                  <br />
+                  A reload was attempted but the app is still on an older version. Manual intervention may be required.
+                </>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </HudPanel>
   )
 }
-

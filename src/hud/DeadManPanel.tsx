@@ -37,7 +37,7 @@ import {
   type EmergencyContact,
 } from '../lib/emergencyContacts'
 import { openContactConfig } from './openContactConfig'
-import { buildRescuePacket } from '../lib/rescue/buildRescuePacket'
+import { buildRescuePacket, resolveRapidEndpoint } from '../lib/rescue/buildRescuePacket'
 import {
   clearDeadmanDispatchLock,
   recordDeadmanDispatchSuccess,
@@ -66,37 +66,6 @@ const RENEW_WINDOW_S = 60
 // `emergency_contacts_saved`, `titanium_route_contacts`,
 // `current_route_contacts`). The dispatch path is now backend-truth-only via
 // `buildRescuePacket()` → `fetchEmergencyContacts()`.
-
-// CONTRACT-SENSITIVE: dispatch endpoint resolver. The fallback order
-// (VITE_RESCUE_EMAIL_URL → VITE_RAPID_ENDPOINT_URL → localStorage
-// `heartbeatFnUrl`) is part of the operator contract — changing it can
-// silently misroute live Deadman dispatches. Mirror any change in
-// `SOSPanel.tsx::resolveRapidEndpoint` to keep both paths aligned.
-function resolveRapidEndpoint(): string {
-  const rescue = ((import.meta as any).env?.VITE_RESCUE_EMAIL_URL as string | undefined)?.trim()
-  if (rescue) return rescue
-  const env = ((import.meta as any).env?.VITE_RAPID_ENDPOINT_URL as string | undefined)?.trim()
-  if (env) return env
-  try {
-    for (let i = 0; i < localStorage.length; i += 1) {
-      const key = localStorage.key(i)
-      if (!key) continue
-      const value = localStorage.getItem(key)
-      if (!value) continue
-      try {
-        const parsed = JSON.parse(value)
-        if (parsed && typeof parsed.heartbeatFnUrl === 'string' && parsed.heartbeatFnUrl.trim()) {
-          return parsed.heartbeatFnUrl.trim()
-        }
-      } catch {
-        // noop
-      }
-    }
-  } catch {
-    // noop
-  }
-  return ''
-}
 
 /**
  * Local audio playback for dead-man alerts.
@@ -153,7 +122,7 @@ export default function DeadManPanel() {
   const { panels, updatePanel, raisePanel } = useCockpit()
   const {
     formattedTime, remainingMs, isExpired, isCritical, isWarning,
-    isActive, reset, extend, activate, durationMs,
+    isActive, reset, extend, activate, deactivate, durationMs,
     setDurationMinutes, expiresAt,
   } = useDeadMan()
 
@@ -430,7 +399,7 @@ export default function DeadManPanel() {
   //     re-armed timer can re-fire 1h/30m/15m/5m alerts.
   //   - `setStatusText(...)` is LAST. Earlier effects may already have
   //     pushed an EXPIRED/RENEW string in this same render; the renew
-  //     effect runs AFTER this one and re-asserts the renew text.
+  //     effect runs AFTER this one and re-asserts the renew text. Also reset isDisarmed.
   useEffect(() => {
     const prev = deadmanEpisodeRef.current
     const next = { expiresAt, isActive }
@@ -449,7 +418,7 @@ export default function DeadManPanel() {
     }
     setRenewCountdown(null)
     setDispatchResult(null)
-    setStatusText(isActive ? 'NOMINAL' : 'STARTS AT 2H — ADD HOURS TO MATCH TRIP')
+    setStatusText(isActive ? 'NOMINAL' : 'STANDBY')
   }, [expiresAt, isActive])
 
   useEffect(() => {
@@ -717,7 +686,7 @@ export default function DeadManPanel() {
             </div>
           )}
           {!isActive ? (
-            <button
+            <button // ACTIVATE button
               onClick={e => { e.stopPropagation(); activate() }}
               className="hud-deadman-checkin"
               style={primaryCheckInStyle('#00ffb4', checkInMinHeight, checkInFontSize)}
@@ -725,13 +694,13 @@ export default function DeadManPanel() {
               ACTIVATE
             </button>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: gapMd }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: gapMd }}> {/* RENEW / EXTEND */}
               <button
                 onClick={e => { e.stopPropagation(); handleRenew() }}
                 className="hud-deadman-checkin"
                 style={primaryCheckInStyle(accent, checkInMinHeight, checkInFontSize)}
               >
-                {renewCountdown != null ? 'RENEW NOW' : 'RESET TIMER'}
+                {renewCountdown != null ? 'RENEW NOW' : 'RENEW TIMER'}
               </button>
 
               <button
@@ -741,6 +710,22 @@ export default function DeadManPanel() {
                 +1 HR MORE
               </button>
             </div>
+          )}
+          {isActive && ( // DEACTIVATE button only visible when active
+            <button
+              onClick={e => { e.stopPropagation(); deactivate() }}
+              style={{
+                ...btnStyle('#ff4466', isMobile),
+                marginTop: gapMd,
+                border: '1px solid rgba(255,68,102,0.55)',
+                background: 'rgba(60,8,18,0.45)',
+                color: '#ffb8c6',
+                fontWeight: 700,
+                letterSpacing: '0.08em',
+              }}
+            >
+              DEACTIVATE
+            </button>
           )}
           <button
             onClick={(e) => {

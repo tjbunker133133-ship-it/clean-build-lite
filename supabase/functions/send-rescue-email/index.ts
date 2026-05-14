@@ -228,7 +228,8 @@ function isFiniteNum(v: unknown): v is number {
 }
 
 type ValidPacket = {
-  triggerType: "SOS" | "DEADMAN";
+  triggerType: "SOS" | "DEADMAN" | "CHECKIN";
+  note?: string;
   timestamp: string;
   coordinates: { lat: number; lng: number } | null;
   contacts: { name: string; email: string }[];
@@ -248,15 +249,21 @@ function parseAndValidate(body: unknown):
   const o = body as Record<string, unknown>;
 
   const triggerType = o.triggerType;
-  if (triggerType !== "SOS" && triggerType !== "DEADMAN") {
+  if (triggerType !== "SOS" && triggerType !== "DEADMAN" && triggerType !== "CHECKIN") {
     return {
       ok: false,
       response: jsonErr(
         400,
-        "BAD_PAYLOAD",
-        'triggerType must be "SOS" or "DEADMAN"',
+        "BAD_PAYLOAD", 
+        'triggerType must be "SOS", "DEADMAN", or "CHECKIN"',
       ),
     };
+  }
+
+  const note = typeof o.note === "string" ? o.note.trim() : undefined;
+  if (note !== undefined && note.length === 0) {
+    // Treat empty string as no note
+    delete o.note;
   }
 
   const timestamp = o.timestamp;
@@ -366,6 +373,7 @@ function parseAndValidate(body: unknown):
     ok: true,
     packet: {
       triggerType,
+      note: note,
       timestamp: timestamp.trim(),
       coordinates,
       contacts: cleaned,
@@ -385,6 +393,11 @@ function buildEmailText(p: ValidPacket, recipientName: string): string {
     `Trigger: ${p.triggerType}`,
     `Time (UTC): ${p.timestamp}`,
   ];
+
+  if (p.note && p.note.length > 0) {
+    lines.push(``);
+    lines.push(`Note: ${p.note}`);
+  }
 
   if (p.coordinates) {
     const lat = p.coordinates.lat.toFixed(6);
@@ -406,8 +419,15 @@ function buildEmailText(p: ValidPacket, recipientName: string): string {
   return lines.join("\n");
 }
 
-function subjectForTrigger(t: "SOS" | "DEADMAN"): string {
-  return t === "SOS" ? "[SOS ALERT]" : "[DEADMAN ALERT]";
+function subjectForTrigger(t: "SOS" | "DEADMAN" | "CHECKIN"): string {
+  switch (t) {
+    case "SOS":
+      return "[SOS ALERT]";
+    case "DEADMAN":
+      return "[DEADMAN ALERT]";
+    case "CHECKIN":
+      return "[ROUTINE CHECK-IN]";
+  }
 }
 
 Deno.serve(async (req: Request) => {

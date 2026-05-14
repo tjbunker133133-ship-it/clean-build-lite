@@ -20,7 +20,7 @@
 
 import { fetchEmergencyContacts } from '../emergencyContacts'
 
-export type RescueTriggerType = 'SOS' | 'DEADMAN'
+export type RescueTriggerType = 'SOS' | 'DEADMAN' | 'CHECKIN'
 
 export type RescueContactPair = {
   name: string
@@ -34,6 +34,7 @@ export type RescueCoordinates = {
 
 export type RescuePacket = {
   triggerType: RescueTriggerType
+  note?: string
   timestamp: string
   coordinates: RescueCoordinates | null
   contacts: RescueContactPair[]
@@ -170,57 +171,62 @@ function readLastKnownCoordinates(): RescueCoordinates | null {
  */
 export async function buildRescuePacket(
   triggerType: RescueTriggerType,
+  options: { contacts?: RescueContactPair[]; note?: string } = {}
 ): Promise<RescuePacket> {
   if (import.meta.env.DEV) {
     console.log('[SYSTEM TRACE]', {
       step: 'rescue_packet_build_start',
       success: true,
-      data: { triggerType },
+      data: { triggerType, hasNote: Boolean(options.note) },
       error: null,
     })
   }
-  let contacts: RescueContactPair[] = []
-  try {
-    const { data, error } = await fetchEmergencyContacts()
-    if (!error && Array.isArray(data)) {
-      contacts = data
-        .filter((c) => typeof c?.email === 'string' && c.email.trim().length > 0)
-        .map((c) => ({
-          name: c.contact_name,
-          email: c.email,
-        }))
-      if (import.meta.env.DEV) {
-        console.log('[SYSTEM TRACE]', {
-          step: 'rescue_packet_contacts_resolved',
-          success: true,
-          data: { triggerType, contactCount: contacts.length },
-          error: null,
-        })
+  let contacts: RescueContactPair[] = options.contacts || []
+  
+  if (!options.contacts) {
+    try {
+      const { data, error } = await fetchEmergencyContacts()
+      if (!error && Array.isArray(data)) {
+        contacts = data
+          .filter((c) => typeof c?.email === 'string' && c.email.trim().length > 0)
+          .map((c) => ({
+            name: c.contact_name,
+            email: c.email,
+          }))
+        if (import.meta.env.DEV) {
+          console.log('[SYSTEM TRACE]', {
+            step: 'rescue_packet_contacts_resolved',
+            success: true,
+            data: { triggerType, contactCount: contacts.length },
+            error: null,
+          })
+        }
+      } else {
+        if (import.meta.env.DEV) {
+          console.log('[SYSTEM TRACE]', {
+            step: 'rescue_packet_contacts_resolved',
+            success: false,
+            data: { triggerType, contactCount: 0 },
+            error: error?.message ?? 'contacts_fetch_error',
+          })
+        }
       }
-    } else {
+    } catch {
+      contacts = []
       if (import.meta.env.DEV) {
         console.log('[SYSTEM TRACE]', {
           step: 'rescue_packet_contacts_resolved',
           success: false,
           data: { triggerType, contactCount: 0 },
-          error: error?.message ?? 'contacts_fetch_error',
+          error: 'contacts_fetch_throw',
         })
       }
-    }
-  } catch {
-    contacts = []
-    if (import.meta.env.DEV) {
-      console.log('[SYSTEM TRACE]', {
-        step: 'rescue_packet_contacts_resolved',
-        success: false,
-        data: { triggerType, contactCount: 0 },
-        error: 'contacts_fetch_throw',
-      })
     }
   }
 
   const base: RescuePacket = {
     triggerType,
+    note: options.note,
     timestamp: new Date().toISOString(),
     coordinates: readLastKnownCoordinates(),
     contacts,
@@ -261,4 +267,37 @@ export async function buildRescuePacket(
     return base
   }
   return { ...base, signature }
+}
+
+/**
+ * Centralized dispatch endpoint resolver.
+ * Fallback order: VITE_RESCUE_EMAIL_URL -> VITE_RAPID_ENDPOINT_URL -> localStorage heartbeatFnUrl.
+ */
+export function resolveRapidEndpoint(): string {
+  const env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env;
+  const rescue = env?.VITE_RESCUE_EMAIL_URL?.trim();
+  if (rescue) return rescue;
+  const rapid = env?.VITE_RAPID_ENDPOINT_URL?.trim();
+  if (rapid) return rapid;
+  try {
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      if (!key) continue;
+      const value = localStorage.getItem(key);
+      if (!value) continue;
+      try {
+        const parsed = JSON.parse(value);
+        if (parsed && typeof parsed.heartbeatFnUrl === 'string' && parsed.heartbeatFnUrl.trim()) {
+          return parsed.heartbeatFnUrl.trim();
+        }
+      } catch { /* noop */ }
+    }
+  } catch { /* noop */ }
+  return '';
+}
+
+/** Returns the specific check-in webhook URL if configured. */
+export function resolveCheckInWebhook(): string | null {
+  const env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env;
+  return env?.VITE_CHECKIN_WEBHOOK_URL?.trim() || null;
 }
