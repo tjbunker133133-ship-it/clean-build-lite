@@ -1,10 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useGPS } from './useGPS'
-import { readCheckInOutbox } from '../lib/checkIn/checkInOutbox'
-import {
-  flushRoutineCheckInOutbox,
-  sendRoutineCheckInOrQueue,
-} from '../lib/checkIn/sendRoutineCheckInOrQueue'
 import { ROUTINE_CHECKIN_SCHEMA } from '../lib/checkIn/routineCheckInTypes'
 import type { RoutineCheckInContact, RoutineCheckInPayload } from '../lib/checkIn/routineCheckInTypes'
 import { buildRescuePacket, resolveRapidEndpoint, resolveCheckInWebhook } from '../lib/rescue/buildRescuePacket'
@@ -16,36 +11,90 @@ export function useCheckInBeacon(getContacts: () => RoutineCheckInContact[]) {
   const getContactsRef = useRef(getContacts)
   getContactsRef.current = getContacts
 
-  const isFlushingRef = useRef(false) // New ref to prevent concurrent flushes
-  const [outboxCount, setOutboxCount] = useState(() => readCheckInOutbox().length)
+  const isFlushingRef = useRef(false)
+  const PENDING_CHECKIN_KEY = 'hud_checkin_pending_checkin_v1'
 
-  const refreshOutbox = useCallback(() => {
-    setOutboxCount(readCheckInOutbox().length)
+  const readPendingPayload = useCallback((): RoutineCheckInPayload | null => {
+    try {
+      const raw = localStorage.getItem(PENDING_CHECKIN_KEY)
+      if (!raw) return null
+      return JSON.parse(raw) as RoutineCheckInPayload
+    } catch {
+      return null
+    }
   }, [])
 
-  // Guarded flush to prevent multiple concurrent executions
+  const writePendingPayload = useCallback((payload: RoutineCheckInPayload): void => {
+    try {
+      localStorage.setItem(PENDING_CHECKIN_KEY, JSON.stringify(payload))
+    } catch {
+      /* noop */
+    }
+  }, [])
+
+  const clearPendingPayload = useCallback((): void => {
+    try {
+      localStorage.removeItem(PENDING_CHECKIN_KEY)
+    } catch {
+      /* noop */
+    }
+  }, [])
+
+  const [outboxCount, setOutboxCount] = useState(() => (readPendingPayload() ? 1 : 0))
+
+  /**
+   * 1. Low-level Logic Units (Foundational)
+   */
+  const buildPayload = useCallback(
+    (kind: 'manual' | 'beacon', message: string | null): RoutineCheckInPayload | null => {
+      const g = gpsRef.current
+      if (g.lat == null || g.lng == null || g.locationState !== 'granted') return null
+      const contacts = getContactsRef.current()
+      if (!contacts.length) return null
+      return {
+        schema: ROUTINE_CHECKIN_SCHEMA,
+        sentAt: Date.now(),
+        kind,
+        lat: g.lat,
+        lng: g.lng,
+        accuracyM: g.accuracy ?? null,
+        elevationM: g.elevation ?? null,
+        message: message?.trim() ? message.trim().slice(0, 160) : null,
+        contacts,
+      }
+    },
+    [],
+  )
+
+  const refreshOutbox = useCallback(() => {
+    setOutboxCount(readPendingPayload() ? 1 : 0)
+  }, [readPendingPayload])
+
   const guardedFlush = useCallback(async () => {
     if (isFlushingRef.current) {
-      // If already flushing, return a promise that resolves to a neutral state
-      // to avoid double-counting or race conditions.
-      return { sent: 0, remaining: readCheckInOutbox().length }
+      return { sent: 0, remaining: readPendingPayload() ? 1 : 0 }
     }
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      return { sent: 0, remaining: readPendingPayload() ? 1 : 0 }
+    }
+    const pending = readPendingPayload()
+    if (!pending) return { sent: 0, remaining: 0 }
+
     isFlushingRef.current = true
     try {
-      const result = await flushRoutineCheckInOutbox()
-      return result
+      const ok = await performDirectDispatch(pending)
+      if (ok) {
+        clearPendingPayload()
+        refreshOutbox()
+        return { sent: 1, remaining: 0 }
+      }
+      return { sent: 0, remaining: 1 }
     } finally {
       isFlushingRef.current = false
-      refreshOutbox()
     }
-  }, [refreshOutbox])
+  }, [clearPendingPayload, readPendingPayload, refreshOutbox, performDirectDispatch])
 
-  useEffect(() => {
-    const fn = () => refreshOutbox()
-    window.addEventListener('hud:checkin-outbox-changed', fn)
-    return () => window.removeEventListener('hud:checkin-outbox-changed', fn)
-  }, [refreshOutbox])
-
+  // 3. Lifecycle Effects
   useEffect(() => {
     const onOnline = () => {
       void guardedFlush()
@@ -56,21 +105,20 @@ export function useCheckInBeacon(getContacts: () => RoutineCheckInContact[]) {
   }, [guardedFlush])
 
   /**
-   * Direct high-reliability dispatch transport. 
-   * Signed HMAC POST to rapid endpoint or specific webhook.
+   * 4. Dispatch Callbacks (Dependent on logic units)
    */
-  const performDirectDispatch = useCallback(async (message: string | null): Promise<boolean> => {
+
+  // Direct high-reliability dispatch: Signed HMAC POST to rapid endpoint or webhook.
+  const performDirectDispatch = useCallback(async (payload: RoutineCheckInPayload): Promise<boolean> => {
     const rapidEndpoint = resolveRapidEndpoint()
     const checkinUrl = resolveCheckInWebhook()
-    const contacts = getContactsRef.current()
-    const payload = buildPayload('manual', message)
-    if (!payload) return false
+    const note = payload.message ?? undefined
 
     const sendRescuePacket = async (endpoint: string): Promise<boolean> => {
       try {
         const packet = await buildRescuePacket('CHECKIN', {
-          contacts,
-          note: message || undefined,
+          contacts: payload.contacts,
+          note,
         })
         const res = await fetch(endpoint, {
           method: 'POST',
@@ -96,35 +144,14 @@ export function useCheckInBeacon(getContacts: () => RoutineCheckInContact[]) {
           body: JSON.stringify(payload),
           mode: 'cors',
         })
-        return res.ok
+        if (res.ok) return true
       } catch {
-        return false
+        // Fall through to failure
       }
     }
 
     return false
-  }, [buildPayload])
-
-  const buildPayload = useCallback(
-    (kind: 'manual' | 'beacon', message: string | null): RoutineCheckInPayload | null => {
-      const g = gpsRef.current
-      if (g.lat == null || g.lng == null || g.locationState !== 'granted') return null
-      const contacts = getContactsRef.current()
-      if (!contacts.length) return null
-      return {
-        schema: ROUTINE_CHECKIN_SCHEMA,
-        sentAt: Date.now(),
-        kind,
-        lat: g.lat,
-        lng: g.lng,
-        accuracyM: g.accuracy ?? null,
-        elevationM: g.elevation ?? null,
-        message: message?.trim() ? message.trim().slice(0, 160) : null,
-        contacts,
-      }
-    },
-    [],
-  )
+  }, [])
 
   const sendManual = useCallback(
     async (message: string | null) => {
@@ -132,18 +159,17 @@ export function useCheckInBeacon(getContacts: () => RoutineCheckInContact[]) {
       if (!payload) return { ok: false as const, error: 'no_fix_or_contacts' }
       
       // Phase 1: High-reliability direct dispatch (SOS-style)
-      const dispatchOk = await performDirectDispatch(message)
+      const dispatchOk = await performDirectDispatch(payload)
       if (dispatchOk) {
-        refreshOutbox()
+        await guardedFlush()
         return { ok: true as const, status: 'sent' as const, dispatchOk: true }
       }
 
-      // Phase 2: Fallback to Routine Webhook / Queue path on failure or offline
-      const r = await sendRoutineCheckInOrQueue(payload)
+      writePendingPayload(payload)
       refreshOutbox()
-      return { ok: true as const, status: r.status, dispatchOk }
+      return { ok: true as const, status: 'queued' as const, dispatchOk: false }
     },
-    [buildPayload, refreshOutbox, performDirectDispatch],
+    [buildPayload, guardedFlush, performDirectDispatch, refreshOutbox, writePendingPayload],
   )
 
   const flushOutbox = useCallback(async () => {
