@@ -1,4 +1,15 @@
-import { supabase } from './supabase'
+import { getSupabase, isSupabaseConfigured } from './supabase'
+
+function requireSupabase() {
+  if (!isSupabaseConfigured) {
+    return {
+      error: new Error(
+        'Supabase not configured (.env.local). Contacts sync disabled; use Preflight local contacts.',
+      ),
+    } as const
+  }
+  return { client: getSupabase(), error: null as null }
+}
 
 export type EmergencyContact = {
   id: string
@@ -26,8 +37,12 @@ const SELECT_COLS =
 export async function fetchEmergencyContacts(
   operatorId?: string | null,
 ): Promise<ContactsResult<EmergencyContact[]>> {
+  const configured = requireSupabase()
+  if (configured.error) {
+    return { data: [], error: configured.error }
+  }
   try {
-    let query = supabase
+    let query = configured.client
       .from('emergency_contacts')
       .select(SELECT_COLS)
       .order('priority', { ascending: true })
@@ -51,8 +66,12 @@ export async function fetchEmergencyContacts(
 export async function createEmergencyContact(
   input: EmergencyContactInput,
 ): Promise<ContactsResult<EmergencyContact | null>> {
+  const configured = requireSupabase()
+  if (configured.error) {
+    return { data: null, error: configured.error }
+  }
   try {
-    const { data, error } = await supabase
+    const { data, error } = await configured.client
       .from('emergency_contacts')
       .insert({
         operator_id: input.operator_id ?? null,
@@ -78,8 +97,12 @@ export async function createEmergencyContact(
 export async function deleteEmergencyContact(
   id: string,
 ): Promise<{ error: Error | null }> {
+  const configured = requireSupabase()
+  if (configured.error) {
+    return { error: configured.error }
+  }
   try {
-    const { error } = await supabase
+    const { error } = await configured.client
       .from('emergency_contacts')
       .delete()
       .eq('id', id)
