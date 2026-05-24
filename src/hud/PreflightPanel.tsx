@@ -13,6 +13,7 @@ import {
 import { COCKPIT_STORAGE_KEY } from '../types/cockpit'
 import { resetAppState } from '../utils/resetApp'
 import { forceUpdateApp } from '../utils/forceUpdate'
+import { iosInstallCopy } from '../lib/iosInstallGuide'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 import { updatePermission } from '../runtime/runtimeSnapshot'
 import { hudDevLog, isHudVerboseDebug } from '../lib/tier1DebugLog'
@@ -310,6 +311,7 @@ export default function PreflightPanel() {
   }, [recheckTick])
 
   const checks: CheckRow[] = useMemo(() => {
+    const profile = getDeviceProfile()
     const gpsLock =
       gps.locationState === 'granted' && gps.lat != null && gps.lng != null
     return [
@@ -323,7 +325,11 @@ export default function PreflightPanel() {
       {
         label: 'PWA Install',
         state: isStandalone ? 'pass' : 'warn',
-        detail: isStandalone ? 'Standalone' : 'Browser tab',
+        detail: isStandalone
+          ? 'Home Screen app'
+          : profile.isIOS
+            ? 'Safari tab — use Add to Home Screen'
+            : 'Browser tab',
         weight: 0.8,
       },
       {
@@ -578,7 +584,8 @@ export default function PreflightPanel() {
     }
   }
 
-  const isMobile = getDeviceProfile().interactionMode === 'mobile'
+  const deviceProfile = getDeviceProfile()
+  const isMobile = deviceProfile.interactionMode === 'mobile'
   const fontSm = touchFontSm(isMobile)
   const fontMd = touchFontMd(isMobile)
   const gapMd = touchGapMd(isMobile)
@@ -848,6 +855,30 @@ export default function PreflightPanel() {
             </div>
           ))}
         </div>
+
+        {deviceProfile.isIOS && !isStandalone ? (
+          <div
+            style={{
+              padding: '10px 12px',
+              borderRadius: 8,
+              border: '1px solid rgba(125,255,138,0.35)',
+              background: 'rgba(12,24,16,0.55)',
+              fontSize: fontSm,
+              color: '#c7d4c8',
+              lineHeight: 1.45,
+            }}
+          >
+            <div style={{ color: '#7dff8a', fontWeight: 700, letterSpacing: '0.1em', marginBottom: 6 }}>
+              iPHONE / iPAD: ADD TO HOME SCREEN
+            </div>
+            <p style={{ margin: '0 0 6px' }}>{iosInstallCopy(deviceProfile.type === 'tablet').lead}</p>
+            <ol style={{ margin: 0, paddingLeft: 18 }}>
+              {iosInstallCopy(deviceProfile.type === 'tablet').steps.map((step) => (
+                <li key={step}>{step}</li>
+              ))}
+            </ol>
+          </div>
+        ) : null}
 
         <div style={{ fontSize: fontSm, color: '#9ea7a0', letterSpacing: '0.08em' }}>BACKEND CONTACTS</div>
         <div style={{ border: '1px solid rgba(199,206,198,0.16)', borderRadius: 8, padding: 6, display: 'grid', gap: gapSm }}>
