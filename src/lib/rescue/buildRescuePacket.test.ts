@@ -16,10 +16,13 @@ vi.mock('../emergencyContacts', () => {
 
 import { fetchEmergencyContacts } from '../emergencyContacts'
 import {
+  appendCheckInNoteToTimestamp,
+  applyCheckInNote,
   buildRescuePacket,
   canonicalJSON,
   hmacSha256Hex,
   rescuePacketDevLogSummary,
+  sanitizeCheckInNote,
 } from './buildRescuePacket'
 
 const mockedFetch = fetchEmergencyContacts as unknown as ReturnType<typeof vi.fn>
@@ -281,6 +284,37 @@ describe('buildRescuePacket', () => {
     expect(typeof packet.timestamp).toBe('string')
     expect(packet.timestamp.length).toBeGreaterThan(0)
     expect(packet.coordinates).toBeNull()
+  })
+})
+
+describe('check-in note (frontend-only wire encoding)', () => {
+  it('sanitizes whitespace and caps length', () => {
+    expect(sanitizeCheckInNote('  hello\nworld  ')).toBe('hello world')
+    expect(sanitizeCheckInNote('x'.repeat(200)).length).toBe(140)
+  })
+
+  it('appends note to timestamp for email display', () => {
+    const iso = '2026-05-23T20:00:00.000Z'
+    expect(appendCheckInNoteToTimestamp(iso, '')).toBe(iso)
+    expect(appendCheckInNoteToTimestamp(iso, 'All good')).toBe(`${iso} — All good`)
+  })
+
+  it.skipIf(RUNTIME_SIGNING_KEY.length === 0)('re-signs CHECK-IN packet after note embed', async () => {
+    const base = await buildRescuePacket('CHECKIN')
+    const withNote = await applyCheckInNote(base, 'Trail clear')
+    expect(withNote.timestamp).toContain('Trail clear')
+    expect(withNote.timestamp).not.toBe(base.timestamp)
+    const { signature, ...rest } = withNote
+    const expected = createHmac('sha256', RUNTIME_SIGNING_KEY)
+      .update(canonicalJSON(rest), 'utf8')
+      .digest('hex')
+    expect(signature).toBe(expected)
+  })
+
+  it('does not mutate SOS packets', async () => {
+    const sos = await buildRescuePacket('SOS')
+    const after = await applyCheckInNote(sos, 'ignored')
+    expect(after).toBe(sos)
   })
 })
 

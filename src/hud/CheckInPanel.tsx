@@ -4,7 +4,7 @@ import { useGPS } from '../hooks/useGPS'
 import { useAppContext } from '../context/AppContext'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 import { traceAction } from '../runtime/actionTrace'
-import { buildRescuePacket, rescuePacketDevLogSummary } from '../lib/rescue/buildRescuePacket'
+import { buildRescuePacket, applyCheckInNote, readCheckInNoteDraft, persistCheckInNoteDraft, CHECKIN_NOTE_MAX_CHARS, rescuePacketDevLogSummary } from '../lib/rescue/buildRescuePacket'
 import { getRescueEligibility } from '../lib/rescue/eligibility'
 import { hasRescueDispatchAuth } from '../lib/rescue/rescueDispatch'
 import { postRescuePacket } from '../lib/rescue/postRescuePacket'
@@ -23,6 +23,7 @@ export default function CheckInPanel() {
   const mountedRef = useRef(true)
   const sendingRef = useRef(false)
   const [status, setStatus] = useState('READY')
+  const [checkInNote, setCheckInNote] = useState(readCheckInNoteDraft)
 
   const isMobile = getDeviceProfile().interactionMode === 'mobile'
   const fontSm = touchFontSm(isMobile)
@@ -54,7 +55,8 @@ export default function CheckInPanel() {
     safeSetStatus('BUILDING CHECK-IN…')
     try {
       traceAction('checkin_dispatch', 'async_start', { step: 'build_packet' })
-      const packet = await buildRescuePacket('CHECKIN')
+      const basePacket = await buildRescuePacket('CHECKIN')
+      const packet = await applyCheckInNote(basePacket, checkInNote)
       const contactCount = packet.contacts.length
       const endpoint = resolveRapidEndpoint()
 
@@ -85,6 +87,8 @@ export default function CheckInPanel() {
       const result = await postRescuePacket(packet, endpoint, 'CHECKIN')
       if (result.ok) {
         safeSetStatus(`CHECK-IN SENT TO ${contactCount} CONTACTS`)
+        persistCheckInNoteDraft('')
+        setCheckInNote('')
         traceAction('checkin_dispatch', 'async_complete', { status: result.status, contactCount })
       } else if (result.reason === 'http_error') {
         safeSetStatus(result.failure.operatorMessage)
@@ -119,9 +123,32 @@ export default function CheckInPanel() {
         }}
       >
         <div style={{ opacity: 0.85, lineHeight: 1.35 }}>
-          One tap sends your current location to emergency contacts — same secure rescue channel as
-          SOS and Deadman.
+          One tap sends your current location to emergency contacts — same secure channel as SOS
+          and Deadman. An optional note is included in the email time line.
         </div>
+        <label style={{ display: 'grid', gap: 6, fontSize: fontSm, color: '#b8c4d8' }}>
+          Note (optional)
+          <input
+            type="text"
+            value={checkInNote}
+            onChange={(e) => {
+              const next = e.target.value.slice(0, CHECKIN_NOTE_MAX_CHARS)
+              setCheckInNote(next)
+              persistCheckInNoteDraft(next)
+            }}
+            maxLength={CHECKIN_NOTE_MAX_CHARS}
+            placeholder="e.g. I'm fine — check this ridge"
+            style={{
+              background: '#151a22',
+              color: '#e5f0ff',
+              border: '1px solid #2b3340',
+              borderRadius: 8,
+              padding: '8px 10px',
+              minHeight: Math.max(tapMin, 36),
+              fontSize: fontSm,
+            }}
+          />
+        </label>
         <button
           type="button"
           onClick={() => void sendCheckIn()}

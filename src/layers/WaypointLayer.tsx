@@ -10,9 +10,12 @@ import { getDeviceProfile } from '../runtime/deviceProfile'
 const WAYPOINT_PIN_OFFSET_PX: [number, number] = [0, -2]
 
 function markerVisual(type: WaypointType): { color: string; symbol: string } {
+  if (type === 'start') return { color: '#22c55e', symbol: '🚩' }
   if (type === 'water') return { color: '#38bdf8', symbol: '💧' }
   if (type === 'camp') return { color: '#34d399', symbol: '⛺' }
   if (type === 'rest') return { color: '#fbbf24', symbol: '☕' }
+  if (type === 'poi') return { color: '#a78bfa', symbol: '🔍' }
+  if (type === 'pin') return { color: '#ef4444', symbol: '📍' }
   if (type === 'finish') return { color: '#f472b6', symbol: '🏁' }
   return { color: '#f87171', symbol: '•' }
 }

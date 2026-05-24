@@ -8,7 +8,7 @@ import {
 // ⚠️ LOCKED SYSTEM — Behavior Freeze Active
 // Any change to interaction, layout, display modes, or layers requires explicit approval.
 
-/** User-driven geolocation lifecycle (no silent / on-load requests). */
+/** User-driven geolocation lifecycle; auto-resumes only when permission was already granted. */
 export type LocationState = 'idle' | 'requesting' | 'granted' | 'denied' | 'error'
 
 /** Compact UI status derived from `locationState` + fix (HUD panels / status rail). */
@@ -110,6 +110,81 @@ let staleRecoveryRaised = false
 /** Throttle localStorage writes from high-frequency watch updates (first fix still persists immediately). */
 let lastGpsPersistAt = 0
 const WATCH_PERSIST_MIN_MS = 12_000
+function wasGeolocationPreviouslyGranted(): boolean {
+  try {
+    return localStorage.getItem(GPS_PERMISSION_KEY) === 'granted'
+  } catch {
+    return false
+  }
+}
+
+/** When Permissions API is unavailable, trust stored grant only (Safari / older WebViews). */
+export function shouldAutoResumeGeolocation(
+  permissionState: PermissionState | 'unsupported',
+  storedGranted: boolean,
+): boolean {
+  if (permissionState === 'granted') return true
+  if (permissionState === 'unsupported' && storedGranted) return true
+  return false
+}
+
+function applyGpsPositionFix(pos: GeolocationPosition) {
+  hasGPSFix = true
+  lastGoodFixAt = Date.now()
+  staleRecoveryRaised = false
+  updateGpsRecoveryState('healthy')
+  setShared({
+    lat: pos.coords.latitude,
+    lng: pos.coords.longitude,
+    accuracy: pos.coords.accuracy,
+    elevation: altitudeMetersFromCoords(pos.coords),
+    source: 'gps',
+    locationState: 'granted',
+    error: undefined,
+  })
+  persistCurrentFix()
+}
+
+/** Passive refresh when the browser already granted geolocation — no permission prompt. */
+function resumeGrantedLocationSilently() {
+  if (typeof navigator === 'undefined' || !navigator.geolocation) return
+  const hadCachedFix = shared.lat != null && shared.lng != null
+  startWatchSafely()
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      applyGpsPositionFix(pos)
+    },
+    (err) => {
+      if (err?.code === 1) {
+        stopWatching()
+        updateGpsRecoveryState('denied')
+        updatePermission('geolocation', 'denied')
+        try {
+          localStorage.setItem(GPS_PERMISSION_KEY, 'denied')
+        } catch {
+          /* ignore */
+        }
+        setShared({
+          ...shared,
+          locationState: 'denied',
+          error: 'Location permission denied',
+        })
+      }
+    },
+    {
+      enableHighAccuracy: true,
+      maximumAge: hadCachedFix ? 60_000 : 15_000,
+      timeout: 12_000,
+    },
+  )
+}
+
+function maybeAutoResumeGeolocation(permissionState: PermissionState | 'unsupported') {
+  if (!shouldAutoResumeGeolocation(permissionState, wasGeolocationPreviouslyGranted())) return
+  if (gpsTelemetryVerboseEnabled()) console.log('[GPS AUTO RESUME]')
+  resumeGrantedLocationSilently()
+}
+
 function gpsLoopDebugEnabled(): boolean {
   return (
     typeof window !== 'undefined' &&
@@ -505,8 +580,7 @@ export function useGPS(): GPSData & { requestLocation: typeof requestLocation; s
     gpsAutoInitAttempted = true
     if (typeof navigator === 'undefined' || !navigator.geolocation) return
     if (!('permissions' in navigator) || typeof navigator.permissions?.query !== 'function') {
-      if (gpsTelemetryVerboseEnabled()) console.log('[GPS AUTO START FALLBACK]')
-      startWatchSafely()
+      maybeAutoResumeGeolocation('unsupported')
       return
     }
     void navigator.permissions
@@ -515,14 +589,10 @@ export function useGPS(): GPSData & { requestLocation: typeof requestLocation; s
         if (gpsTelemetryVerboseEnabled()) {
           console.log('[GPS PERMISSION AUTO CHECK]', result.state)
         }
-        if (result.state === 'granted') {
-          if (gpsTelemetryVerboseEnabled()) console.log('[GPS AUTO START]')
-          startWatchSafely()
-        }
+        maybeAutoResumeGeolocation(result.state)
       })
       .catch(() => {
-        if (gpsTelemetryVerboseEnabled()) console.log('[GPS AUTO START FALLBACK]')
-        startWatchSafely()
+        maybeAutoResumeGeolocation('unsupported')
       })
   }, [])
 

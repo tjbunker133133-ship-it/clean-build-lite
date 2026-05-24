@@ -83,6 +83,30 @@ function readCachedOperationalFix(): { lat: number; lng: number } | null {
   }
 }
 
+const STATIC_MAP_CENTER = { lng: -105.7821, lat: 39.5501 }
+
+/** Boot map center: last known GPS fix when available, otherwise Colorado fallback. */
+function readInitialMapView(): { lng: number; lat: number; zoom: number } {
+  const cached = readCachedOperationalFix()
+  if (cached) {
+    return { lng: cached.lng, lat: cached.lat, zoom: 14 }
+  }
+  return { lng: STATIC_MAP_CENTER.lng, lat: STATIC_MAP_CENTER.lat, zoom: 10 }
+}
+
+function applyOperationalMapCenter(
+  map: maplibregl.Map,
+  fix: { lat: number; lng: number },
+  persisted: PersistedViewport | null,
+) {
+  map.jumpTo({
+    center: [fix.lng, fix.lat],
+    zoom: Math.max(14, persisted?.zoom ?? map.getZoom()),
+    bearing: persisted?.bearing ?? 0,
+    pitch: persisted?.pitch ?? 0,
+  })
+}
+
 function createUserMarkerEl() {
   const el = document.createElement('div')
   el.style.width = '18px'
@@ -383,7 +407,7 @@ export default function MapCanvas() {
     setStaticFallbackVisible(true)
     setStatus('initial')
 
-    const STATIC_CENTER = { lng: -105.7821, lat: 39.5501 }
+    const initialView = readInitialMapView()
 
     /** Once per style (not `styledata`, which fires on every tile batch). */
     const onStyleLoad = () => {
@@ -477,8 +501,8 @@ export default function MapCanvas() {
       map = new maplibregl.Map({
         container,
         style: initialStyle,
-        center: [STATIC_CENTER.lng, STATIC_CENTER.lat],
-        zoom: 10,
+        center: [initialView.lng, initialView.lat],
+        zoom: initialView.zoom,
         attributionControl: { compact: true },
         renderWorldCopies: false,
       })
@@ -587,8 +611,16 @@ export default function MapCanvas() {
         startupResetAttemptsRef.current = 0
         setMapReady(true)
         setMap(map)
+        const cachedFix = readCachedOperationalFix()
         const persisted = readPersistedViewport()
-        if (persisted) {
+        if (cachedFix) {
+          applyOperationalMapCenter(map, cachedFix, persisted)
+          autoOperationalCenteringRef.current = true
+          window.setTimeout(() => {
+            autoOperationalCenteringRef.current = false
+          }, 0)
+          initialOperationalCenterAppliedRef.current = true
+        } else if (persisted) {
           map.jumpTo({
             center: [persisted.lng, persisted.lat],
             zoom: persisted.zoom,
@@ -735,10 +767,12 @@ export default function MapCanvas() {
           type === 'default'
             ? 'WP'
             : type === 'finish'
-            ? 'FINISH'
-            : type === 'rest'
-              ? 'REST'
-              : type.toUpperCase()
+              ? 'FINISH'
+              : type === 'start'
+                ? 'START'
+                : type === 'rest'
+                  ? 'REST'
+                  : type.toUpperCase()
         const label = manualLabel || `${autoBase}-${nextIdx}`
         const makeId = () => `wp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
 

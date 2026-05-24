@@ -1,4 +1,4 @@
-export type WaypointType = 'default' | 'camp' | 'water' | 'rest' | 'finish'
+export type WaypointType = 'default' | 'start' | 'camp' | 'water' | 'rest' | 'poi' | 'pin' | 'finish'
 
 export interface Waypoint {
   id: string

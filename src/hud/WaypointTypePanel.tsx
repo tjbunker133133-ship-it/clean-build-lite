@@ -12,13 +12,16 @@ import type { WaypointType } from '../types'
 import { formatDistance, haversineDistance, totalRouteDistance } from '../lib/haversine'
 import { tier1Debug } from '../lib/tier1DebugLog'
 
-/** Water / Camp / Rest / End only — CLEAR ROUTE is a separate command button (not a waypoint type). */
+/** Route waypoint tiles — CLEAR ROUTE is a separate command button (not a waypoint type). */
 type RouteTypeTile = { id: WaypointType; label: string; icon: string; color: string }
 
 const ROUTE_TYPE_TILES: RouteTypeTile[] = [
+  { id: 'start', label: 'Start', icon: '🚩', color: '#22c55e' },
   { id: 'water', label: 'Water', icon: '💧', color: '#38bdf8' },
   { id: 'camp', label: 'Camp', icon: '⛺', color: '#34d399' },
   { id: 'rest', label: 'Rest Stop', icon: '☕', color: '#fbbf24' },
+  { id: 'poi', label: 'POI', icon: '🔍', color: '#a78bfa' },
+  { id: 'pin', label: 'Pin', icon: '📍', color: '#ef4444' },
   { id: 'finish', label: 'End Flag', icon: '🏁', color: '#f472b6' },
 ]
 

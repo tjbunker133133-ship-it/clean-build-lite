@@ -46,6 +46,53 @@ export type RescuePacket = {
   signature?: string
 }
 
+/** Max operator note length for check-in (embedded in timestamp for email display). */
+export const CHECKIN_NOTE_MAX_CHARS = 140
+
+const CHECKIN_NOTE_DRAFT_KEY = 'hud_checkin_note_draft_v1'
+
+export function sanitizeCheckInNote(raw: string): string {
+  return raw
+    .replace(/[\r\n]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .slice(0, CHECKIN_NOTE_MAX_CHARS)
+}
+
+/**
+ * CHECK-IN only: append a short note to the ISO timestamp. The edge function
+ * prints `timestamp` verbatim in rescue emails — no backend/schema change.
+ */
+export function appendCheckInNoteToTimestamp(isoTimestamp: string, note: string): string {
+  const clean = sanitizeCheckInNote(note)
+  if (!clean) return isoTimestamp
+  return `${isoTimestamp} — ${clean}`
+}
+
+export function readCheckInNoteDraft(): string {
+  try {
+    if (typeof localStorage === 'undefined') return ''
+    const raw = localStorage.getItem(CHECKIN_NOTE_DRAFT_KEY)
+    return raw ? sanitizeCheckInNote(raw) : ''
+  } catch {
+    return ''
+  }
+}
+
+export function persistCheckInNoteDraft(note: string): void {
+  try {
+    if (typeof localStorage === 'undefined') return
+    const clean = sanitizeCheckInNote(note)
+    if (!clean) {
+      localStorage.removeItem(CHECKIN_NOTE_DRAFT_KEY)
+      return
+    }
+    localStorage.setItem(CHECKIN_NOTE_DRAFT_KEY, clean)
+  } catch {
+    /* ignore */
+  }
+}
+
 /**
  * Safe structured summary for DEV-only diagnostics. Never log raw packets:
  * contacts (PII), coordinates (precise position), and signature hex must not
@@ -168,6 +215,42 @@ function readLastKnownCoordinates(): RescueCoordinates | null {
  * minimal-shape unsigned packet on the degraded path instead. The
  * `'safe degradation'` test in `buildRescuePacket.test.ts` locks this.
  */
+async function signRescuePacketBody(body: Omit<RescuePacket, 'signature'>): Promise<RescuePacket> {
+  const signingKey = ((import.meta as unknown as { env?: Record<string, string | undefined> })
+    .env?.VITE_RESCUE_SIGNING_KEY ?? '').trim()
+
+  if (signingKey.length === 0) {
+    if (import.meta.env.DEV) {
+      console.warn('[rescue] signing key not configured at build — packet will be unsigned')
+    }
+    return body
+  }
+
+  const canonical = canonicalJSON(body)
+  if (import.meta.env.DEV && (typeof canonical !== 'string' || canonical.length === 0)) {
+    console.warn('[rescue] canonicalJSON produced empty output; skipping signature')
+    return body
+  }
+  const signature = await hmacSha256Hex(signingKey, canonical)
+  if (!signature) {
+    if (import.meta.env.DEV) {
+      console.warn('[rescue] HMAC signing produced no output; packet will be unsigned')
+    }
+    return body
+  }
+  return { ...body, signature }
+}
+
+/** Re-sign after CHECK-IN timestamp note embedding (SOS/Deadman unaffected). */
+export async function applyCheckInNote(packet: RescuePacket, note: string): Promise<RescuePacket> {
+  if (packet.triggerType !== 'CHECKIN') return packet
+  const nextTimestamp = appendCheckInNoteToTimestamp(packet.timestamp, note)
+  if (nextTimestamp === packet.timestamp) return packet
+  const { signature: _omit, ...body } = packet
+  void _omit
+  return signRescuePacketBody({ ...body, timestamp: nextTimestamp })
+}
+
 export async function buildRescuePacket(
   triggerType: RescueTriggerType,
 ): Promise<RescuePacket> {
@@ -186,7 +269,7 @@ export async function buildRescuePacket(
     contacts = []
   }
 
-  const base: RescuePacket = {
+  const base: Omit<RescuePacket, 'signature'> = {
     triggerType,
     timestamp: new Date().toISOString(),
     coordinates: readLastKnownCoordinates(),
@@ -194,38 +277,5 @@ export async function buildRescuePacket(
     source: 'tactical-hud',
   }
 
-  // Build-time-only key. Vite inlines `VITE_*` vars at build, so this is
-  // never read at runtime from the user's env. No new state, no React
-  // effect, no subscription — one async sign call per dispatch.
-  const signingKey = ((import.meta as unknown as { env?: Record<string, string | undefined> })
-    .env?.VITE_RESCUE_SIGNING_KEY ?? '').trim()
-
-  if (signingKey.length === 0) {
-    if (import.meta.env.DEV) {
-      // One-time dev hint; production builds without the key send unsigned
-      // packets which the edge function will reject with 401.
-      console.warn('[rescue] signing key not configured at build — packet will be unsigned')
-    }
-    return base
-  }
-
-  const canonical = canonicalJSON(base)
-  if (import.meta.env.DEV && (typeof canonical !== 'string' || canonical.length === 0)) {
-    // Defensive: must be unreachable for any valid `base` we construct
-    // above. If it ever fires we want the dev to know before signing.
-    console.warn('[rescue] canonicalJSON produced empty output; skipping signature')
-    return base
-  }
-  const signature = await hmacSha256Hex(signingKey, canonical)
-  if (!signature) {
-    if (import.meta.env.DEV) {
-      // Defensive: Web Crypto unavailable or sign() rejected. Production
-      // path still returns the unsigned base packet (the edge function
-      // will reject with 401 INVALID_SIGNATURE), this DEV-only hint flags
-      // the local crypto failure earlier.
-      console.warn('[rescue] HMAC signing produced no output; packet will be unsigned')
-    }
-    return base
-  }
-  return { ...base, signature }
+  return signRescuePacketBody(base)
 }

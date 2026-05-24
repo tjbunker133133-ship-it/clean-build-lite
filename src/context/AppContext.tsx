@@ -128,7 +128,16 @@ interface AppContextValue {
 const AppContext = createContext<AppContextValue | null>(null)
 
 function isWaypointType(value: unknown): value is WaypointType {
-  return value === 'default' || value === 'camp' || value === 'water' || value === 'rest' || value === 'finish'
+  return (
+    value === 'default' ||
+    value === 'start' ||
+    value === 'camp' ||
+    value === 'water' ||
+    value === 'rest' ||
+    value === 'poi' ||
+    value === 'pin' ||
+    value === 'finish'
+  )
 }
 
 function isLayerType(value: unknown): value is LayerType {
