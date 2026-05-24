@@ -5,7 +5,7 @@ let suppressUntil = 0
 
 export function setWaypointMarkerTouchActive(next: boolean): void {
   active = next
-  suppressUntil = Date.now() + (next ? 800 : 450)
+  suppressUntil = Date.now() + (next ? 1200 : 500)
 }
 
 export function isWaypointMarkerTouchActive(): boolean {

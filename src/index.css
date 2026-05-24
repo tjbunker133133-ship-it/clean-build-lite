@@ -49,20 +49,30 @@ html, body {
 }
 
 /*
- * Waypoint pin: fixed 24×24 for MapLibre anchor: bottom only — never add translate(...) here (competes with MapLibre).
+ * Waypoint pin: anchor bottom — never add translate(...) on .marker (competes with MapLibre).
  */
+.maplibregl-marker {
+  touch-action: none;
+}
+
 .marker {
   position: relative;
-  width: 24px;
-  height: 24px;
+  width: 30px;
+  height: 30px;
   box-sizing: border-box;
   margin: 0;
   padding: 0;
   overflow: visible;
   touch-action: none;
-  cursor: pointer;
-  image-rendering: pixelated;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
   will-change: transform;
+}
+
+.marker.marker--dragging {
+  cursor: grabbing;
+  z-index: 3;
 }
 
 .marker .marker-icon {
@@ -76,8 +86,9 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 16px;
-  user-select: none;
+  font-size: 17px;
+  line-height: 1;
+  pointer-events: none;
 }
 
 .marker .marker-badge {
@@ -86,15 +97,15 @@ html, body {
   right: 0;
   top: auto;
   left: auto;
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
   margin: 0;
   padding: 0;
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.75);
   background: rgba(150, 35, 52, 0.9);
   color: #ffe8ee;
-  font-size: 6px;
+  font-size: 7px;
   line-height: 1;
   display: grid;
   place-items: center;
@@ -102,32 +113,39 @@ html, body {
   touch-action: manipulation;
   pointer-events: auto;
   box-sizing: border-box;
+  z-index: 2;
 }
 
-/* iOS / mobile: 44px touch halo — visual pin stays 24px centered. */
+/* Mobile / iOS: larger visible pin + 52px touch target for drag and visibility. */
 html.platform-ios .marker,
 html.platform-mobile .marker {
-  width: 44px;
-  height: 44px;
-  margin-left: -10px;
-  margin-top: -10px;
+  width: 52px;
+  height: 52px;
+  margin-left: -14px;
+  margin-top: -14px;
 }
 
 html.platform-ios .marker .marker-icon,
 html.platform-mobile .marker .marker-icon {
-  top: 10px;
-  left: 10px;
-  width: 24px;
-  height: 24px;
+  top: 8px;
+  left: 8px;
+  width: 36px;
+  height: 36px;
+  font-size: 22px;
 }
 
 html.platform-ios .marker .marker-badge,
 html.platform-mobile .marker .marker-badge {
-  width: 18px;
-  height: 18px;
-  font-size: 11px;
-  bottom: 6px;
-  right: 6px;
+  width: 22px;
+  height: 22px;
+  font-size: 13px;
+  bottom: 4px;
+  right: 4px;
+}
+
+html.platform-ios .waypoint-label-float,
+html.platform-mobile .waypoint-label-float {
+  pointer-events: none;
 }
 
 /* CLEAR ROUTE command — must win over generic .cockpit-panel button rules */
