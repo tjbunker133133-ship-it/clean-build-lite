@@ -12,15 +12,28 @@ Single field build. Use this doc when anything says “clean-build-lite” or �
 | Git branch | `stable/2026-05-23` |
 | Repo (upstream) | `tjbunker133133-ship-it/clean-build-lite` |
 
-## Vercel cleanup (do once)
+## Vercel (canonical — done via CLI)
 
-1. **Keep one project** — rename `clean-build-lite` → `hud-v1` in Vercel (Settings → General → Project Name), **or** create `hud-v1` and connect the same repo/branch.
-2. **Delete or disconnect** duplicate projects: `clean-build-lite-ictz`, `clean-build-lite-jd5o`, `clean-build-lite-xn62`, and any other `clean-build-lite-*` on the same repo.
-3. **Production Branch** = `stable/2026-05-23` on the canonical project only.
-4. **Environment variables** on that project only: `VITE_MAPTILER_KEY` (required), other `VITE_*` from `.env.example`.
-5. Optional until rename finishes: set `VERCEL_CANONICAL_PROJECT=1` on the one project you keep.
+| Item | Status |
+|------|--------|
+| Project name | **`hud-v1`** (renamed from `clean-build-lite`) |
+| Production URL | **https://clean-build-lite.vercel.app** (alias kept after rename) |
+| Duplicates removed | `ictz`, `jd5o`, `65b4`, `xn62`, `clean-build-lite-` |
+| Env vars | All `VITE_*` synced from `.env.local` → Production, Preview (`stable/2026-05-23`), Development |
 
-`scripts/vercel-should-build.sh` reads `projects/hud-v1/canonical.vercel` and still allows legacy name `clean-build-lite` until you remove it from `project.json`.
+Re-sync env after editing `.env.local`:
+
+```bash
+npm run env:sync-vercel
+```
+
+### You should still confirm in dashboard
+
+1. **Settings → Git → Production Branch** = `stable/2026-05-23`
+2. **Settings → Domains** — optional: add `hud-v1.vercel.app` alias
+3. **goodcitizenmedia133-ops** team — if you see extra `clean-build-lite-*` projects there (separate from `tjbunker133133-9220`), delete those too
+
+`scripts/vercel-should-build.sh` builds only project name in `projects/hud-v1/canonical.vercel` (`hud-v1`).
 
 ## Local folder (optional)
 
