@@ -1,17 +1,24 @@
 import {
   createForceUpdateMeta,
   FORCE_UPDATE_META_KEY,
+  FORCE_UPDATE_PENDING_KEY,
   mergeForceUpdateMeta,
   SW_DEFERRED_RELOAD_KEY,
 } from '../runtime/forceUpdateMeta'
+import { runPwaForceUpdateCycle } from '../runtime/pwaForceUpdate'
 import { traceAction } from '../runtime/actionTrace'
 
 function reloadWithUpdateQuery(): void {
-  const qs = new URLSearchParams(window.location.search)
-  qs.set('update', String(Date.now()))
-  const next =
-    `${window.location.pathname}?${qs.toString()}${window.location.hash || ''}`
-  window.location.href = next
+  const url = new URL(window.location.href)
+  url.searchParams.set('update', String(Date.now()))
+  url.searchParams.set('v', String(Date.now()))
+  window.location.replace(url.toString())
+}
+
+function readActivatePwaUpdate(): (() => void) | undefined {
+  if (typeof window === 'undefined') return undefined
+  const fn = (window as Window & { __hudActivatePwaUpdate?: () => void }).__hudActivatePwaUpdate
+  return typeof fn === 'function' ? fn : undefined
 }
 
 export async function forceUpdateApp(): Promise<void> {
@@ -19,6 +26,7 @@ export async function forceUpdateApp(): Promise<void> {
   console.log('[FORCE UPDATE] Checking SW')
   if (typeof window !== 'undefined') {
     try {
+      sessionStorage.setItem(FORCE_UPDATE_PENDING_KEY, '1')
       sessionStorage.setItem(
         FORCE_UPDATE_META_KEY,
         JSON.stringify(
@@ -34,61 +42,43 @@ export async function forceUpdateApp(): Promise<void> {
     }
   }
 
-  if ('serviceWorker' in navigator) {
-    try {
-      traceAction('force_update_app', 'async_start', { step: 'sw_registration_update' })
-      const regs = await navigator.serviceWorker.getRegistrations()
-      let waitingPresent = false
-      for (const reg of regs) {
-        await reg.update()
-        const waiting = reg.waiting
-        if (waiting) {
-          waitingPresent = true
-          waiting.postMessage({ type: 'SKIP_WAITING' })
-        }
-      }
-      if (import.meta.env.DEV) {
-        console.info('[HUD DEV] force-update-check', {
-          registrations: regs.length,
-          waitingPresent,
-          controllerUrl: navigator.serviceWorker.controller?.scriptURL ?? null,
-        })
-      }
-      traceAction('force_update_app', 'async_complete', {
-        step: 'sw_registration_update',
-        registrations: regs.length,
-        waitingPresent,
-      })
-    } catch (err) {
-      console.warn('[FORCE UPDATE ERROR]', err)
-      traceAction('force_update_app', 'failure', {
-        reason: 'sw_update_failed',
-        message: (err as Error)?.message ?? 'unknown',
-      })
+  try {
+    traceAction('force_update_app', 'async_start', { step: 'pwa_force_cycle' })
+    const result = await runPwaForceUpdateCycle({
+      activatePwaUpdate: readActivatePwaUpdate(),
+      maxWaitMs: 9000,
+    })
+    if (import.meta.env.DEV) {
+      console.info('[HUD DEV] force-update-cycle', result)
     }
-  } else {
-    traceAction('force_update_app', 'guard_reject', { reason: 'sw_unsupported' })
+    traceAction('force_update_app', 'async_complete', {
+      step: 'pwa_force_cycle',
+      ...result,
+    })
+  } catch (err) {
+    console.warn('[FORCE UPDATE ERROR]', err)
+    traceAction('force_update_app', 'failure', {
+      reason: 'pwa_force_cycle_failed',
+      message: (err as Error)?.message ?? 'unknown',
+    })
   }
 
-  console.log('[FORCE UPDATE] Triggered')
-  window.setTimeout(() => {
-    try {
-      const raw = sessionStorage.getItem(FORCE_UPDATE_META_KEY)
-      const parsed = raw ? (JSON.parse(raw) as Record<string, unknown>) : {}
-      sessionStorage.setItem(
-        FORCE_UPDATE_META_KEY,
-        JSON.stringify(
-          mergeForceUpdateMeta(parsed, {
-            reloadRequested: true,
-            reloadRequestedAt: Date.now(),
-          }),
-        ),
-      )
-    } catch {
-      // ignore storage failures
-    }
-    console.log('[FORCE UPDATE] Reloading')
-    traceAction('force_update_app', 'reload_requested', { source: 'force_update_timeout' })
-    reloadWithUpdateQuery()
-  }, 500)
+  console.log('[FORCE UPDATE] Reloading')
+  try {
+    const raw = sessionStorage.getItem(FORCE_UPDATE_META_KEY)
+    const parsed = raw ? (JSON.parse(raw) as Record<string, unknown>) : {}
+    sessionStorage.setItem(
+      FORCE_UPDATE_META_KEY,
+      JSON.stringify(
+        mergeForceUpdateMeta(parsed, {
+          reloadRequested: true,
+          reloadRequestedAt: Date.now(),
+        }),
+      ),
+    )
+  } catch {
+    // ignore storage failures
+  }
+  traceAction('force_update_app', 'reload_requested', { source: 'force_update_reload' })
+  reloadWithUpdateQuery()
 }

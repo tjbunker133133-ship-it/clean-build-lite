@@ -2,10 +2,15 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
+const buildId =
+  process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ||
+  process.env.VERCEL_DEPLOYMENT_ID ||
+  new Date().toISOString()
+
 export default defineConfig({
   define: {
-    'import.meta.env.VITE_BUILD_STAMP': JSON.stringify(new Date().toISOString()),
-    __BUILD_ID__: JSON.stringify(new Date().toISOString()),
+    'import.meta.env.VITE_BUILD_STAMP': JSON.stringify(buildId),
+    __BUILD_ID__: JSON.stringify(buildId),
   },
   plugins: [
     react(),

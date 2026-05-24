@@ -2,6 +2,8 @@ import { classifyBuildFreshness } from './buildFreshness'
 
 export const FORCE_UPDATE_META_KEY = 'hud_force_update_meta_v1'
 export const SW_DEFERRED_RELOAD_KEY = 'hud_sw_deferred_reload_v1'
+/** Set during operator force-update — bypass voice/gesture deferred SW reload. */
+export const FORCE_UPDATE_PENDING_KEY = 'hud_force_update_pending_v1'
 
 export type ForceUpdateMeta = {
   requestedAt: number

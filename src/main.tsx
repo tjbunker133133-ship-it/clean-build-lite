@@ -19,6 +19,7 @@ import { shouldDeferReloadOnControllerChange, shouldFlushDeferredReload } from '
 import {
   classifyStaleRuntimeReason,
   FORCE_UPDATE_META_KEY,
+  FORCE_UPDATE_PENDING_KEY,
   mergeForceUpdateMeta,
   SW_DEFERRED_RELOAD_KEY,
 } from './runtime/forceUpdateMeta'
@@ -85,6 +86,8 @@ if (import.meta.env.PROD) {
       updatePendingSwUpdate(false)
     },
   })
+  ;(window as Window & { __hudActivatePwaUpdate?: () => void }).__hudActivatePwaUpdate =
+    activateUpdate
 
   // Track SW lifecycle in detail for the runtime snapshot. Workbox-window's
   // events go through `controllerchange`; we also poll the registration once.
@@ -240,6 +243,25 @@ if (typeof window !== 'undefined') {
 
     navigator.serviceWorker.addEventListener('controllerchange', () => {
       traceAction('sw_controllerchange_reload', 'handler_enter', { source: 'controllerchange' })
+      let forceUpdatePending = false
+      try {
+        forceUpdatePending = sessionStorage.getItem(FORCE_UPDATE_PENDING_KEY) === '1'
+      } catch {
+        forceUpdatePending = false
+      }
+      if (forceUpdatePending) {
+        try {
+          sessionStorage.removeItem(FORCE_UPDATE_PENDING_KEY)
+        } catch {
+          /* ignore */
+        }
+        logInfo('SW', 'controllerchange — force-update reload (no defer)')
+        traceAction('sw_controllerchange_reload', 'reload_requested', {
+          source: 'force_update_pending',
+        })
+        window.location.reload()
+        return
+      }
       const snap = getRuntimeSnapshot()
       const inFlight =
         snap.voice.state === 'arming' ||

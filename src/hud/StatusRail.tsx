@@ -15,6 +15,7 @@ import {
   distancePointToRouteFeet,
 } from '../lib/corridor'
 import { useMapContext } from '../context/MapContext'
+import { formatBuildLabel } from '../runtime/buildLabel'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 import { emitHaptic } from '../runtime/haptics'
 import { getRuntimeSnapshot, subscribeRuntimeSnapshot } from '../runtime/runtimeSnapshot'
@@ -109,13 +110,14 @@ export default function StatusRail() {
   const statusRailBottomPx = installBannerVisible ? 88 : 8
   const wxAge = weatherAgeMin == null ? '--' : `${weatherAgeMin}m`
   const runtimeGuards = typeof window !== 'undefined' && !!(window as any).__hudRuntimeGuards
-  const buildStampRaw =
-    (import.meta as any)?.env?.VITE_BUILD_STAMP && typeof (import.meta as any).env.VITE_BUILD_STAMP === 'string'
-      ? (import.meta as any).env.VITE_BUILD_STAMP
-      : ''
-  const buildStamp = buildStampRaw
-    ? buildStampRaw.replace('T', ' ').slice(0, 16)
-    : 'unknown'
+  const envStamp = (import.meta.env as { VITE_BUILD_STAMP?: string }).VITE_BUILD_STAMP
+  const buildStamp = formatBuildLabel(
+    typeof __BUILD_ID__ === 'string' && __BUILD_ID__.length > 0
+      ? __BUILD_ID__
+      : typeof envStamp === 'string'
+        ? envStamp
+        : '',
+  )
   const mapText =
     mapStatus === 'ready'
       ? 'MAP OK'
