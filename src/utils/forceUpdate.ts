@@ -5,15 +5,8 @@ import {
   mergeForceUpdateMeta,
   SW_DEFERRED_RELOAD_KEY,
 } from '../runtime/forceUpdateMeta'
-import { runPwaForceUpdateCycle } from '../runtime/pwaForceUpdate'
+import { hardReloadWithCacheBust, runPwaForceUpdateCycle } from '../runtime/pwaForceUpdate'
 import { traceAction } from '../runtime/actionTrace'
-
-function reloadWithUpdateQuery(): void {
-  const url = new URL(window.location.href)
-  url.searchParams.set('update', String(Date.now()))
-  url.searchParams.set('v', String(Date.now()))
-  window.location.replace(url.toString())
-}
 
 function readActivatePwaUpdate(): (() => void) | undefined {
   if (typeof window === 'undefined') return undefined
@@ -47,6 +40,7 @@ export async function forceUpdateApp(): Promise<void> {
     const result = await runPwaForceUpdateCycle({
       activatePwaUpdate: readActivatePwaUpdate(),
       maxWaitMs: 9000,
+      hardReset: true,
     })
     if (import.meta.env.DEV) {
       console.info('[HUD DEV] force-update-cycle', result)
@@ -80,5 +74,5 @@ export async function forceUpdateApp(): Promise<void> {
     // ignore storage failures
   }
   traceAction('force_update_app', 'reload_requested', { source: 'force_update_reload' })
-  reloadWithUpdateQuery()
+  hardReloadWithCacheBust()
 }

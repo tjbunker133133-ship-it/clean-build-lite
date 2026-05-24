@@ -130,30 +130,45 @@ export function logActiveLayerTileDebug(layer: LayerType): void {
 }
 
 /**
- * MapTiler raster tile slugs for iOS/WebKit recovery when full vector style.json
- * stalls or fails (lighter than outdoor-v4 / topo-v4 / hybrid-v4 presets).
+ * Map IDs aligned with vector style.json paths — used for TileJSON raster recovery.
+ * XYZ template must include tile size: /maps/{id}/256/{z}/{x}/{y}.png
  */
-const MAPTILER_RASTER_SLUG: Record<MapStyleKey, string> = {
+const MAPTILER_RASTER_MAP_ID: Record<MapStyleKey, string> = {
   streets: 'openstreetmap',
-  outdoor: 'outdoor',
-  topo: 'topo-v2',
-  satellite: 'hybrid',
+  outdoor: 'outdoor-v4',
+  topo: 'topo-v4',
+  satellite: 'hybrid-v4',
 }
 
 /**
- * Per-layer MapTiler raster fallback (same API key). Used before generic OSM emergency.
+ * Per-layer MapTiler raster fallback via TileJSON (same presets as vector URLs).
+ * Used when vector style.json stalls on WebKit or errors at runtime.
  */
 export function getMapTilerRasterFallbackStyle(layer: MapStyleKey): StyleSpecification | null {
   const key = maptilerKey()
   if (!key) return null
-  const slug = MAPTILER_RASTER_SLUG[layer]
-  const ext = layer === 'satellite' ? 'jpg' : 'png'
-  const tiles = [`https://api.maptiler.com/maps/${slug}/{z}/{x}/{y}.${ext}?key=${key}`]
-  return rasterStyle(
-    `maptiler-raster-${layer}`,
-    tiles,
-    '© MapTiler © OpenStreetMap contributors',
-  )
+  const mapId = MAPTILER_RASTER_MAP_ID[layer]
+  const sourceId = `maptiler-raster-${layer}`
+  return {
+    version: 8,
+    sources: {
+      [sourceId]: {
+        type: 'raster',
+        url: `https://api.maptiler.com/maps/${mapId}/256/tiles.json?key=${key}`,
+        tileSize: 256,
+        attribution: '© MapTiler © OpenStreetMap contributors',
+      },
+    },
+    layers: [
+      {
+        id: sourceId,
+        type: 'raster',
+        source: sourceId,
+        minzoom: 0,
+        maxzoom: 22,
+      },
+    ],
+  }
 }
 
 export function mapTilerRasterFallbackFingerprint(layer: MapStyleKey): string | null {
@@ -163,24 +178,17 @@ export function mapTilerRasterFallbackFingerprint(layer: MapStyleKey): string | 
 
 export type BasemapDelivery = 'vector' | 'maptiler-raster'
 
-/**
- * iOS Safari / installed PWA: full MapTiler vector style.json often stalls or leaves a
- * black canvas. Per-layer MapTiler raster tiles are lighter and switch reliably.
- */
-export function preferRasterBasemapOnAppleWebKit(): boolean {
+/** Apple WebKit: longer style-switch timeouts; vector primary (same as Android). */
+export function isAppleWebKitMapSwitch(): boolean {
   const p = getDeviceProfile()
   return p.isIOS || (p.isAppleWebKit && (p.isPWA || p.isStandalone))
 }
 
-/** Basemap target for the current platform (vector URL or per-layer MapTiler raster). */
+/** Primary basemap: MapTiler vector style.json (raster only used in MapCanvas recovery). */
 export function resolveBasemapStyle(layer: MapStyleKey): {
   style: string | StyleSpecification
   delivery: BasemapDelivery
 } {
-  if (preferRasterBasemapOnAppleWebKit()) {
-    const raster = getMapTilerRasterFallbackStyle(layer)
-    if (raster) return { style: raster, delivery: 'maptiler-raster' }
-  }
   return { style: getStyleUrl(layer), delivery: 'vector' }
 }
 

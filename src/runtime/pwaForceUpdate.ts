@@ -1,7 +1,18 @@
 /**
- * Production PWA force-update helpers (Android Chrome / installed PWAs).
+ * Production PWA force-update helpers (Android Chrome / iOS Safari / installed PWAs).
  * Clears Workbox caches, activates waiting workers, and waits for controller turnover.
  */
+
+/** Cache-busting navigation — required on iOS Safari where plain reload keeps stale bundles. */
+export function hardReloadWithCacheBust(): void {
+  if (typeof window === 'undefined') return
+  const url = new URL(window.location.href)
+  const stamp = String(Date.now())
+  url.searchParams.set('update', stamp)
+  url.searchParams.set('v', stamp)
+  url.searchParams.set('hud_update', stamp)
+  window.location.replace(url.toString())
+}
 
 export async function clearWorkboxCaches(): Promise<number> {
   if (typeof window === 'undefined' || !('caches' in window)) return 0
@@ -61,10 +72,24 @@ export function waitForServiceWorkerControllerChange(timeoutMs: number): Promise
 export async function runPwaForceUpdateCycle(options?: {
   activatePwaUpdate?: () => void
   maxWaitMs?: number
+  /** Operator force-update: unregister SW + clear caches (iOS-safe) without waiting on controllerchange. */
+  hardReset?: boolean
 }): Promise<{ controllerChanged: boolean; cachesCleared: number; unregistered: boolean }> {
   const maxWaitMs = options?.maxWaitMs ?? 8000
-  const cachesCleared = await clearWorkboxCaches()
+  let cachesCleared = await clearWorkboxCaches()
   options?.activatePwaUpdate?.()
+
+  if (options?.hardReset) {
+    await refreshServiceWorkerRegistrations()
+    const unregisteredCount = await unregisterAllServiceWorkers()
+    cachesCleared += await clearWorkboxCaches()
+    return {
+      controllerChanged: false,
+      cachesCleared,
+      unregistered: unregisteredCount > 0,
+    }
+  }
+
   let regs = await refreshServiceWorkerRegistrations()
   let controllerChanged = await waitForServiceWorkerControllerChange(maxWaitMs)
 

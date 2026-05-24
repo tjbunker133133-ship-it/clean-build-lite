@@ -8,7 +8,7 @@ import {
   mapStyleFingerprint,
   mapTilerRasterFallbackFingerprint,
   maptilerTerrainRgbTileJson,
-  preferRasterBasemapOnAppleWebKit,
+  isAppleWebKitMapSwitch,
   resolveBasemapStyle,
   validatedEmergencyFallbackStyle,
 } from './mapStyles'
@@ -60,21 +60,22 @@ describe('MAP_STYLES (hard-locked registry)', () => {
       expect(fp).not.toBe(mapStyleFingerprint(getStyleUrl(layer)))
       const style = getMapTilerRasterFallbackStyle(layer)
       expect(style?.sources).toBeTruthy()
-      const src = Object.values(style!.sources)[0] as { tiles?: string[] }
-      expect(src.tiles?.[0]).toContain('api.maptiler.com')
+      const src = Object.values(style!.sources)[0] as { url?: string }
+      expect(src.url).toContain('api.maptiler.com')
+      expect(src.url).toContain('/256/tiles.json')
     }
     const fps = ALL_LAYERS.map((layer) => mapTilerRasterFallbackFingerprint(layer))
     expect(new Set(fps).size).toBe(ALL_LAYERS.length)
   })
 })
 
-describe('resolveBasemapStyle (Apple WebKit)', () => {
+describe('resolveBasemapStyle', () => {
   afterEach(() => {
     __resetDeviceProfileForTests()
     vi.unstubAllGlobals()
   })
 
-  it('prefers MapTiler raster on iPhone', () => {
+  it('uses vector style URLs on iPhone (same path as Android/desktop)', () => {
     vi.stubGlobal('navigator', {
       userAgent:
         'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
@@ -86,30 +87,24 @@ describe('resolveBasemapStyle (Apple WebKit)', () => {
       matchMedia: () => ({ matches: false, addEventListener: undefined }),
     })
     refreshDeviceProfile()
-    expect(preferRasterBasemapOnAppleWebKit()).toBe(true)
+    expect(isAppleWebKitMapSwitch()).toBe(true)
     const topo = resolveBasemapStyle('topo')
-    expect(topo.delivery).toBe('maptiler-raster')
-    expect(mapStyleFingerprint(topo.style)).toContain('maptiler-raster-topo')
+    expect(topo.delivery).toBe('vector')
+    expect(topo.style).toBe(MAP_STYLES.topo)
     const streets = resolveBasemapStyle('streets')
-    expect(streets.delivery).toBe('maptiler-raster')
-    expect(mapStyleFingerprint(streets.style)).not.toBe(mapStyleFingerprint(topo.style))
+    expect(streets.style).toBe(MAP_STYLES.streets)
   })
 
-  it('uses vector style URLs on desktop Chrome', () => {
-    vi.stubGlobal('navigator', {
-      userAgent:
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      maxTouchPoints: 0,
-    })
-    vi.stubGlobal('window', {
-      innerWidth: 1280,
-      innerHeight: 800,
-      matchMedia: () => ({ matches: false, addEventListener: undefined }),
-    })
-    refreshDeviceProfile()
-    const resolved = resolveBasemapStyle('satellite')
-    expect(preferRasterBasemapOnAppleWebKit()).toBe(false)
-    expect(resolved.delivery).toBe('vector')
-    expect(resolved.style).toBe(MAP_STYLES.satellite)
+  it('MapTiler raster fallback uses TileJSON per layer', () => {
+    const topo = getMapTilerRasterFallbackStyle('topo')
+    const satellite = getMapTilerRasterFallbackStyle('satellite')
+    expect(topo?.sources).toBeTruthy()
+    const topoSrc = Object.values(topo!.sources)[0] as { url?: string }
+    expect(topoSrc.url).toContain('topo-v4/256/tiles.json')
+    const satSrc = Object.values(satellite!.sources)[0] as { url?: string }
+    expect(satSrc.url).toContain('hybrid-v4/256/tiles.json')
+    expect(mapTilerRasterFallbackFingerprint('topo')).not.toBe(
+      mapTilerRasterFallbackFingerprint('satellite'),
+    )
   })
 })

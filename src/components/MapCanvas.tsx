@@ -14,7 +14,7 @@ import {
   logActiveLayerTileDebug,
   mapStyleFingerprint,
   maptilerTerrainRgbTileJson,
-  preferRasterBasemapOnAppleWebKit,
+  isAppleWebKitMapSwitch,
   resolveBasemapStyle,
   validatedEmergencyFallbackStyle,
 } from '../lib/mapStyles'
@@ -228,20 +228,20 @@ function nudgeMapRenderAfterStyleChange(map: maplibregl.Map): void {
   repaint()
   requestAnimationFrame(() => {
     repaint()
-    if (preferRasterBasemapOnAppleWebKit()) {
+    if (isAppleWebKitMapSwitch()) {
       requestAnimationFrame(repaint)
     }
   })
 }
 
 function layerSwitchTimeouts(): { fallbackOverlayMs: number; stallMs: number; maxRetry: number } {
-  const appleRaster = preferRasterBasemapOnAppleWebKit()
+  const apple = isAppleWebKitMapSwitch()
   const iosField = isIosFieldHud()
   const { isAppleWebKit, isPWA } = getDeviceProfile()
   const iosLike = iosField || isAppleWebKit || isPWA
   return {
     fallbackOverlayMs: iosLike ? 1800 : 1400,
-    stallMs: appleRaster ? 8000 : iosLike ? 12000 : 12000,
+    stallMs: apple ? 10000 : iosLike ? 12000 : 12000,
     maxRetry: iosLike ? 1 : 0,
   }
 }
@@ -1225,6 +1225,7 @@ export default function MapCanvas() {
     let styleFallbackTimer: number | null = null
     let stallRecoverTimer: number | null = null
     let styleReady = false
+    let styleLoadSeen = false
     let recoveryMode: 'none' | 'maptiler-raster' | 'osm-emergency' = 'none'
     let vectorRetryCount = 0
 
@@ -1282,41 +1283,35 @@ export default function MapCanvas() {
     }
 
     function onData() {
+      if (!styleLoadSeen) return
       if (mapCtl.isStyleLoaded()) markStyleReady('data')
-    }
-
-    function onLoadOnce() {
-      if (cancelled || gen !== styleSwitchGenRef.current) return
-      markStyleReady('load')
     }
 
     function onIdleOnce() {
       if (cancelled || gen !== styleSwitchGenRef.current) return
+      if (!styleLoadSeen) return
       markStyleReady('idle')
     }
 
     function onStyleLoadOnce() {
       if (cancelled || gen !== styleSwitchGenRef.current) return
+      styleLoadSeen = true
       try {
         syncTopoTerrain(mapCtl, activeLayer)
       } catch {
         /* ignore */
       }
+      nudgeMapRenderAfterStyleChange(mapCtl)
     }
 
     function bindStyleReadyHandlers() {
-      mapCtl.once('load', onLoadOnce)
+      styleLoadSeen = false
       mapCtl.once('idle', onIdleOnce)
       mapCtl.on('data', onData)
       mapCtl.once('style.load', onStyleLoadOnce)
     }
 
     function unbindStyleReadyHandlers() {
-      try {
-        mapCtl.off('load', onLoadOnce)
-      } catch {
-        /* ignore */
-      }
       try {
         mapCtl.off('idle', onIdleOnce)
       } catch {
@@ -1402,7 +1397,7 @@ export default function MapCanvas() {
 
     function retryVectorStyle(reason: string): boolean {
       if (vectorRetryCount >= maxRetry) return false
-      if (switchDelivery === 'maptiler-raster' && preferRasterBasemapOnAppleWebKit()) {
+      if (switchDelivery === 'maptiler-raster') {
         return false
       }
       vectorRetryCount += 1

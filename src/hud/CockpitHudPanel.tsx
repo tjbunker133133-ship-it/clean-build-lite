@@ -276,9 +276,9 @@ export default function CockpitHudPanel({
   const iosFieldHud = isIosFieldHud()
   const mobileFieldHud = isMobileFieldHud()
   const isMobile = profile.interactionMode === 'mobile'
-  /** iOS + Android field HUD: compact header (S/M/L + A + minimize). Desktop/tablet hybrid keeps full row. */
-  const showMobileHeaderExtras = isMobile && !mobileFieldHud
-  const showCompactFieldHeaderExtras = mobileFieldHud && isMobile
+  /** All mobile interaction (iOS + Android + tablets): compact S/M/L + A + minimize only. */
+  const showMobileHeaderExtras = false
+  const showCompactFieldHeaderExtras = isMobile
   const isCoarsePointer = profile.isCoarsePointer
   const mobileTopInset = useMemo(() => cockpitMobileTopInset(), [])
   const mobileSideInsets = useMemo(() => {
@@ -1115,7 +1115,7 @@ export default function CockpitHudPanel({
         Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) <= 18
       mobileLastTapRef.current = { ts: now, x: e.clientX, y: e.clientY }
       // iOS field HUD: double-tap maximize fights drag; minimize-only chrome instead.
-      if (isDoubleTap && !mobileFieldHud) {
+      if (isDoubleTap && !isMobile) {
         if (mobileDragHoldTimerRef.current != null) {
           window.clearTimeout(mobileDragHoldTimerRef.current)
           mobileDragHoldTimerRef.current = null

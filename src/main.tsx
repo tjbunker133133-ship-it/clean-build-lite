@@ -23,6 +23,7 @@ import {
   mergeForceUpdateMeta,
   SW_DEFERRED_RELOAD_KEY,
 } from './runtime/forceUpdateMeta'
+import { hardReloadWithCacheBust } from './runtime/pwaForceUpdate'
 import { traceAction } from './runtime/actionTrace'
 import { hudDevLog } from './lib/tier1DebugLog'
 
@@ -259,7 +260,7 @@ if (typeof window !== 'undefined') {
         traceAction('sw_controllerchange_reload', 'reload_requested', {
           source: 'force_update_pending',
         })
-        window.location.reload()
+        hardReloadWithCacheBust()
         return
       }
       const snap = getRuntimeSnapshot()
