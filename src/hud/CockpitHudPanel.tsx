@@ -6,7 +6,7 @@ import { DURATION_MS, EASE } from '../types/cockpit'
 import { DesktopInteractionController } from '../controllers/DesktopInteractionController'
 import { MobileInteractionController } from '../controllers/MobileInteractionController'
 import type { DockRequestSource } from '../controllers/InteractionController'
-import { getDeviceProfile } from '../runtime/deviceProfile'
+import { getDeviceProfile, isIosFieldHud } from '../runtime/deviceProfile'
 import { updateActiveController } from '../runtime/runtimeSnapshot'
 import { assertPolicy, reportPolicyAttempt } from '../runtime/devicePolicy'
 import { isHudVerboseDebug, hudDevLog } from '../lib/tier1DebugLog'
@@ -272,7 +272,10 @@ export default function CockpitHudPanel({
   const profile = getDeviceProfile()
   const wantsReducedMotion = profile.prefersReducedMotion
   const isIOSWebKit = profile.isIOS
+  const iosFieldHud = isIosFieldHud()
   const isMobile = profile.interactionMode === 'mobile'
+  /** Android/tablet mobile keeps extra header controls; iPhone field HUD is minimize-only. */
+  const showMobileHeaderExtras = isMobile && !iosFieldHud
   const isCoarsePointer = profile.isCoarsePointer
   const mobileTopInset = useMemo(() => cockpitMobileTopInset(), [])
   const mobileSideInsets = useMemo(() => {
@@ -280,7 +283,9 @@ export default function CockpitHudPanel({
     return { left: s.left, right: s.right }
   }, [])
   const mobileTapMin = touchMinTarget(isMobile)
-  const dragThreshold = isIOSWebKit ? 14 : isCoarsePointer ? 12 : DRAG_THRESHOLD_PX
+  const mobileDragHoldMs = iosFieldHud ? 20 : MOBILE_DRAG_HOLD_MS
+  const mobilePredragTolerancePx = iosFieldHud ? 24 : MOBILE_PREDRAG_TOLERANCE_PX
+  const dragThreshold = isIOSWebKit ? 12 : isCoarsePointer ? 12 : DRAG_THRESHOLD_PX
   const edgeDockZone = isMobile
     ? Math.max(10, Math.round(EDGE_DOCK_ZONE_PX * 0.6))
     : isIOSWebKit
@@ -1106,7 +1111,8 @@ export default function CockpitHudPanel({
         now - lastTap.ts <= MOBILE_DOUBLE_TAP_MS &&
         Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) <= 18
       mobileLastTapRef.current = { ts: now, x: e.clientX, y: e.clientY }
-      if (isDoubleTap) {
+      // iOS field HUD: double-tap maximize fights drag; minimize-only chrome instead.
+      if (isDoubleTap && !iosFieldHud) {
         if (mobileDragHoldTimerRef.current != null) {
           window.clearTimeout(mobileDragHoldTimerRef.current)
           mobileDragHoldTimerRef.current = null
@@ -1143,11 +1149,30 @@ export default function CockpitHudPanel({
         window.removeEventListener('pointerup', onPreDragEnd)
         window.removeEventListener('pointercancel', onPreDragEnd)
       }
+      const acquireMobileDrag = () => {
+        const press = mobilePressRef.current
+        if (press.cancelled || press.longPressArmed) return
+        press.longPressArmed = true
+        clearHold()
+        teardown()
+        setGlow(true)
+        dragStartScreen.current = { x: press.startX, y: press.startY }
+        drag.current = {
+          dx: press.startX - posRef.current.x,
+          dy: press.startY - posRef.current.y,
+        }
+        logInfo('MOBILE_UI', `drag-acquired panel=${panelId} source=ios-move`)
+        interactionController.onDragStart(() => setDragMode('move'))
+      }
       const onPreDragMove = (ev: PointerEvent) => {
         const press = mobilePressRef.current
         if (press.pointerId == null || ev.pointerId !== press.pointerId) return
         const dist = Math.hypot(ev.clientX - press.startX, ev.clientY - press.startY)
-        if (dist > MOBILE_PREDRAG_TOLERANCE_PX && !press.longPressArmed) {
+        if (iosFieldHud && dist > 6 && !press.longPressArmed && !press.cancelled) {
+          acquireMobileDrag()
+          return
+        }
+        if (dist > mobilePredragTolerancePx && !press.longPressArmed) {
           press.cancelled = true
           clearHold()
           teardown()
@@ -1201,7 +1226,7 @@ export default function CockpitHudPanel({
           acquisitionMs: Math.round(acquisitionMs),
         })
         interactionController.onDragStart(() => setDragMode('move'))
-      }, MOBILE_DRAG_HOLD_MS)
+      }, mobileDragHoldMs)
       return
     }
 
@@ -1701,7 +1726,7 @@ export default function CockpitHudPanel({
               {dockedHeaderTrailing ? (
                 <span style={{ pointerEvents: 'auto', flexShrink: 0 }}>{dockedHeaderTrailing}</span>
               ) : null}
-              {isMobile && !docked ? (
+              {showMobileHeaderExtras && !docked ? (
                 <span
                   data-no-drag
                   title="Panel text size"
@@ -1767,7 +1792,7 @@ export default function CockpitHudPanel({
                   </button>
                 </span>
               ) : null}
-              {isMobile ? (
+              {showMobileHeaderExtras ? (
                 <button
                   type="button"
                   data-no-drag
@@ -1799,7 +1824,7 @@ export default function CockpitHudPanel({
                   {isMaximized ? 'Restore' : 'Max'}
                 </button>
               ) : null}
-              {isMobile && !docked ? (
+              {showMobileHeaderExtras && !docked ? (
                 <button
                   type="button"
                   data-no-drag
@@ -1895,7 +1920,9 @@ export default function CockpitHudPanel({
               >
                 ▬
               </button>
-              <span style={{ opacity: 0.65, fontSize: 8, color: panelSubtleText }}>⋮⋮</span>
+              {!iosFieldHud ? (
+                <span style={{ opacity: 0.65, fontSize: 8, color: panelSubtleText }}>⋮⋮</span>
+              ) : null}
             </div>
           </>
         )}

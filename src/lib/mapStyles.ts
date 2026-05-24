@@ -128,6 +128,38 @@ export function logActiveLayerTileDebug(layer: LayerType): void {
   console.log('LAYER STYLE URL:', url.replace(/key=[^&]+/i, 'key=<redacted>'))
 }
 
+/**
+ * MapTiler raster tile slugs for iOS/WebKit recovery when full vector style.json
+ * stalls or fails (lighter than outdoor-v4 / topo-v4 / hybrid-v4 presets).
+ */
+const MAPTILER_RASTER_SLUG: Record<MapStyleKey, string> = {
+  streets: 'openstreetmap',
+  outdoor: 'outdoor',
+  topo: 'topo-v2',
+  satellite: 'hybrid',
+}
+
+/**
+ * Per-layer MapTiler raster fallback (same API key). Used before generic OSM emergency.
+ */
+export function getMapTilerRasterFallbackStyle(layer: MapStyleKey): StyleSpecification | null {
+  const key = maptilerKey()
+  if (!key) return null
+  const slug = MAPTILER_RASTER_SLUG[layer]
+  const ext = layer === 'satellite' ? 'jpg' : 'png'
+  const tiles = [`https://api.maptiler.com/maps/${slug}/{z}/{x}/{y}.${ext}?key=${key}`]
+  return rasterStyle(
+    `maptiler-raster-${layer}`,
+    tiles,
+    '© MapTiler © OpenStreetMap contributors',
+  )
+}
+
+export function mapTilerRasterFallbackFingerprint(layer: MapStyleKey): string | null {
+  const style = getMapTilerRasterFallbackStyle(layer)
+  return style ? mapStyleFingerprint(style) : null
+}
+
 export const WAYPOINT_COLORS: Record<string, string> = {
   default: '#00ffb4',
   camp: '#ffe033',

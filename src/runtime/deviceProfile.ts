@@ -218,3 +218,12 @@ export function getSessionLockedInteractionMode(): InteractionMode {
   if (sessionLockedInteractionMode != null) return sessionLockedInteractionMode
   return getDeviceProfile().interactionMode
 }
+
+/**
+ * iPhone / iPad field HUD (mobile interaction, Apple WebKit).
+ * Use for iOS-only UX paths — do not gate Android or desktop behavior on this.
+ */
+export function isIosFieldHud(): boolean {
+  const p = getDeviceProfile()
+  return p.isIOS && p.interactionMode === 'mobile'
+}

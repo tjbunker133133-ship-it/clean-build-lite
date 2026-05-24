@@ -43,6 +43,8 @@ export default function InstallHelperBanner() {
   // browsers expose install via the address bar and that path is
   // sufficient for the planning-cockpit experience.
   if (profile.interactionMode !== 'mobile') return null
+  // Belt-and-suspenders: cached install snapshot can lag one tick behind PWA standalone.
+  if (profile.isStandalone || profile.isPWA) return null
   if (snap.installMode.standalone) return null
   if (!snap.installMode.eligible) return null
   if (dismissed) return null

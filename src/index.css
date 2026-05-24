@@ -214,6 +214,15 @@ html.platform-ios .cockpit-panel {
 html.platform-ios .cockpit-panel [role="banner"] {
   letter-spacing: 0.14em !important;
   min-height: 48px;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* iPhone field HUD: single minimize control — avoid cramped multi-button headers. */
+html.platform-ios .cockpit-panel [role="banner"] button {
+  min-height: 48px;
+  min-width: 48px;
 }
 
 html.platform-ios .cockpit-panel {

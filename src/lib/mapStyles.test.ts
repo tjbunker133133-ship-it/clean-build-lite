@@ -3,8 +3,10 @@ import type { LayerType } from '../types'
 import {
   FALLBACK_MAP_STYLE,
   MAP_STYLES,
+  getMapTilerRasterFallbackStyle,
   getStyleUrl,
   mapStyleFingerprint,
+  mapTilerRasterFallbackFingerprint,
   maptilerTerrainRgbTileJson,
   validatedEmergencyFallbackStyle,
 } from './mapStyles'
@@ -46,5 +48,19 @@ describe('MAP_STYLES (hard-locked registry)', () => {
     expect(fb).not.toBeNull()
     expect(fb!.version).toBe(8)
     expect(fb).toEqual(FALLBACK_MAP_STYLE)
+  })
+
+  it('MapTiler raster fallback differs per layer and from vector URLs', () => {
+    for (const layer of ALL_LAYERS) {
+      const fp = mapTilerRasterFallbackFingerprint(layer)
+      expect(fp).toBeTruthy()
+      expect(fp).not.toBe(mapStyleFingerprint(getStyleUrl(layer)))
+      const style = getMapTilerRasterFallbackStyle(layer)
+      expect(style?.sources).toBeTruthy()
+      const src = Object.values(style!.sources)[0] as { tiles?: string[] }
+      expect(src.tiles?.[0]).toContain('api.maptiler.com')
+    }
+    const fps = ALL_LAYERS.map((layer) => mapTilerRasterFallbackFingerprint(layer))
+    expect(new Set(fps).size).toBe(ALL_LAYERS.length)
   })
 })
