@@ -22,7 +22,7 @@ export function iosInstallCopy(isTablet: boolean): IosInstallCopy {
     steps: [
       shareWhere,
       'Scroll the menu and tap Add to Home Screen',
-      'Tap Add (top right), then open TacticalHUD from your Home Screen',
+      'Tap Add (top right), then open HUD V1 from your Home Screen',
     ],
     avoid: 'Skip Add Bookmark and Add to Favorites — those stay inside Safari only.',
   }

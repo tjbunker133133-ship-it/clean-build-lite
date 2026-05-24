@@ -16,9 +16,14 @@ if [ "${VERCEL_CANONICAL_PROJECT:-}" = "1" ]; then
 fi
 
 if [ "${VERCEL_GIT_COMMIT_REF:-}" = "stable/2026-05-23" ]; then
-  case "${VERCEL_PROJECT_NAME:-}" in
-    clean-build-lite) exit 1 ;;
-  esac
+  CANONICAL="$(tr -d '\r\n' < projects/hud-v1/canonical.vercel 2>/dev/null || echo hud-v1)"
+  if [ "${VERCEL_PROJECT_NAME:-}" = "$CANONICAL" ]; then
+    exit 1
+  fi
+  # Legacy Vercel project names until dashboard cleanup (see projects/hud-v1/DEPLOY.md).
+  if [ "${VERCEL_PROJECT_NAME:-}" = "clean-build-lite" ]; then
+    exit 1
+  fi
 fi
 
 exit 0

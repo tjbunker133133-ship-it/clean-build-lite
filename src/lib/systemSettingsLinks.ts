@@ -159,7 +159,7 @@ export async function copyTextToClipboard(text: string): Promise<boolean> {
 
 export function safariLocationFixClipboardLines(): string {
   return [
-    'Tactical HUD — enable location (Safari / iPhone)',
+    'HUD V.1 — enable location (Safari / iPhone)',
     '1) Settings → Privacy & Security → Location Services → ON',
     '2) Settings → Safari → Location → While Using or Ask',
     '3) Safari → aA → Website Settings → Location → Allow or Ask',
@@ -170,7 +170,7 @@ export function safariLocationFixClipboardLines(): string {
 
 export function androidLocationFixClipboardLines(): string {
   return [
-    'Tactical HUD — enable location (Android)',
+    'HUD V.1 — enable location (Android)',
     '1) Settings → Location ON',
     '2) Chrome → ⋮ → Settings → Site settings → Location → allow this site',
     '3) Return to HUD → tap PROMPT GPS',

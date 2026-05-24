@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
+import project from './projects/hud-v1/project.json'
 
 const buildId =
   process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ||
@@ -10,6 +11,8 @@ const buildId =
 export default defineConfig({
   define: {
     'import.meta.env.VITE_BUILD_STAMP': JSON.stringify(buildId),
+    'import.meta.env.VITE_APP_VERSION': JSON.stringify(project.version),
+    'import.meta.env.VITE_APP_NAME': JSON.stringify(project.displayName),
     __BUILD_ID__: JSON.stringify(buildId),
   },
   plugins: [
@@ -18,9 +21,9 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['hud-icon.svg'],
       manifest: {
-        name: 'Tactical HUD',
-        short_name: 'TacticalHUD',
-        description: 'Mobile tactical navigation HUD',
+        name: project.displayName,
+        short_name: project.shortName,
+        description: `${project.displayName} — mobile tactical navigation HUD`,
         theme_color: '#0a0c0d',
         background_color: '#0a0c0d',
         display: 'standalone',

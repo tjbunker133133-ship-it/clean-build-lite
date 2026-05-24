@@ -63,7 +63,7 @@ export default function InstallHelperBanner() {
   return (
     <div
       role="status"
-      aria-label={platform === 'ios' ? 'Add Tactical HUD to Home Screen' : 'Install HUD'}
+      aria-label={platform === 'ios' ? 'Add HUD V.1 to Home Screen' : 'Install HUD V.1'}
       style={{
         position: 'fixed',
         bottom: 'calc(env(safe-area-inset-bottom, 0px) + 12px)',
