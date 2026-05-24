@@ -9,6 +9,7 @@ import {
   sanitizeMobilePanelRect,
   chooseMobileMinimizeDockSideAutoBalance,
   clampMobilePanelFontScale,
+  cycleMobilePanelFontScalePreset,
   mobileFloatingCommitCoords,
   MOBILE_DENSITY_COLLAPSE_IDLE_MS,
   MOBILE_DRAG_EDGE_DOCK_DISABLED,
@@ -43,6 +44,15 @@ describe('clampMobilePanelFontScale', () => {
 
   it('non-finite falls back to 1', () => {
     expect(clampMobilePanelFontScale(Number.NaN)).toBe(1)
+  })
+})
+
+describe('cycleMobilePanelFontScalePreset', () => {
+  it('steps through presets and wraps', () => {
+    expect(cycleMobilePanelFontScalePreset(0.9)).toBe(1)
+    expect(cycleMobilePanelFontScalePreset(1)).toBe(1.15)
+    expect(cycleMobilePanelFontScalePreset(1.15)).toBe(1.25)
+    expect(cycleMobilePanelFontScalePreset(1.25)).toBe(0.9)
   })
 })
 

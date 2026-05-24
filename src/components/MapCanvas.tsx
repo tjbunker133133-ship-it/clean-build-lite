@@ -9,10 +9,13 @@ import type { LayerType, Waypoint } from '../types'
 import {
   getMapTilerRasterFallbackStyle,
   getStyleUrl,
+  type BasemapDelivery,
   type MapStyleKey,
   logActiveLayerTileDebug,
   mapStyleFingerprint,
   maptilerTerrainRgbTileJson,
+  preferRasterBasemapOnAppleWebKit,
+  resolveBasemapStyle,
   validatedEmergencyFallbackStyle,
 } from '../lib/mapStyles'
 import {
@@ -191,54 +194,54 @@ function syncTopoTerrain(map: maplibregl.Map, layer: LayerType) {
   }
 }
 
-/** Layer panel / state use keys only (`LayerType` ≡ `MapStyleKey`); URLs come from `getStyleUrl`. */
+/** Layer panel uses keys only; skip when same layer is already loaded (not URL string alone). */
 function prepareBasemapSwitch(
   map: maplibregl.Map,
   styleKey: MapStyleKey,
-  currentStyleRef: MutableRefObject<string | null>,
-): { skip: true } | { skip: false; url: string } {
-  const nextStyle = getStyleUrl(styleKey)
-  // Only skip when the style is already applied AND loaded. Updating the ref before
-  // `setStyle` completes (old bug) left iOS stuck: ref matched but map never switched.
-  if (currentStyleRef.current === nextStyle) {
+  currentAppliedLayerRef: MutableRefObject<LayerType | null>,
+): { skip: true } | { skip: false; style: string | maplibregl.StyleSpecification; delivery: BasemapDelivery } {
+  if (currentAppliedLayerRef.current === styleKey) {
     try {
       if (map.isStyleLoaded()) return { skip: true }
     } catch {
       /* style churn */
     }
   }
-  return { skip: false, url: nextStyle }
+  const resolved = resolveBasemapStyle(styleKey)
+  return { skip: false, style: resolved.style, delivery: resolved.delivery }
 }
 
 /** Safari/WebKit often needs an explicit resize/repaint after `setStyle`. */
 function nudgeMapRenderAfterStyleChange(map: maplibregl.Map): void {
-  try {
-    map.resize()
-  } catch {
-    /* ignore */
-  }
-  try {
-    ;(map as maplibregl.Map & { triggerRepaint?: () => void }).triggerRepaint?.()
-  } catch {
-    /* ignore */
-  }
-  requestAnimationFrame(() => {
+  const repaint = () => {
     try {
       map.resize()
+    } catch {
+      /* ignore */
+    }
+    try {
       ;(map as maplibregl.Map & { triggerRepaint?: () => void }).triggerRepaint?.()
     } catch {
       /* ignore */
+    }
+  }
+  repaint()
+  requestAnimationFrame(() => {
+    repaint()
+    if (preferRasterBasemapOnAppleWebKit()) {
+      requestAnimationFrame(repaint)
     }
   })
 }
 
 function layerSwitchTimeouts(): { fallbackOverlayMs: number; stallMs: number; maxRetry: number } {
+  const appleRaster = preferRasterBasemapOnAppleWebKit()
   const iosField = isIosFieldHud()
   const { isAppleWebKit, isPWA } = getDeviceProfile()
   const iosLike = iosField || isAppleWebKit || isPWA
   return {
-    fallbackOverlayMs: iosLike ? 2800 : 1400,
-    stallMs: iosField ? 24000 : iosLike ? 20000 : 12000,
+    fallbackOverlayMs: iosLike ? 1800 : 1400,
+    stallMs: appleRaster ? 8000 : iosLike ? 12000 : 12000,
     maxRetry: iosLike ? 1 : 0,
   }
 }
@@ -285,9 +288,9 @@ export default function MapCanvas() {
   const setDebugClickRef = useRef(setDebugClick)
   setDebugClickRef.current = setDebugClick
   const { map: mapInstance, setMap, setStatus, status: mapStatus } = useMapContext()
-  /** Hide the loading/fallback bubble once the map is ready (common iOS PWA stuck-overlay case). */
+  /** Hide once booted — avoids stuck center overlay on iOS/Android PWA after style churn. */
   const showMapFallbackBubble =
-    staticFallbackVisible && mapStatus !== 'ready' && mapStatus !== 'unsupported'
+    staticFallbackVisible && mapStatus === 'initial' && !mapReady
   const gps = useGPS()
   const gpsRef = useRef(gps)
   gpsRef.current = gps
@@ -351,6 +354,7 @@ export default function MapCanvas() {
   const styleSwitchGenRef = useRef(0)
   /** Last applied basemap style URL — duplicate `setStyle` guard. */
   const currentStyleRef = useRef<string | null>(null)
+  const currentAppliedLayerRef = useRef<LayerType | null>(null)
   const setStatusRef = useRef(setStatus)
   setStatusRef.current = setStatus
   const devResizeDiagRef = useRef({
@@ -564,10 +568,16 @@ export default function MapCanvas() {
       setStaticFallbackVisible(true)
       setStatus('initial')
 
-      const initLayer = activeLayerRef.current
-      const initialStyle = getStyleUrl(initLayer as MapStyleKey)
-      currentStyleRef.current = initialStyle
+      const initLayer = activeLayerRef.current as MapStyleKey
+      const bootBasemap = resolveBasemapStyle(initLayer)
+      const initialStyle = bootBasemap.style
+      currentStyleRef.current =
+        bootBasemap.delivery === 'vector' && typeof initialStyle === 'string' ? initialStyle : null
+      currentAppliedLayerRef.current = null
       logActiveLayerTileDebug(initLayer)
+      if (bootBasemap.delivery === 'maptiler-raster') {
+        mapLayerDiag('boot-raster', { layer: initLayer })
+      }
 
       hudObsMark('hud:map:boot:start')
       map = new maplibregl.Map({
@@ -625,9 +635,11 @@ export default function MapCanvas() {
         clearRenderTimer()
         setStaticFallbackVisible(false)
         setStatus('ready')
+        currentAppliedLayerRef.current = activeLayerRef.current
         try {
           // Ensure canvas dimensions are correct after first actual draw.
           scheduleResize()
+          nudgeMapRenderAfterStyleChange(map)
         } catch {
           /* ignore */
         }
@@ -1182,38 +1194,32 @@ export default function MapCanvas() {
     }
 
     const layerKey = activeLayer as MapStyleKey
-    const nextStyleUrl = getStyleUrl(layerKey)
-    if (currentStyleRef.current === nextStyleUrl) {
-      try {
-        if (mapCtl.isStyleLoaded()) {
-          tier1Debug('map-layer', 'skip-duplicate-style-url', {
-            layer: activeLayer,
-            fp: mapStyleFingerprint(nextStyleUrl),
-          })
-          return
-        }
-      } catch {
-        /* style not ready — fall through and re-apply */
-      }
-    }
 
     const gen = ++styleSwitchGenRef.current
-    const prepared = prepareBasemapSwitch(mapCtl, layerKey, currentStyleRef)
+    const prepared = prepareBasemapSwitch(mapCtl, layerKey, currentAppliedLayerRef)
     if (prepared.skip) {
       tier1Debug('map-layer', 'validated-switch-skip-duplicate', {
         layer: activeLayer,
-        fp: mapStyleFingerprint(getStyleUrl(layerKey)),
+        applied: currentAppliedLayerRef.current,
       })
+      syncTopoTerrain(mapCtl, activeLayer)
+      nudgeMapRenderAfterStyleChange(mapCtl)
       return
     }
-    const nextStyle = prepared.url
+    const nextStyle = prepared.style
+    const switchDelivery = prepared.delivery
+    const vectorStyleUrl = getStyleUrl(layerKey)
     logActiveLayerTileDebug(activeLayer)
-    logLayerSelection(activeLayer, nextStyle, { gen })
+    logLayerSelection(
+      activeLayer,
+      typeof nextStyle === 'string' ? nextStyle : vectorStyleUrl,
+      { gen, delivery: switchDelivery },
+    )
     const fp = mapStyleFingerprint(nextStyle)
     tier1Debug('map-layer', 'validated-switch', { layer: activeLayer, fp })
     const { fallbackOverlayMs, stallMs, maxRetry } = layerSwitchTimeouts()
     const switchStartedAt = Date.now()
-    let urlForThisGen = nextStyle
+    let urlForThisGen = typeof nextStyle === 'string' ? nextStyle : vectorStyleUrl
     let appliedFpForThisGen = fp
     let cancelled = false
     let styleFallbackTimer: number | null = null
@@ -1249,6 +1255,7 @@ export default function MapCanvas() {
       }
       setStaticFallbackVisible(false)
       setStatusRef.current('ready')
+      currentAppliedLayerRef.current = activeLayer
       syncTopoTerrain(mapCtl, activeLayer)
       nudgeMapRenderAfterStyleChange(mapCtl)
       logLayerActivation(activeLayer, recoveryMode === 'none' ? 'ready' : recoveryMode === 'maptiler-raster' ? 'raster-fallback' : 'osm-emergency', {
@@ -1395,12 +1402,15 @@ export default function MapCanvas() {
 
     function retryVectorStyle(reason: string): boolean {
       if (vectorRetryCount >= maxRetry) return false
+      if (switchDelivery === 'maptiler-raster' && preferRasterBasemapOnAppleWebKit()) {
+        return false
+      }
       vectorRetryCount += 1
       logLayerActivation(activeLayer, 'retry', { reason, attempt: vectorRetryCount })
       mapLayerDiag('vector-retry', { layer: activeLayer, reason, attempt: vectorRetryCount })
       try {
         scheduleStallTimer()
-        applyStyleTarget(nextStyle, 'none')
+        applyStyleTarget(vectorStyleUrl, 'none')
         return true
       } catch {
         return false
@@ -1419,8 +1429,9 @@ export default function MapCanvas() {
       applyEmergencyFallback('MapTiler / style load error')
     }
 
-    function beginVectorSwitch() {
+    function beginLayerSwitch() {
       setStatusRef.current('initial')
+      currentAppliedLayerRef.current = null
       mapCtl.on('error', onStyleError)
       styleFallbackTimer = window.setTimeout(() => {
         if (cancelled || gen !== styleSwitchGenRef.current) return
@@ -1431,12 +1442,36 @@ export default function MapCanvas() {
       scheduleStallTimer()
 
       hudObsMark(`hud:map:style:${gen}:start`)
-      logStyleSwitchTiming(activeLayer, 'start', 0, { fp, stallMs, fallbackOverlayMs })
-      applyStyleTarget(nextStyle, 'none')
+      logStyleSwitchTiming(activeLayer, 'start', 0, {
+        fp,
+        stallMs,
+        fallbackOverlayMs,
+        delivery: switchDelivery,
+      })
+      applyStyleTarget(
+        nextStyle,
+        switchDelivery === 'maptiler-raster' ? 'maptiler-raster' : 'none',
+      )
     }
 
+    const onLayerPageshow = (ev: PageTransitionEvent) => {
+      if (!ev.persisted || cancelled || gen !== styleSwitchGenRef.current) return
+      currentAppliedLayerRef.current = null
+      try {
+        const resolved = resolveBasemapStyle(layerKey)
+        applyStyleTarget(
+          resolved.style,
+          resolved.delivery === 'maptiler-raster' ? 'maptiler-raster' : 'none',
+        )
+        nudgeMapRenderAfterStyleChange(mapCtl)
+      } catch {
+        /* ignore */
+      }
+    }
+    window.addEventListener('pageshow', onLayerPageshow)
+
     try {
-      beginVectorSwitch()
+      beginLayerSwitch()
     } catch (e) {
       console.warn('[MapCanvas] setStyle failed', e)
       try {
@@ -1466,6 +1501,7 @@ export default function MapCanvas() {
 
     return () => {
       cancelled = true
+      window.removeEventListener('pageshow', onLayerPageshow)
       if (styleFallbackTimer != null) {
         window.clearTimeout(styleFallbackTimer)
       }

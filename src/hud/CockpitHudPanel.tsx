@@ -6,7 +6,7 @@ import { DURATION_MS, EASE } from '../types/cockpit'
 import { DesktopInteractionController } from '../controllers/DesktopInteractionController'
 import { MobileInteractionController } from '../controllers/MobileInteractionController'
 import type { DockRequestSource } from '../controllers/InteractionController'
-import { getDeviceProfile, isIosFieldHud } from '../runtime/deviceProfile'
+import { getDeviceProfile, isIosFieldHud, isMobileFieldHud } from '../runtime/deviceProfile'
 import { updateActiveController } from '../runtime/runtimeSnapshot'
 import { assertPolicy, reportPolicyAttempt } from '../runtime/devicePolicy'
 import { isHudVerboseDebug, hudDevLog } from '../lib/tier1DebugLog'
@@ -16,6 +16,7 @@ import {
   clampMobileToReachableViewport,
   chooseMobileMinimizeDockSideAutoBalance,
   clampMobilePanelFontScale,
+  cycleMobilePanelFontScalePreset,
   cycleMobilePanelSizePreset,
   mobileFocusOpacity,
   mobilePresetDimensions,
@@ -273,9 +274,11 @@ export default function CockpitHudPanel({
   const wantsReducedMotion = profile.prefersReducedMotion
   const isIOSWebKit = profile.isIOS
   const iosFieldHud = isIosFieldHud()
+  const mobileFieldHud = isMobileFieldHud()
   const isMobile = profile.interactionMode === 'mobile'
-  /** Android/tablet mobile keeps extra header controls; iPhone field HUD is minimize-only. */
-  const showMobileHeaderExtras = isMobile && !iosFieldHud
+  /** iOS + Android field HUD: compact header (S/M/L + A + minimize). Desktop/tablet hybrid keeps full row. */
+  const showMobileHeaderExtras = isMobile && !mobileFieldHud
+  const showCompactFieldHeaderExtras = mobileFieldHud && isMobile
   const isCoarsePointer = profile.isCoarsePointer
   const mobileTopInset = useMemo(() => cockpitMobileTopInset(), [])
   const mobileSideInsets = useMemo(() => {
@@ -283,8 +286,8 @@ export default function CockpitHudPanel({
     return { left: s.left, right: s.right }
   }, [])
   const mobileTapMin = touchMinTarget(isMobile)
-  const mobileDragHoldMs = iosFieldHud ? 20 : MOBILE_DRAG_HOLD_MS
-  const mobilePredragTolerancePx = iosFieldHud ? 24 : MOBILE_PREDRAG_TOLERANCE_PX
+  const mobileDragHoldMs = mobileFieldHud ? 20 : MOBILE_DRAG_HOLD_MS
+  const mobilePredragTolerancePx = mobileFieldHud ? 24 : MOBILE_PREDRAG_TOLERANCE_PX
   const dragThreshold = isIOSWebKit ? 12 : isCoarsePointer ? 12 : DRAG_THRESHOLD_PX
   const edgeDockZone = isMobile
     ? Math.max(10, Math.round(EDGE_DOCK_ZONE_PX * 0.6))
@@ -1112,7 +1115,7 @@ export default function CockpitHudPanel({
         Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) <= 18
       mobileLastTapRef.current = { ts: now, x: e.clientX, y: e.clientY }
       // iOS field HUD: double-tap maximize fights drag; minimize-only chrome instead.
-      if (isDoubleTap && !iosFieldHud) {
+      if (isDoubleTap && !mobileFieldHud) {
         if (mobileDragHoldTimerRef.current != null) {
           window.clearTimeout(mobileDragHoldTimerRef.current)
           mobileDragHoldTimerRef.current = null
@@ -1168,7 +1171,7 @@ export default function CockpitHudPanel({
         const press = mobilePressRef.current
         if (press.pointerId == null || ev.pointerId !== press.pointerId) return
         const dist = Math.hypot(ev.clientX - press.startX, ev.clientY - press.startY)
-        if (iosFieldHud && dist > 6 && !press.longPressArmed && !press.cancelled) {
+        if (mobileFieldHud && dist > 6 && !press.longPressArmed && !press.cancelled) {
           acquireMobileDrag()
           return
         }
@@ -1397,6 +1400,53 @@ export default function CockpitHudPanel({
       return next
     }, 'controller')
   }
+
+  const applyMobileSizePresetCycle = useCallback(
+    (e?: React.MouseEvent) => {
+      e?.stopPropagation()
+      const nextPreset = cycleMobilePanelSizePreset(mobileSizePreset)
+      const { vw, vh } = viewportSize()
+      const prevSize = sizeRef.current
+      const next = mobilePresetDimensions(
+        nextPreset,
+        { vw, vh },
+        { w: minWidthEffective, h: minHeightEffective },
+      )
+      const clampedPos = clampMobileToReachableViewport(
+        posRef.current,
+        next,
+        { vw, vh },
+        mobileTopInset,
+        mobileSideInsets,
+      )
+      sizeRef.current = next
+      posRef.current = clampedPos
+      setSize(next)
+      setPos(clampedPos)
+      setMobileSizePreset(nextPreset)
+      if (import.meta.env.DEV) {
+        logInfo(
+          'MOBILE_UI',
+          `mobile-preset-apply panel=${panelId} preset=${nextPreset} dw=${next.w - prevSize.w} dh=${next.h - (prevSize.h ?? 0)}`,
+        )
+      }
+      safeUpdatePanel(panelId, {
+        w: next.w,
+        h: next.h,
+        x: clampedPos.x,
+        y: clampedPos.y,
+      })
+    },
+    [
+      mobileSizePreset,
+      minWidthEffective,
+      minHeightEffective,
+      mobileTopInset,
+      mobileSideInsets,
+      panelId,
+      safeUpdatePanel,
+    ],
+  )
 
   const minimizeToDock = () => {
     traceAction(`panel_minimize:${panelId}`, 'handler_enter')
@@ -1828,41 +1878,7 @@ export default function CockpitHudPanel({
                 <button
                   type="button"
                   data-no-drag
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    const nextPreset = cycleMobilePanelSizePreset(mobileSizePreset)
-                    const { vw, vh } = viewportSize()
-                    const prevSize = sizeRef.current
-                    const next = mobilePresetDimensions(
-                      nextPreset,
-                      { vw, vh },
-                      { w: minWidthEffective, h: minHeightEffective },
-                    )
-                    const clampedPos = clampMobileToReachableViewport(
-                      posRef.current,
-                      next,
-                      { vw, vh },
-                      mobileTopInset,
-                      mobileSideInsets,
-                    )
-                    sizeRef.current = next
-                    posRef.current = clampedPos
-                    setSize(next)
-                    setPos(clampedPos)
-                    setMobileSizePreset(nextPreset)
-                    if (import.meta.env.DEV) {
-                      logInfo(
-                        'MOBILE_UI',
-                        `mobile-preset-apply panel=${panelId} preset=${nextPreset} dw=${next.w - prevSize.w} dh=${next.h - (prevSize.h ?? 0)}`,
-                      )
-                    }
-                    safeUpdatePanel(panelId, {
-                      w: next.w,
-                      h: next.h,
-                      x: clampedPos.x,
-                      y: clampedPos.y,
-                    })
-                  }}
+                  onClick={applyMobileSizePresetCycle}
                   aria-label={`Cycle panel size preset for ${title}`}
                   title="Cycle size preset"
                   style={{
@@ -1889,6 +1905,67 @@ export default function CockpitHudPanel({
                       ? 'L'
                       : 'N'}
                 </button>
+              ) : null}
+              {showCompactFieldHeaderExtras && !docked ? (
+                <>
+                  <button
+                    type="button"
+                    data-no-drag
+                    onClick={applyMobileSizePresetCycle}
+                    aria-label={`Cycle panel size for ${title}`}
+                    title="Panel size: small / medium / large"
+                    style={{
+                      background: `${accent}14`,
+                      border: `1px solid ${accent}77`,
+                      color: accent,
+                      cursor: 'pointer',
+                      borderRadius: 4,
+                      minHeight: mobileTapMin,
+                      minWidth: mobileTapMin,
+                      lineHeight: 1,
+                      fontSize: touchFontSm(isMobile),
+                      fontWeight: 800,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      padding: 0,
+                    }}
+                  >
+                    {mobileSizePreset === 'compact'
+                      ? 'S'
+                      : mobileSizePreset === 'large'
+                        ? 'L'
+                        : 'M'}
+                  </button>
+                  <button
+                    type="button"
+                    data-no-drag
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setMobilePanelFontScale((v) => cycleMobilePanelFontScalePreset(v))
+                    }}
+                    aria-label={`Cycle panel text size for ${title}`}
+                    title="Panel text size"
+                    style={{
+                      background: `${accent}14`,
+                      border: `1px solid ${accent}77`,
+                      color: accent,
+                      cursor: 'pointer',
+                      borderRadius: 4,
+                      minHeight: mobileTapMin,
+                      minWidth: mobileTapMin,
+                      lineHeight: 1,
+                      fontSize: touchFontMd(isMobile),
+                      fontWeight: 800,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      padding: 0,
+                    }}
+                  >
+                    A
+                  </button>
+                </>
               ) : null}
               <button
                 type="button"
@@ -1920,7 +1997,7 @@ export default function CockpitHudPanel({
               >
                 ▬
               </button>
-              {!iosFieldHud ? (
+              {!mobileFieldHud ? (
                 <span style={{ opacity: 0.65, fontSize: 8, color: panelSubtleText }}>⋮⋮</span>
               ) : null}
             </div>

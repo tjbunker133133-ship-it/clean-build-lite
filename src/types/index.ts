@@ -40,7 +40,7 @@ export type AppAction =
   | { type: 'UPDATE_WAYPOINT'; payload: { id: string; patch: Partial<Waypoint> } }
   | { type: 'REMOVE_WAYPOINT'; payload: string }
   | { type: 'SELECT_WAYPOINT'; payload: string | null }
-  | { type: 'SET_LAYER'; payload: LayerType }
+  | { type: 'SET_LAYER'; payload: LayerType; force?: boolean }
   | { type: 'SET_PENDING_TYPE'; payload: WaypointType }
   | { type: 'SET_NEXT_WAYPOINT_LABEL'; payload: string }
   | { type: 'SET_KEEP_WAYPOINT_TOOL_ARMED'; payload: boolean }

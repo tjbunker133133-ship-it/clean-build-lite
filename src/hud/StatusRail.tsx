@@ -80,11 +80,13 @@ export default function StatusRail() {
     if (gps.status === 'error') return 'GPS ERR'
     return 'GPS SEARCH'
   }, [gps.lat, gps.lng, gps.status])
+  const profile = getDeviceProfile()
   const battPct = useMemo(() => {
     if (battery) return `${Math.round(battery.level * 100)}%`
-    return getDeviceProfile().isIOS ? 'N/A' : '--'
+    return '--'
   }, [battery])
-  const isMobile = getDeviceProfile().interactionMode === 'mobile'
+  const showBatteryReadout = battery != null || !profile.isIOS
+  const isMobile = profile.interactionMode === 'mobile'
   const fontSm = touchFontSm(isMobile)
   const fontMd = touchFontMd(isMobile)
   const gapMd = touchGapMd(isMobile)
@@ -324,7 +326,7 @@ export default function StatusRail() {
           </>
         )}
         <span>{gpsText}</span>
-        <span>BAT {battPct}</span>
+        {showBatteryReadout ? <span>BAT {battPct}</span> : null}
         <span>NET {online ? 'ON' : 'OFF'}</span>
         <span>WX {wxAge}</span>
         <span>SYS {runtimeGuards ? 'GUARDS ON' : 'GUARDS OFF'}</span>

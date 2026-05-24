@@ -217,6 +217,7 @@ html.platform-ios .cockpit-panel [role="banner"] {
   touch-action: none;
   -webkit-user-select: none;
   user-select: none;
+  text-shadow: 0 0 8px rgba(199, 206, 198, 0.34);
 }
 
 /* iPhone field HUD: single minimize control — avoid cramped multi-button headers. */
@@ -231,6 +232,17 @@ html.platform-ios .cockpit-panel {
 
 html.platform-ios .cockpit-panel button:hover {
   transform: none;
+}
+
+/* iOS field HUD: momentum scroll inside panels; fixed chrome respects home indicator. */
+html.platform-ios .cockpit-panel .panel-body {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+}
+
+html.platform-ios .cockpit-hud-shell {
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
 }
 
 html.platform-android .cockpit-panel {
@@ -249,6 +261,11 @@ html.platform-android .cockpit-panel [role="banner"] {
 /* Touch-first: avoid sticky :hover lift on Chrome Android after tap */
 html.platform-android .cockpit-panel button:hover {
   transform: none;
+}
+
+html.platform-android .cockpit-panel .panel-body {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
 }
 
 /*

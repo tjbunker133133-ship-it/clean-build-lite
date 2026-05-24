@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
 import type { LayerType } from '../types'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   FALLBACK_MAP_STYLE,
   MAP_STYLES,
@@ -8,8 +8,11 @@ import {
   mapStyleFingerprint,
   mapTilerRasterFallbackFingerprint,
   maptilerTerrainRgbTileJson,
+  preferRasterBasemapOnAppleWebKit,
+  resolveBasemapStyle,
   validatedEmergencyFallbackStyle,
 } from './mapStyles'
+import { __resetDeviceProfileForTests, refreshDeviceProfile } from '../runtime/deviceProfile'
 
 const ALL_LAYERS: LayerType[] = ['streets', 'satellite', 'topo', 'outdoor']
 
@@ -62,5 +65,51 @@ describe('MAP_STYLES (hard-locked registry)', () => {
     }
     const fps = ALL_LAYERS.map((layer) => mapTilerRasterFallbackFingerprint(layer))
     expect(new Set(fps).size).toBe(ALL_LAYERS.length)
+  })
+})
+
+describe('resolveBasemapStyle (Apple WebKit)', () => {
+  afterEach(() => {
+    __resetDeviceProfileForTests()
+    vi.unstubAllGlobals()
+  })
+
+  it('prefers MapTiler raster on iPhone', () => {
+    vi.stubGlobal('navigator', {
+      userAgent:
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+      maxTouchPoints: 5,
+    })
+    vi.stubGlobal('window', {
+      innerWidth: 390,
+      innerHeight: 844,
+      matchMedia: () => ({ matches: false, addEventListener: undefined }),
+    })
+    refreshDeviceProfile()
+    expect(preferRasterBasemapOnAppleWebKit()).toBe(true)
+    const topo = resolveBasemapStyle('topo')
+    expect(topo.delivery).toBe('maptiler-raster')
+    expect(mapStyleFingerprint(topo.style)).toContain('maptiler-raster-topo')
+    const streets = resolveBasemapStyle('streets')
+    expect(streets.delivery).toBe('maptiler-raster')
+    expect(mapStyleFingerprint(streets.style)).not.toBe(mapStyleFingerprint(topo.style))
+  })
+
+  it('uses vector style URLs on desktop Chrome', () => {
+    vi.stubGlobal('navigator', {
+      userAgent:
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      maxTouchPoints: 0,
+    })
+    vi.stubGlobal('window', {
+      innerWidth: 1280,
+      innerHeight: 800,
+      matchMedia: () => ({ matches: false, addEventListener: undefined }),
+    })
+    refreshDeviceProfile()
+    const resolved = resolveBasemapStyle('satellite')
+    expect(preferRasterBasemapOnAppleWebKit()).toBe(false)
+    expect(resolved.delivery).toBe('vector')
+    expect(resolved.style).toBe(MAP_STYLES.satellite)
   })
 })

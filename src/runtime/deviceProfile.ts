@@ -214,6 +214,12 @@ export function refreshDeviceProfile(): DeviceProfile {
   return getDeviceProfile()
 }
 
+/** Vitest-only: clears cached profile and session interaction lock between cases. */
+export function __resetDeviceProfileForTests(): void {
+  cached = null
+  sessionLockedInteractionMode = null
+}
+
 export function getSessionLockedInteractionMode(): InteractionMode {
   if (sessionLockedInteractionMode != null) return sessionLockedInteractionMode
   return getDeviceProfile().interactionMode
@@ -221,9 +227,18 @@ export function getSessionLockedInteractionMode(): InteractionMode {
 
 /**
  * iPhone / iPad field HUD (mobile interaction, Apple WebKit).
- * Use for iOS-only UX paths — do not gate Android or desktop behavior on this.
+ * Use for iOS-only UX paths (WebKit map recovery, etc.) — not for shared mobile chrome.
  */
 export function isIosFieldHud(): boolean {
   const p = getDeviceProfile()
   return p.isIOS && p.interactionMode === 'mobile'
+}
+
+/**
+ * Phone / tablet field HUD on iOS or Android (mobile interaction).
+ * Shared compact panel chrome: minimize + S/M/L + A — no cramped +/- / Max / C·N·L row.
+ */
+export function isMobileFieldHud(): boolean {
+  const p = getDeviceProfile()
+  return p.interactionMode === 'mobile' && (p.isIOS || p.isAndroid)
 }

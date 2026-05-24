@@ -112,8 +112,12 @@ export default function InstallHelperBanner() {
           INSTALL HUD
         </div>
         {platform === 'ios' ? (
-          <div>
-            Tap <strong>Share</strong> → <strong>Add to Home Screen</strong>
+          <div style={{ lineHeight: 1.45 }}>
+            1. Tap <strong>Share</strong> (square with arrow)
+            <br />
+            2. Tap <strong>Add to Home Screen</strong>
+            <br />
+            3. Open from your Home Screen for full-screen GPS + voice
           </div>
         ) : (
           <div>For offline GPS + voice continuity</div>

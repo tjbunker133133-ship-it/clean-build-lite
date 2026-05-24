@@ -71,7 +71,7 @@ export default function TopBar() {
           }}
         />
         NIGHTFORCE
-        {!isCompact && (
+        {!isCompact && profile.interactionMode === 'desktop' && !profile.isIOS && (
           <span
             style={{
               fontSize: fontSm,

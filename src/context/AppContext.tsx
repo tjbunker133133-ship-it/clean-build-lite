@@ -76,7 +76,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       return { ...state, selectedWaypointId: action.payload }
     case 'SET_LAYER':
       if (!isLayerType(action.payload)) return state
-      if (state.activeLayer === action.payload) return state
+      if (state.activeLayer === action.payload && !action.force) return state
       return { ...state, activeLayer: action.payload }
     case 'SET_PENDING_TYPE':
       return { ...state, pendingWaypointType: action.payload }
@@ -112,7 +112,7 @@ interface AppContextValue {
   updateWaypoint: (id: string, patch: Partial<Waypoint>) => void
   removeWaypoint: (id: string) => void
   selectWaypoint: (id: string | null) => void
-  setLayer: (layer: LayerType) => void
+  setLayer: (layer: LayerType, options?: { force?: boolean }) => void
   setPendingType: (type: WaypointType) => void
   setNextWaypointLabel: (label: string) => void
   setKeepWaypointToolArmed: (keep: boolean) => void
@@ -246,8 +246,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     dispatch({ type: 'SELECT_WAYPOINT', payload: id })
   }, [])
 
-  const setLayer = useCallback((layer: LayerType) => {
-    dispatch({ type: 'SET_LAYER', payload: layer })
+  const setLayer = useCallback((layer: LayerType, options?: { force?: boolean }) => {
+    dispatch({ type: 'SET_LAYER', payload: layer, force: options?.force })
   }, [])
 
   const setPendingType = useCallback((type: WaypointType) => {

@@ -7,6 +7,11 @@ import { useGPS } from '../hooks/useGPS'
 import { tier1Debug } from '../lib/tier1DebugLog'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 import {
+  copyTextToClipboard,
+  safariLocationFixClipboardLines,
+  tryOpenIosLocationPrivacySettings,
+} from '../lib/systemSettingsLinks'
+import {
   touchFontSm,
   touchFontMd,
   touchGapMd,
@@ -125,6 +130,7 @@ export default function SituationPanel() {
 
   const isIOS = useMemo(() => getDeviceProfile().isIOS, [])
   const isMobile = getDeviceProfile().interactionMode === 'mobile'
+  const [locationHelpHint, setLocationHelpHint] = useState<string | null>(null)
   const fontSm = touchFontSm(isMobile)
   const fontMd = touchFontMd(isMobile)
   const gapMd = touchGapMd(isMobile)
@@ -476,6 +482,40 @@ export default function SituationPanel() {
               >
                 TRY AGAIN
               </button>
+              {isIOS && gps.locationState === 'denied' ? (
+                <>
+                  <button
+                    type="button"
+                    data-no-drag
+                    onClick={() => tryOpenIosLocationPrivacySettings(setLocationHelpHint)}
+                    style={{
+                      ...btnBase,
+                      background: 'rgba(125,255,138,0.16)',
+                      borderColor: 'rgba(125,255,138,0.55)',
+                      color: '#d8f6de',
+                    }}
+                  >
+                    OPEN SYSTEM LOCATION
+                  </button>
+                  <button
+                    type="button"
+                    data-no-drag
+                    onClick={() =>
+                      void copyTextToClipboard(safariLocationFixClipboardLines()).then((ok) =>
+                        setLocationHelpHint(
+                          ok ? 'Copied Safari location steps to clipboard.' : 'Could not copy — use steps above.',
+                        ),
+                      )
+                    }
+                    style={{ ...btnBase, background: 'rgba(199,206,198,0.12)', color: '#d6ddd6' }}
+                  >
+                    COPY FIX STEPS
+                  </button>
+                  {locationHelpHint ? (
+                    <p style={{ margin: 0, fontSize: fontSm, color: '#b8c4b8' }}>{locationHelpHint}</p>
+                  ) : null}
+                </>
+              ) : null}
             </div>
           )}
 

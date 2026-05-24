@@ -1,5 +1,6 @@
 import type { StyleSpecification } from 'maplibre-gl'
 import type { LayerType } from '../types'
+import { getDeviceProfile } from '../runtime/deviceProfile'
 
 // ⚠️ LOCKED SYSTEM — Behavior Freeze Active
 // Any change to interaction, layout, display modes, or layers requires explicit approval.
@@ -158,6 +159,29 @@ export function getMapTilerRasterFallbackStyle(layer: MapStyleKey): StyleSpecifi
 export function mapTilerRasterFallbackFingerprint(layer: MapStyleKey): string | null {
   const style = getMapTilerRasterFallbackStyle(layer)
   return style ? mapStyleFingerprint(style) : null
+}
+
+export type BasemapDelivery = 'vector' | 'maptiler-raster'
+
+/**
+ * iOS Safari / installed PWA: full MapTiler vector style.json often stalls or leaves a
+ * black canvas. Per-layer MapTiler raster tiles are lighter and switch reliably.
+ */
+export function preferRasterBasemapOnAppleWebKit(): boolean {
+  const p = getDeviceProfile()
+  return p.isIOS || (p.isAppleWebKit && (p.isPWA || p.isStandalone))
+}
+
+/** Basemap target for the current platform (vector URL or per-layer MapTiler raster). */
+export function resolveBasemapStyle(layer: MapStyleKey): {
+  style: string | StyleSpecification
+  delivery: BasemapDelivery
+} {
+  if (preferRasterBasemapOnAppleWebKit()) {
+    const raster = getMapTilerRasterFallbackStyle(layer)
+    if (raster) return { style: raster, delivery: 'maptiler-raster' }
+  }
+  return { style: getStyleUrl(layer), delivery: 'vector' }
 }
 
 export const WAYPOINT_COLORS: Record<string, string> = {

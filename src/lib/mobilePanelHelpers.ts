@@ -9,6 +9,9 @@ export const MOBILE_PANEL_FONT_SCALE_MIN = 0.9
 export const MOBILE_PANEL_FONT_SCALE_MAX = 1.25
 export const MOBILE_PANEL_FONT_SCALE_STEP = 0.05
 
+/** Discrete text-size stops for one-tap iPhone field HUD (avoids cramped +/- pair). */
+export const MOBILE_PANEL_FONT_SCALE_PRESETS = [0.9, 1, 1.15, 1.25] as const
+
 /** Floating shell max height — was ~60vh; field HUD needs more readable scroll viewport. */
 export const MOBILE_FLOATING_MAX_HEIGHT_VH = 78
 export const MOBILE_RESIZE_HITBOX_PX = 52
@@ -22,6 +25,14 @@ export const MOBILE_DRAG_EDGE_DOCK_DISABLED = true as const
 export function clampMobilePanelFontScale(n: number): number {
   if (!Number.isFinite(n)) return 1
   return Math.min(MOBILE_PANEL_FONT_SCALE_MAX, Math.max(MOBILE_PANEL_FONT_SCALE_MIN, n))
+}
+
+/** Next preset at or above current scale; wraps to minimum (iOS one-tap text control). */
+export function cycleMobilePanelFontScalePreset(current: number): number {
+  const clamped = clampMobilePanelFontScale(current)
+  const idx = MOBILE_PANEL_FONT_SCALE_PRESETS.findIndex((p) => p > clamped + 1e-6)
+  if (idx === -1) return MOBILE_PANEL_FONT_SCALE_PRESETS[0]
+  return MOBILE_PANEL_FONT_SCALE_PRESETS[idx]
 }
 
 export function cycleMobilePanelSizePreset(

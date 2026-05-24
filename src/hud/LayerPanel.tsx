@@ -56,7 +56,11 @@ export default function LayerPanel() {
               data-no-drag
               aria-pressed={active}
               title={title}
-              onClick={() => setLayer(layer.id)}
+              onClick={() =>
+                setLayer(layer.id, {
+                  force: active && mapBusy,
+                })
+              }
               style={{
                 padding: '8px 10px',
                 fontSize: fontSm,
