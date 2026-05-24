@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatBuildLabel } from './buildLabel'
+import { formatBuildLabel, resolveBuildLabel } from './buildLabel'
 
 describe('formatBuildLabel', () => {
   it('formats ISO timestamps for display', () => {
@@ -12,5 +12,11 @@ describe('formatBuildLabel', () => {
 
   it('returns unknown for empty input', () => {
     expect(formatBuildLabel('')).toBe('unknown')
+  })
+})
+
+describe('resolveBuildLabel', () => {
+  it('returns unknown when no build stamp is injected', () => {
+    expect(resolveBuildLabel()).toBe('unknown')
   })
 })

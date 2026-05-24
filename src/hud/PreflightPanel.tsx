@@ -28,6 +28,7 @@ import { traceAction } from '../runtime/actionTrace'
 import { useCockpit } from '../context/CockpitContext'
 import { clampMobileToReachableViewport, isPanelReachableInViewport } from '../lib/mobilePanelHelpers'
 import { cockpitViewport } from '../lib/viewport'
+import { resolveBuildLabel } from '../runtime/buildLabel'
 
 type CheckState = 'pass' | 'warn' | 'fail'
 type ManualCheckKey =
@@ -290,7 +291,7 @@ export default function PreflightPanel() {
   }, [])
 
   const endpoint = useMemo(() => readRapidEndpoint(), [])
-  const buildId = useMemo(() => ((import.meta as any).env?.VITE_GIT_COMMIT as string | undefined) ?? 'unknown', [])
+  const buildId = useMemo(() => resolveBuildLabel(), [])
   const speechSupported = !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)
   const deviceTuneMeta = useMemo(() => {
     try {
