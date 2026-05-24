@@ -583,6 +583,7 @@ function OverlayRoot() {
 let mounted = false
 
 export function mountRuntimeDebugOverlay(): void {
+  if (!import.meta.env.DEV) return
   if (mounted || typeof document === 'undefined') return
   mounted = true
   const host = document.createElement('div')

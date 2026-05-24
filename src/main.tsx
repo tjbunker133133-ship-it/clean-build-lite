@@ -10,7 +10,6 @@ import {
   getRuntimeSnapshot,
   updatePendingSwUpdate,
 } from './runtime/runtimeSnapshot'
-import { mountRuntimeDebugOverlay } from './runtime/RuntimeDebugOverlay'
 import { logInfo, logWarn } from './runtime/logger'
 import { getDeviceProfile } from './runtime/deviceProfile'
 import { reportPolicyAttempt } from './runtime/devicePolicy'
@@ -57,7 +56,11 @@ if (import.meta.env.DEV && typeof window !== 'undefined') {
 // Install runtime truth beacon as early as possible so any subsequent
 // subsystem (SW registration, voice, permissions) can update it.
 installRuntimeSnapshot()
-mountRuntimeDebugOverlay()
+if (import.meta.env.DEV) {
+  void import('./runtime/RuntimeDebugOverlay').then(({ mountRuntimeDebugOverlay }) => {
+    mountRuntimeDebugOverlay()
+  })
+}
 logInfo('RUNTIME', 'boot', {
   build: __BUILD_ID__,
   device: getDeviceProfile().type,

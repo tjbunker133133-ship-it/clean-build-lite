@@ -352,7 +352,6 @@ export default function MapCanvas() {
   keepArmedRef.current = keepWaypointToolArmed
   const clearLabelAfterDropRef = useRef(clearLabelAfterDrop)
   clearLabelAfterDropRef.current = clearLabelAfterDrop
-  const [watchdogNotice, setWatchdogNotice] = useState(false)
   const styleSwitchGenRef = useRef(0)
   /** Last applied basemap style URL — duplicate `setStyle` guard. */
   const currentStyleRef = useRef<string | null>(null)
@@ -594,7 +593,6 @@ export default function MapCanvas() {
       hudObsMark('hud:map:boot:constructed')
       mapRef.current = map
       skipLayerSyncRef.current = true
-      setWatchdogNotice(false)
       map.on('style.load', onStyleLoad)
       styleImageMissingHandler = onStyleImageMissingFactory(map)
       map.on('styleimagemissing', styleImageMissingHandler)
@@ -736,7 +734,6 @@ export default function MapCanvas() {
             } catch {
               // ignore
             }
-            setWatchdogNotice(true)
             tapDiag('watchdog nudged map after inactivity window')
           }
         }, 13000)
@@ -1686,34 +1683,6 @@ export default function MapCanvas() {
             }}
           >
             Map fallback active
-          </div>
-        </div>
-      )}
-      {watchdogNotice && (
-        <div
-          style={{
-            position: 'absolute',
-            left: 0,
-            right: 0,
-            bottom: 16,
-            display: 'flex',
-            justifyContent: 'center',
-            zIndex: 3,
-            pointerEvents: 'none',
-          }}
-        >
-          <div
-            style={{
-              borderRadius: 10,
-              border: '1px solid rgba(125,255,138,0.5)',
-              background: 'rgba(8,14,10,0.86)',
-              color: '#d8f4db',
-              fontSize: 11,
-              letterSpacing: '0.05em',
-              padding: '8px 10px',
-            }}
-          >
-            MAP INPUT WATCHDOG ACTIVE
           </div>
         </div>
       )}
