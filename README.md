@@ -30,15 +30,15 @@ npm run preview
 
 The file `src/.cursorrules` is the **architectural contract** for tiers, map/panel invariants, and UX constants. Treat it as the source of truth when changing behavior or layout.
 
-## Deploy (Netlify — production)
+## Deploy (Vercel — production)
 
-This repo is built and published with **Netlify** (`netlify.toml` at the repo root).
+Production is deployed on **Vercel** (`vercel.json` at the repo root). Netlify remains configured in `netlify.toml` as a fallback when credits are available.
 
-1. Connect the Git repo to a Netlify site (build branch: `main`).
-2. Netlify runs `npm ci && npm run build` and publishes `dist/`.
-3. Set environment variables in **Site settings → Environment variables** (see `.env.example`). `VITE_*` values are inlined at build time — redeploy after changing them.
+1. Connect the Git repo to your Vercel project (production branch: `stable/2026-05-23` or `main`).
+2. Vercel runs `npm ci`, then `npm run ensure:index && npx vite build`, and publishes `dist/`.
+3. Set environment variables in **Project Settings → Environment Variables** (see `.env.example`). `VITE_*` values are inlined at build time — redeploy after changing them.
 
-`vercel.json` is kept for a possible future host only; **do not use Vercel for production** until explicitly switched.
+`netlify.toml` is kept for optional Netlify hosting; do not rely on it while Netlify credits are exhausted.
 
 ## Scripts
 
