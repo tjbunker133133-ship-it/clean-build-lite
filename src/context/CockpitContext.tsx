@@ -67,7 +67,8 @@ const LAYOUT_VERSION = 2
 type DevicePreset = 'iphone' | 'android' | 'tablet' | 'desktop'
 const DEVICE_TUNE_VERSION = 'device_tune_v2'
 const DOCK_EDGE_INSET_PX = 8
-const DOCKED_PANEL_STACK_PX = 0
+/** Visible gap between dock strips so borders/glow never read as stacked. */
+const DOCKED_PANEL_STACK_PX = 4
 const DOCKED_PANEL_MIN_HEIGHT_PX = 76
 const DOCKED_PANEL_MAX_HEIGHT_PX = 92
 const DOCKED_PANEL_WIDTH_PX = 280
@@ -509,25 +510,20 @@ function panelGapPx(prefs?: Partial<CockpitPrefs>): number {
   return Math.max(PANEL_KISS_GAP_PX, Math.max(0, Math.min(24, Math.round(raw))))
 }
 
-function normalizeNoOverlapLayout(panels: PanelMap, gapPx = 0): PanelMap {
+/** Assign unique vertical slots per dock rail — used on mobile and inside full layout normalize. */
+export function relayoutDockedPanels(panels: PanelMap): PanelMap {
   const next: PanelMap = Object.fromEntries(
     Object.entries(panels).map(([id, p]) => [id, { ...p }]),
   )
   const { vw, vh } = cockpitViewport()
-  const pad = gapPx
-  const topMinY = 36
-
   const dockedIds = Object.keys(next).filter((id) => next[id]?.docked)
-  const dockObstacles: Array<{ l: number; t: number; r: number; b: number }> = []
 
-  // Lay out each dock lane with user-selected side assignment,
-  // and record them as obstacles for floating panels.
   for (const side of ['left', 'right'] as const) {
     const lane = dockedIds
       .filter((id) => (next[id].dockSide ?? 'left') === side)
       .sort((a, b) => (next[a].y === next[b].y ? a.localeCompare(b) : next[a].y - next[b].y))
     if (!lane.length) continue
-    const { minY, maxY, step, height: dockRowH } = computeDockMetrics(vh, lane.length)
+    const { minY, maxY, step } = computeDockMetrics(vh, lane.length)
     const slotCount = Math.max(1, Math.floor((maxY - minY) / step) + 1)
     lane.forEach((id, idx) => {
       const slot = Math.min(slotCount - 1, idx)
@@ -540,14 +536,41 @@ function normalizeNoOverlapLayout(panels: PanelMap, gapPx = 0): PanelMap {
           : DOCK_EDGE_INSET_PX
       p.dockSide = side
       p.docked = true
-      dockObstacles.push({
+    })
+  }
+
+  return next
+}
+
+function dockObstaclesFromPanels(panels: PanelMap): Array<{ l: number; t: number; r: number; b: number }> {
+  const { vh } = cockpitViewport()
+  const obstacles: Array<{ l: number; t: number; r: number; b: number }> = []
+  for (const side of ['left', 'right'] as const) {
+    const lane = Object.keys(panels).filter(
+      (id) => panels[id]?.docked && (panels[id].dockSide ?? 'left') === side,
+    )
+    if (!lane.length) continue
+    const { height: dockRowH } = computeDockMetrics(vh, lane.length)
+    for (const id of lane) {
+      const p = panels[id]!
+      obstacles.push({
         l: p.x,
         t: p.y,
         r: p.x + p.w,
         b: p.y + dockRowH,
       })
-    })
+    }
   }
+  return obstacles
+}
+
+function normalizeNoOverlapLayout(panels: PanelMap, gapPx = 0): PanelMap {
+  const next = relayoutDockedPanels(panels)
+  const { vw, vh } = cockpitViewport()
+  const pad = gapPx
+  const topMinY = 36
+
+  const dockObstacles = dockObstaclesFromPanels(next)
 
   const floating = Object.entries(next)
     .filter(([, p]) => !p.docked)
@@ -769,6 +792,26 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
   }, [panels, prefs, persist])
 
   useEffect(() => {
+    const relayoutOnViewportChange = () => {
+      setPanels((prev) => {
+        if (!Object.values(prev).some((p) => p?.docked)) return prev
+        const next = relayoutDockedPanels(prev)
+        const moved = Object.keys(next).some((id) => prev[id]?.y !== next[id]?.y || prev[id]?.x !== next[id]?.x)
+        return moved ? next : prev
+      })
+    }
+    window.addEventListener('resize', relayoutOnViewportChange)
+    window.addEventListener('orientationchange', relayoutOnViewportChange)
+    const vv = window.visualViewport
+    vv?.addEventListener('resize', relayoutOnViewportChange)
+    return () => {
+      window.removeEventListener('resize', relayoutOnViewportChange)
+      window.removeEventListener('orientationchange', relayoutOnViewportChange)
+      vv?.removeEventListener('resize', relayoutOnViewportChange)
+    }
+  }, [])
+
+  useEffect(() => {
     updateGestureActive(mapInteractionBlocked)
   }, [mapInteractionBlocked])
 
@@ -930,7 +973,7 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
         const merged = { ...prev, [id]: nextPanel }
         const next =
           getDeviceProfile().interactionMode === 'mobile'
-            ? merged
+            ? relayoutDockedPanels(merged)
             : normalizeNoOverlapLayout(merged, panelGapPx(prefs))
         persist(next, prefs)
         return next

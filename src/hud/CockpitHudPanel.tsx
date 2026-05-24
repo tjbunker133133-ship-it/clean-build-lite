@@ -63,7 +63,7 @@ const DOCK_VISIBLE_STRIP_PX = 60
 const DOCK_PEEK_STRIP_PX = 74
 const DOCK_UNDOCK_SWIPE_PX = 18
 const EDGE_DOCK_ZONE_PX = 22
-const DOCKED_PANEL_STACK_PX = 0
+const DOCKED_PANEL_STACK_PX = 4
 const DOCKED_PANEL_MIN_HEIGHT_PX = 76
 const DOCKED_PANEL_MAX_HEIGHT_PX = 92
 const DOCKED_PANEL_WIDTH_PX = 280
@@ -634,47 +634,21 @@ export default function CockpitHudPanel({
       : undefined
 
   const getDockedY = useCallback(
-    (side: 'left' | 'right', desiredY: number) => {
+    (side: 'left' | 'right', _desiredY: number) => {
       const { vh } = viewportSize()
-
-      // Magnetic lane stacking: assign each docked panel to a unique slot.
-      // This keeps the dock rail clean and prevents overlap even after reloads.
+      // Match CockpitContext.relayoutDockedPanels: stable index slots, no overlap.
       const lane = Object.entries(panels)
         .filter(([, panel]) => panel?.docked && (panel.dockSide ?? 'left') === side)
         .map(([id, panel]) => ({ id, y: panel.y }))
-
       if (!lane.some((p) => p.id === panelId)) {
-        lane.push({ id: panelId, y: desiredY })
+        lane.push({ id: panelId, y: _desiredY })
       }
-
       lane.sort((a, b) => (a.y === b.y ? a.id.localeCompare(b.id) : a.y - b.y))
+      const idx = Math.max(0, lane.findIndex((p) => p.id === panelId))
       const { minY, maxY, step } = computeDockMetrics(vh, lane.length)
       const slotCount = Math.max(1, Math.floor((maxY - minY) / step) + 1)
-
-      const usedSlots = new Set<number>()
-      let selfSlot = 0
-
-      for (const entry of lane) {
-        const raw = Math.round((entry.y - minY) / step)
-        let slot = Math.max(0, Math.min(slotCount - 1, raw))
-        if (usedSlots.has(slot)) {
-          let found = false
-          for (let i = 0; i < slotCount; i++) {
-            if (!usedSlots.has(i)) {
-              slot = i
-              found = true
-              break
-            }
-          }
-          if (!found) {
-            slot = slotCount - 1
-          }
-        }
-        usedSlots.add(slot)
-        if (entry.id === panelId) selfSlot = slot
-      }
-
-      const y = minY + selfSlot * step
+      const slot = Math.min(slotCount - 1, idx)
+      const y = minY + slot * step
       return Math.max(minY, Math.min(y, maxY))
     },
     [panelId, panels],

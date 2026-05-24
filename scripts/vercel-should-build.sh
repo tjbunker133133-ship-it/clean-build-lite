@@ -9,4 +9,9 @@ if [ "${VERCEL_ENV:-}" = "production" ]; then
   exit 1
 fi
 
+# Field branch: build when Vercel treats this ref as Preview (production may still be main).
+if [ "${VERCEL_GIT_COMMIT_REF:-}" = "stable/2026-05-23" ]; then
+  exit 1
+fi
+
 exit 0
