@@ -17,6 +17,8 @@ import {
 import { useMapContext } from '../context/MapContext'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 import { emitHaptic } from '../runtime/haptics'
+import { getRuntimeSnapshot, subscribeRuntimeSnapshot } from '../runtime/runtimeSnapshot'
+import { wasInstallHintDismissed } from '../runtime/pwa'
 import { touchFontSm, touchFontMd, touchGapMd, touchMinTarget } from './tokens'
 
 type BatteryManagerLike = { level: number } | null
@@ -86,6 +88,25 @@ export default function StatusRail() {
   const fontMd = touchFontMd(isMobile)
   const gapMd = touchGapMd(isMobile)
   const tapMin = touchMinTarget(isMobile)
+  const [installSnap, setInstallSnap] = useState(getRuntimeSnapshot)
+  const [installDismissed, setInstallDismissed] = useState(() => wasInstallHintDismissed())
+
+  useEffect(() => {
+    return subscribeRuntimeSnapshot((s) => setInstallSnap(s))
+  }, [])
+
+  useEffect(() => {
+    const onDismiss = () => setInstallDismissed(true)
+    window.addEventListener('hud:install-hint-dismissed', onDismiss)
+    return () => window.removeEventListener('hud:install-hint-dismissed', onDismiss)
+  }, [])
+
+  const installBannerVisible =
+    isMobile &&
+    !installSnap.installMode.standalone &&
+    installSnap.installMode.eligible &&
+    !installDismissed
+  const statusRailBottomPx = installBannerVisible ? 88 : 8
   const wxAge = weatherAgeMin == null ? '--' : `${weatherAgeMin}m`
   const runtimeGuards = typeof window !== 'undefined' && !!(window as any).__hudRuntimeGuards
   const buildStampRaw =
@@ -211,7 +232,7 @@ export default function StatusRail() {
         style={{
           position: 'fixed',
           left: '50%',
-          bottom: 'calc(env(safe-area-inset-bottom, 0px) + 8px)',
+          bottom: `calc(env(safe-area-inset-bottom, 0px) + ${statusRailBottomPx}px)`,
           transform: 'translateX(-50%)',
           zIndex: 5000,
           pointerEvents: 'none',
@@ -226,9 +247,11 @@ export default function StatusRail() {
             ? '1px solid rgba(255,88,122,0.45)'
             : '1px solid rgba(199,206,198,0.24)',
           background: corridorArmed && corridor?.severity && corridor.severity >= 5
-            ? 'rgba(35,8,15,0.72)'
-            : 'rgba(10,12,13,0.6)',
-          backdropFilter: 'blur(10px)',
+            ? 'rgba(35,8,15,0.88)'
+            : isMobile
+              ? 'rgba(10,12,13,0.92)'
+              : 'rgba(10,12,13,0.6)',
+          backdropFilter: isMobile ? undefined : 'blur(10px)',
           fontFamily: 'var(--font-mono, monospace)',
           fontSize: fontSm,
           letterSpacing: '0.08em',

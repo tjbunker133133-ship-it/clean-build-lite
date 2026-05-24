@@ -42,9 +42,9 @@ export default function TopBar() {
         alignItems: 'center',
         justifyContent: 'space-between',
         padding: `calc(env(safe-area-inset-top, 0px) + 2px) ${isCompact ? 12 : 16}px 0 ${isCompact ? 12 : 16}px`,
-        background: 'rgba(10, 12, 13, 0.9)',
+        background: isMobile ? 'rgba(10, 12, 13, 0.96)' : 'rgba(10, 12, 13, 0.9)',
         borderBottom: '1px solid rgba(199, 206, 198, 0.22)',
-        backdropFilter: 'blur(12px)',
+        backdropFilter: isMobile ? undefined : 'blur(12px)',
         boxShadow: '0 4px 30px rgba(0, 0, 0, 0.35)',
       }}
     >

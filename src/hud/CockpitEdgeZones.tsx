@@ -1,10 +1,8 @@
 import { useCallback, useRef } from 'react'
 import { useCockpit } from '../context/CockpitContext'
 
-/**
- * Edge swipe targets (fluid tactile): left = layer hub, right = data inspector focus.
- * Touch-first; narrow zones avoid stealing map pan.
- */
+/** Edge swipe hit width — wide enough for one-thumb reach without stealing map pan. */
+const EDGE_ZONE_WIDTH_PX = 40
 export default function CockpitEdgeZones() {
   const { raisePanel } = useCockpit()
   const edge = useRef({ active: false, edge: null as 'L' | 'R' | null, x0: 0, y0: 0 })
@@ -43,7 +41,7 @@ export default function CockpitEdgeZones() {
           left: 0,
           top: 48,
           bottom: 80,
-          width: 28,
+          width: EDGE_ZONE_WIDTH_PX,
           zIndex: 150,
           touchAction: 'pan-y',
           pointerEvents: 'auto',
@@ -58,7 +56,7 @@ export default function CockpitEdgeZones() {
           right: 0,
           top: 48,
           bottom: 80,
-          width: 28,
+          width: EDGE_ZONE_WIDTH_PX,
           zIndex: 150,
           touchAction: 'pan-y',
           pointerEvents: 'auto',

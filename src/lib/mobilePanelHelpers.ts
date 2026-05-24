@@ -92,14 +92,18 @@ export function clampMobileToReachableViewport(
   size: { w: number; h: number },
   viewport: { vw: number; vh: number },
   topInset = 36,
+  sideInsets: { left?: number; right?: number } = {},
 ): { x: number; y: number } {
-  const maxX = Math.max(0, viewport.vw - size.w)
+  const leftInset = sideInsets.left ?? 0
+  const rightInset = sideInsets.right ?? 0
+  const minX = leftInset
+  const maxX = Math.max(leftInset, viewport.vw - size.w - rightInset)
   const maxY = Math.max(topInset, viewport.vh - size.h)
-  const unreachableX = pos.x < 0 || pos.x > maxX
+  const unreachableX = pos.x < minX || pos.x > maxX
   const unreachableY = pos.y < topInset || pos.y > maxY
   if (!unreachableX && !unreachableY) return pos
   return {
-    x: Math.max(0, Math.min(pos.x, maxX)),
+    x: Math.max(minX, Math.min(pos.x, maxX)),
     y: Math.max(topInset, Math.min(pos.y, maxY)),
   }
 }

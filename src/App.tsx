@@ -4,9 +4,6 @@ import { CockpitProvider } from './context/CockpitContext'
 import { MapProvider } from './context/MapContext'
 import { PanelDataProvider } from './context/PanelDataContext'
 import TopBar from './hud/TopBar'
-import LayerPanel from './hud/LayerPanel'
-import WaypointTypePanel from './hud/WaypointTypePanel'
-import DeadManPanel from './hud/DeadManPanel'
 import ScanlineOverlay from './hud/ScanlineOverlay'
 import CockpitKeyboard from './hud/CockpitKeyboard'
 import CockpitEdgeZones from './hud/CockpitEdgeZones'
@@ -19,6 +16,9 @@ import SwUpdateBanner from './hud/SwUpdateBanner'
 const MapCanvas = lazy(() => import('./components/MapCanvas'))
 const WaypointLayer = lazy(() => import('./layers/WaypointLayer'))
 const RouteLayer = lazy(() => import('./layers/RouteLayer'))
+const LayerPanel = lazy(() => import('./hud/LayerPanel'))
+const WaypointTypePanel = lazy(() => import('./hud/WaypointTypePanel'))
+const DeadManPanel = lazy(() => import('./hud/DeadManPanel'))
 const DisplayModePanel = lazy(() => import('./hud/DisplayModePanel'))
 const SituationPanel = lazy(() => import('./hud/SituationPanel'))
 const VoicePanel = lazy(() => import('./hud/VoicePanel'))
@@ -94,9 +94,11 @@ export default function App() {
                 pointerEvents: 'none',
               }}
             >
-              <LayerPanel />
-              <WaypointTypePanel />
-              <DeadManPanel />
+              <Suspense fallback={null}>
+                <LayerPanel />
+                <WaypointTypePanel />
+                <DeadManPanel />
+              </Suspense>
             </div>
             <Suspense fallback={null}>
               <StatusRail />

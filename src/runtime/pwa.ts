@@ -164,6 +164,7 @@ export function dismissInstallHint(): void {
   try {
     localStorage.setItem(HINT_DISMISSED_KEY, '1')
     logInfo('PWA', '[PWA] install hint dismissed')
+    window.dispatchEvent(new CustomEvent('hud:install-hint-dismissed'))
   } catch {
     // ignore
   }

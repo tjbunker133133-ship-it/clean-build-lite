@@ -62,10 +62,11 @@ function zoomForAccuracy(accuracy: number | null): number {
 }
 
 function SectionLabel({ children }: { children: string }) {
+  const isMobile = getDeviceProfile().interactionMode === 'mobile'
   return (
     <div
       style={{
-        fontSize: 10,
+        fontSize: touchFontSm(isMobile),
         letterSpacing: '0.14em',
         textTransform: 'uppercase',
         color: 'var(--cockpit-panel-subtle)',

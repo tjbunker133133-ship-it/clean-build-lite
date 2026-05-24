@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useCockpit } from '../context/CockpitContext'
-import { cockpitViewport } from '../lib/viewport'
+import { cockpitViewport, cockpitSafeAreaInsets, cockpitMobileTopInset } from '../lib/viewport'
 import { DURATION_MS, EASE } from '../types/cockpit'
 import { DesktopInteractionController } from '../controllers/DesktopInteractionController'
 import { MobileInteractionController } from '../controllers/MobileInteractionController'
@@ -31,7 +31,7 @@ import {
   MOBILE_PANEL_FONT_SCALE_MIN,
   MOBILE_PANEL_FONT_SCALE_STEP,
 } from '../lib/mobilePanelHelpers'
-import { touchFontSm, touchFontMd } from './tokens'
+import { touchFontSm, touchFontMd, touchMinTarget } from './tokens'
 
 function dockDevTrace(message: string, detail?: Record<string, unknown>): void {
   if (!isHudVerboseDebug()) return
@@ -259,11 +259,27 @@ export default function CockpitHudPanel({
   dockPreviewRef.current = dockPreview
   snapGuideRef.current = snapGuide
 
+  const displayPos = dragMode === 'move' ? posRef.current : pos
+
+  const applyLivePanelPosition = useCallback((nx: number, ny: number) => {
+    posRef.current = { x: nx, y: ny }
+    const el = rootRef.current
+    if (!el) return
+    el.style.left = `${nx}px`
+    el.style.top = `${ny}px`
+  }, [])
+
   const profile = getDeviceProfile()
   const wantsReducedMotion = profile.prefersReducedMotion
   const isIOSWebKit = profile.isIOS
   const isMobile = profile.interactionMode === 'mobile'
   const isCoarsePointer = profile.isCoarsePointer
+  const mobileTopInset = useMemo(() => cockpitMobileTopInset(), [])
+  const mobileSideInsets = useMemo(() => {
+    const s = cockpitSafeAreaInsets()
+    return { left: s.left, right: s.right }
+  }, [])
+  const mobileTapMin = touchMinTarget(isMobile)
   const dragThreshold = isIOSWebKit ? 14 : isCoarsePointer ? 12 : DRAG_THRESHOLD_PX
   const edgeDockZone = isMobile
     ? Math.max(10, Math.round(EDGE_DOCK_ZONE_PX * 0.6))
@@ -741,8 +757,8 @@ export default function CockpitHudPanel({
 
     if (isMobile) {
       const { vw, vh } = viewportSize()
-      const nx = Math.max(0, Math.min(p.x, vw - s.w))
-      const ny = Math.max(36, Math.min(p.y, vh - Math.max(minHeight, height)))
+      const ny = Math.max(mobileTopInset, Math.min(p.y, vh - Math.max(minHeight, height)))
+      const nx = Math.max(mobileSideInsets.left, Math.min(p.x, vw - s.w - mobileSideInsets.right))
       const dxClamp = Math.round(p.x - nx)
       const dyClamp = Math.round(p.y - ny)
       if (Math.abs(dxClamp) > 1 || Math.abs(dyClamp) > 1) {
@@ -912,10 +928,10 @@ export default function CockpitHudPanel({
         const pw = s.w
         const measuredH = rootRef.current?.getBoundingClientRect().height
         const ph = minimized ? chromeStripHeight : Math.max(minHeight, s.h ?? Math.ceil(measuredH ?? minHeight))
-        const minX = 0
-        const maxX = vw - pw
+        const minX = mobileSideInsets.left
+        const maxX = vw - pw - mobileSideInsets.right
         nx = Math.max(minX, Math.min(nx, maxX))
-        ny = Math.max(36, Math.min(ny, vh - ph))
+        ny = Math.max(mobileTopInset, Math.min(ny, vh - ph))
         /**
          * CONTRACT (mobile): No edge dock preview during drag — avoids implying drag-release will dock
          * when mobile drag commits never edge-dock (only explicit minimize docks).
@@ -931,9 +947,13 @@ export default function CockpitHudPanel({
         const guideY: number | null = null
         setSnapGuideIfChanged({ x: guideX, y: guideY })
         if (Math.abs(posRef.current.x - nx) > 0.5 || Math.abs(posRef.current.y - ny) > 0.5) {
-          const next = { x: nx, y: ny }
-          posRef.current = next
-          setPos(next)
+          if (isMobile) {
+            applyLivePanelPosition(nx, ny)
+          } else {
+            const next = { x: nx, y: ny }
+            posRef.current = next
+            setPos(next)
+          }
         }
       } else if (mode === 'resize') {
         const rect = rootRef.current?.getBoundingClientRect()
@@ -974,7 +994,8 @@ export default function CockpitHudPanel({
             p,
             { w: nw, h: nh },
             { vw, vh },
-            36,
+            mobileTopInset,
+            mobileSideInsets,
           )
           if (Math.abs(reachable.x - p.x) > 0.5 || Math.abs(reachable.y - p.y) > 0.5) {
             posRef.current = reachable
@@ -1056,6 +1077,9 @@ export default function CockpitHudPanel({
     chromeStripHeight,
     avoidRuntimeOverlap,
     snapCoord,
+    applyLivePanelPosition,
+    mobileTopInset,
+    mobileSideInsets,
   ])
 
   // MOBILE FIELD INTERACTION RULE: panels MUST NOT auto-rearrange on rotation,
@@ -1269,7 +1293,13 @@ export default function CockpitHudPanel({
         const current = posRef.current
         const s = sizeRef.current
         const h = s.h ?? minHeight
-        const next = clampMobileToReachableViewport(current, { w: s.w, h }, { vw, vh }, 36)
+        const next = clampMobileToReachableViewport(
+          current,
+          { w: s.w, h },
+          { vw, vh },
+          mobileTopInset,
+          mobileSideInsets,
+        )
         if (!shouldApplyViewportClampDeduped(lastViewportClampRef.current, next)) return
         if (Math.abs(next.x - current.x) <= 0.5 && Math.abs(next.y - current.y) <= 0.5) return
         lastViewportClampRef.current = next
@@ -1290,7 +1320,7 @@ export default function CockpitHudPanel({
       window.removeEventListener('orientationchange', scheduleRecover)
       window.removeEventListener('pageshow', scheduleRecover)
     }
-  }, [isMobile, docked, minimized, dragMode, panelId, minHeight, safeUpdatePanel])
+  }, [isMobile, docked, minimized, dragMode, panelId, minHeight, safeUpdatePanel, mobileTopInset, mobileSideInsets])
 
   const toggleDocked = () => {
     traceAction(`panel_toggle_dock:${panelId}`, 'handler_enter', { docked })
@@ -1519,10 +1549,10 @@ export default function CockpitHudPanel({
       className={resizeBump ? 'cockpit-panel cockpit-panel-bump' : 'cockpit-panel'}
       style={{
         position: isMobile && isMaximized ? 'fixed' : 'absolute',
-        left: isMobile && isMaximized ? 10 : pos.x,
-        top: isMobile && isMaximized ? 10 : pos.y,
-        right: isMobile && isMaximized ? 10 : undefined,
-        bottom: isMobile && isMaximized ? 10 : undefined,
+        left: isMobile && isMaximized ? 'max(10px, env(safe-area-inset-left, 0px))' : displayPos.x,
+        top: isMobile && isMaximized ? 'max(10px, env(safe-area-inset-top, 0px))' : displayPos.y,
+        right: isMobile && isMaximized ? 'max(10px, env(safe-area-inset-right, 0px))' : undefined,
+        bottom: isMobile && isMaximized ? 'max(10px, env(safe-area-inset-bottom, 0px))' : undefined,
         width: isMobile && isMaximized ? 'auto' : size.w,
         height: isMobile && isMaximized
           ? 'auto'
@@ -1700,8 +1730,8 @@ export default function CockpitHudPanel({
                       color: accent,
                       cursor: 'pointer',
                       borderRadius: 4,
-                      minHeight: 36,
-                      minWidth: 36,
+                      minHeight: mobileTapMin,
+                      minWidth: mobileTapMin,
                       fontSize: touchFontSm(isMobile),
                       fontWeight: 800,
                       opacity: mobilePanelFontScale <= MOBILE_PANEL_FONT_SCALE_MIN + 1e-6 ? 0.35 : 1,
@@ -1726,8 +1756,8 @@ export default function CockpitHudPanel({
                       color: accent,
                       cursor: 'pointer',
                       borderRadius: 4,
-                      minHeight: 36,
-                      minWidth: 36,
+                      minHeight: mobileTapMin,
+                      minWidth: mobileTapMin,
                       fontSize: touchFontSm(isMobile),
                       fontWeight: 800,
                       opacity: mobilePanelFontScale >= MOBILE_PANEL_FONT_SCALE_MAX - 1e-6 ? 0.35 : 1,
@@ -1787,7 +1817,8 @@ export default function CockpitHudPanel({
                       posRef.current,
                       next,
                       { vw, vh },
-                      36,
+                      mobileTopInset,
+                      mobileSideInsets,
                     )
                     sizeRef.current = next
                     posRef.current = clampedPos
