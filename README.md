@@ -34,9 +34,10 @@ The file `src/.cursorrules` is the **architectural contract** for tiers, map/pan
 
 Production is on **Vercel** (`vercel.json`). **One git push should produce one production deployment.**
 
-1. Connect **only one** Vercel project to **one** repo remote (recommended: `upstream` → `tjbunker133133-ship-it/clean-build-lite`, branch `stable/2026-05-23`).
-2. In Vercel → Project Settings → Git: disable redundant projects on the same repo, and turn off **Automatic Preview Deployments** if you do not need per-commit previews (they multiply build count).
-3. `vercel.json` skips preview builds via `ignoreCommand`; `netlify.toml` skips Netlify CI (`ignore = exit 0`) so Netlify does not also build on every push.
+1. Connect **only one** Vercel project to **one** repo remote (recommended: `upstream` → `tjbunker133133-ship-it/clean-build-lite`, branch `stable/2026-05-23`). Delete or disconnect extras (`clean-build-lite-ictz`, `clean-build-lite-jd5o`, etc.) — each duplicate fires on every push.
+2. Canonical preview project name: **`clean-build-lite`** (exact). Other projects on the same repo are skipped by `scripts/vercel-should-build.sh`. If your live project uses a different name, set env var **`VERCEL_CANONICAL_PROJECT=1`** on that project only (Preview + Production).
+3. Set **Production Branch** to `stable/2026-05-23` on the canonical project so Production (not only Preview) serves field builds with map fixes.
+4. `netlify.toml` skips Netlify CI (`ignore = exit 0`) so Netlify does not also build on every push.
 4. Vercel runs `npm ci` then `npm run build` (includes `ensure:index` via `prebuild`).
 5. Set **`VITE_MAPTILER_KEY`** and other `VITE_*` vars in Vercel → Environment Variables (see `.env.example`). Without the MapTiler key, all basemap layers degrade to the same emergency tiles.
 
