@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { getDeviceProfile } from '../runtime/deviceProfile'
+import { forceUpdateApp } from '../utils/forceUpdate'
 import { touchFontSm, touchGapMd, touchMinTarget } from './tokens'
 
 type SwUpdateEventDetail = {
@@ -50,7 +51,11 @@ export default function SwUpdateBanner() {
       <span>UPDATE READY</span>
       <button
         type="button"
-        onClick={() => activate()}
+        onClick={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          void forceUpdateApp()
+        }}
         style={{
           minHeight: tapMin,
           borderRadius: 8,
@@ -61,6 +66,7 @@ export default function SwUpdateBanner() {
           fontSize: fontSm,
           padding: '0 14px',
           cursor: 'pointer',
+          touchAction: 'manipulation',
         }}
       >
         RELOAD

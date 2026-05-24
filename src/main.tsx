@@ -24,6 +24,7 @@ import {
   SW_DEFERRED_RELOAD_KEY,
 } from './runtime/forceUpdateMeta'
 import { hardReloadWithCacheBust } from './runtime/pwaForceUpdate'
+import { forceUpdateApp } from './utils/forceUpdate'
 import { traceAction } from './runtime/actionTrace'
 import { hudDevLog } from './lib/tier1DebugLog'
 
@@ -172,13 +173,7 @@ if (typeof window !== 'undefined') {
   const w = window as Window & {
     __forceReload?: () => Promise<void>
   }
-  w.__forceReload = async () => {
-    if ('caches' in window) {
-      const keys = await caches.keys()
-      await Promise.all(keys.map((k) => caches.delete(k)))
-    }
-    location.reload()
-  }
+  w.__forceReload = () => forceUpdateApp()
   logInfo('RUNTIME', 'force reload available: window.__forceReload()')
 
   const onViewportChange = () => {

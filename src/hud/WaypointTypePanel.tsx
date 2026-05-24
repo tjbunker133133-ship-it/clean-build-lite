@@ -1,6 +1,7 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, type MouseEvent, type PointerEvent } from 'react'
 import HudPanel from './HudPanel'
 import { useAppContext } from '../context/AppContext'
+import { useCockpit } from '../context/CockpitContext'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 import {
   touchFontSm as touchFontSmFn,
@@ -36,6 +37,8 @@ export default function WaypointTypePanel() {
     setShowMapDistances,
     setSnapToTrail,
   } = useAppContext()
+  const { panels } = useCockpit()
+  const isDocked = panels.waypoints?.docked === true
   const {
     pendingWaypointType,
     waypoints,
@@ -60,6 +63,20 @@ export default function WaypointTypePanel() {
   const labelPx = (px: number) => Math.max(touchFontSmFn(isMobile), px)
   const legCount = Math.max(0, waypoints.length - 1)
   const armedType = selectedType === 'default' ? 'DISARMED' : selectedType.toUpperCase()
+  const isArmed = selectedType !== 'default'
+
+  useEffect(() => {
+    if (isDocked && selectedType !== 'default') {
+      setPendingType('default')
+    }
+  }, [isDocked, selectedType, setPendingType])
+
+  function handleDisarm(e: MouseEvent | PointerEvent) {
+    e.preventDefault()
+    e.stopPropagation()
+    setPendingType('default')
+    tier1Debug('waypoint', 'disarm-click')
+  }
 
   function handleRouteTypeClick(item: RouteTypeTile) {
     setPendingType(item.id)
@@ -104,11 +121,13 @@ export default function WaypointTypePanel() {
       title="Waypoint type"
       initialPos={{ x: 20, y: 420 }}
       initialWidth={360}
-      minHeight={72}
+      minHeight={isMobile ? 300 : 72}
+      disableMobileDensityCollapse
       dockedHeaderTrailing={clearRouteDockedBtn}
     >
       <div style={{ marginBottom: gapMd, fontSize: labelPx(11), color: '#9fb0c7' }}>
-        Arm a waypoint type below. Placement is blocked while this panel is docked.
+        Arm a type to enable map placement. Disarmed map taps never drop pins.
+        {isDocked ? ' Undock this panel to arm a type.' : ''}
       </div>
       <div style={{ marginBottom: gapMd, fontSize: labelPx(10), color: '#94a3b8', lineHeight: 1.35 }}>
         <strong style={{ color: '#fca5a5' }}>CLEAR ROUTE</strong> (red/yellow) removes all pins — not a waypoint type.
@@ -116,31 +135,67 @@ export default function WaypointTypePanel() {
       <div
         style={{
           marginBottom: Math.max(gapMd, 10),
-          display: 'inline-flex',
-          alignItems: 'center',
+          display: 'flex',
+          flexWrap: 'wrap',
+          alignItems: 'stretch',
           gap: gapMd,
-          padding: '4px 8px',
-          borderRadius: 999,
-          border: selectedType === 'default' ? '1px solid #4b5563' : '1px solid #0ea5e9',
-          background: selectedType === 'default'
-            ? 'linear-gradient(180deg,#1b2028,#151920)'
-            : 'linear-gradient(180deg,#08202d,#08151e)',
-          color: selectedType === 'default' ? '#94a3b8' : '#7dd3fc',
-          fontSize: labelPx(11),
-          letterSpacing: '0.05em',
-          fontWeight: 700,
         }}
       >
-        <span
+        <div
           style={{
-            width: 8,
-            height: 8,
+            flex: '1 1 140px',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: gapMd,
+            padding: '8px 10px',
             borderRadius: 999,
-            background: selectedType === 'default' ? '#6b7280' : '#22d3ee',
-            boxShadow: selectedType === 'default' ? 'none' : '0 0 8px #22d3eeaa',
+            border: isArmed ? '1px solid #0ea5e9' : '1px solid #4b5563',
+            background: isArmed
+              ? 'linear-gradient(180deg,#08202d,#08151e)'
+              : 'linear-gradient(180deg,#1b2028,#151920)',
+            color: isArmed ? '#7dd3fc' : '#94a3b8',
+            fontSize: labelPx(11),
+            letterSpacing: '0.05em',
+            fontWeight: 700,
+            minHeight: btnMin(44),
           }}
-        />
-        ARMED: {armedType}
+        >
+          <span
+            style={{
+              width: 8,
+              height: 8,
+              borderRadius: 999,
+              background: isArmed ? '#22d3ee' : '#6b7280',
+              boxShadow: isArmed ? '0 0 8px #22d3eeaa' : 'none',
+            }}
+          />
+          ARMED: {armedType}
+        </div>
+        <button
+          type="button"
+          data-no-drag
+          data-testid="waypoint-disarm"
+          aria-pressed={!isArmed}
+          onClick={handleDisarm}
+          style={{
+            flex: '1 1 140px',
+            minHeight: btnMin(44),
+            padding: '10px 14px',
+            borderRadius: 10,
+            border: isArmed ? '2px solid #fbbf24' : '1px solid #31363f',
+            cursor: 'pointer',
+            fontSize: labelPx(12),
+            fontWeight: 800,
+            letterSpacing: '0.08em',
+            background: isArmed
+              ? 'linear-gradient(180deg, #991b1b, #7f1d1d)'
+              : 'linear-gradient(180deg, #1f232a, #161a20)',
+            color: isArmed ? '#fff' : '#94a3b8',
+            touchAction: 'manipulation',
+          }}
+        >
+          {isArmed ? 'DISARM — STOP DROPS' : 'DISARMED'}
+        </button>
       </div>
       <div
         style={{
@@ -211,28 +266,6 @@ export default function WaypointTypePanel() {
             🧹 CLEAR ROUTE
           </button>
         </div>
-
-        <button
-          type="button"
-          data-no-drag
-          onClick={() => setPendingType('default')}
-          style={{
-            padding: '9px 12px',
-            borderRadius: 10,
-            border: selectedType === 'default' ? '1px solid #94a3b8' : '1px solid #31363f',
-            cursor: 'pointer',
-            fontSize: labelPx(12),
-            fontWeight: 600,
-            minHeight: btnMin(40),
-            minWidth: 96,
-            background: selectedType === 'default'
-              ? 'linear-gradient(180deg, #94a3b833, #94a3b822)'
-              : 'linear-gradient(180deg, #1f232a, #161a20)',
-            color: selectedType === 'default' ? '#e2e8f0' : '#d5dde7',
-          }}
-        >
-          Disarm
-        </button>
       </div>
       <div style={{ marginBottom: Math.max(gapMd, 10), display: 'grid', gap: gapMd }}>
         <label style={{ fontSize: labelPx(11), color: '#b8c4d8', display: 'grid', gap: gapSm }}>

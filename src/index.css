@@ -104,6 +104,32 @@ html, body {
   box-sizing: border-box;
 }
 
+/* iOS / mobile: 44px touch halo — visual pin stays 24px centered. */
+html.platform-ios .marker,
+html.platform-mobile .marker {
+  width: 44px;
+  height: 44px;
+  margin-left: -10px;
+  margin-top: -10px;
+}
+
+html.platform-ios .marker .marker-icon,
+html.platform-mobile .marker .marker-icon {
+  top: 10px;
+  left: 10px;
+  width: 24px;
+  height: 24px;
+}
+
+html.platform-ios .marker .marker-badge,
+html.platform-mobile .marker .marker-badge {
+  width: 18px;
+  height: 18px;
+  font-size: 11px;
+  bottom: 6px;
+  right: 6px;
+}
+
 /* CLEAR ROUTE command — must win over generic .cockpit-panel button rules */
 .cockpit-panel button.waypoint-clear,
 button.waypoint-clear {

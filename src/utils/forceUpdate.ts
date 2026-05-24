@@ -14,9 +14,18 @@ function readActivatePwaUpdate(): (() => void) | undefined {
   return typeof fn === 'function' ? fn : undefined
 }
 
+let forceUpdateInFlight = false
+
+export function isForceUpdateInFlight(): boolean {
+  return forceUpdateInFlight
+}
+
 export async function forceUpdateApp(): Promise<void> {
+  if (forceUpdateInFlight) return
+  forceUpdateInFlight = true
   traceAction('force_update_app', 'handler_enter')
   console.log('[FORCE UPDATE] Checking SW')
+
   if (typeof window !== 'undefined') {
     try {
       sessionStorage.setItem(FORCE_UPDATE_PENDING_KEY, '1')
@@ -55,24 +64,25 @@ export async function forceUpdateApp(): Promise<void> {
       reason: 'pwa_force_cycle_failed',
       message: (err as Error)?.message ?? 'unknown',
     })
+  } finally {
+    console.log('[FORCE UPDATE] Reloading')
+    try {
+      const raw = sessionStorage.getItem(FORCE_UPDATE_META_KEY)
+      const parsed = raw ? (JSON.parse(raw) as Record<string, unknown>) : {}
+      sessionStorage.setItem(
+        FORCE_UPDATE_META_KEY,
+        JSON.stringify(
+          mergeForceUpdateMeta(parsed, {
+            reloadRequested: true,
+            reloadRequestedAt: Date.now(),
+          }),
+        ),
+      )
+      sessionStorage.removeItem(FORCE_UPDATE_PENDING_KEY)
+    } catch {
+      // ignore storage failures
+    }
+    traceAction('force_update_app', 'reload_requested', { source: 'force_update_reload' })
+    hardReloadWithCacheBust()
   }
-
-  console.log('[FORCE UPDATE] Reloading')
-  try {
-    const raw = sessionStorage.getItem(FORCE_UPDATE_META_KEY)
-    const parsed = raw ? (JSON.parse(raw) as Record<string, unknown>) : {}
-    sessionStorage.setItem(
-      FORCE_UPDATE_META_KEY,
-      JSON.stringify(
-        mergeForceUpdateMeta(parsed, {
-          reloadRequested: true,
-          reloadRequestedAt: Date.now(),
-        }),
-      ),
-    )
-  } catch {
-    // ignore storage failures
-  }
-  traceAction('force_update_app', 'reload_requested', { source: 'force_update_reload' })
-  hardReloadWithCacheBust()
 }

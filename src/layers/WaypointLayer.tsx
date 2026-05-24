@@ -4,7 +4,10 @@ import { useMapContext } from '../context/MapContext'
 import { useAppContext } from '../context/AppContext'
 import type { WaypointType } from '../types'
 import { haversineDistance, formatDistance } from '../lib/haversine'
-import { getDeviceProfile } from '../runtime/deviceProfile'
+import { getDeviceProfile, isIosFieldHud } from '../runtime/deviceProfile'
+import {
+  setWaypointMarkerTouchActive,
+} from '../lib/waypointMarkerTouchGate'
 
 /** Micro-shift so visual circle tip meets route vertex ([y negative] = nudge up). Tune: [0,-1] … [0,-3] or ±x for horizontal. */
 const WAYPOINT_PIN_OFFSET_PX: [number, number] = [0, -2]
@@ -30,6 +33,22 @@ function useDefaultWaypointMarkerDebug(): boolean {
     /* ignore */
   }
   return false
+}
+
+function bindWaypointMarkerTouchHandlers(el: HTMLElement): void {
+  const arm = (ev: Event) => {
+    ev.stopPropagation()
+    setWaypointMarkerTouchActive(true)
+  }
+  const disarm = () => {
+    setWaypointMarkerTouchActive(false)
+  }
+  el.addEventListener('pointerdown', arm, { capture: true })
+  el.addEventListener('touchstart', arm, { capture: true, passive: false })
+  el.addEventListener('pointerup', disarm, { capture: true })
+  el.addEventListener('pointercancel', disarm, { capture: true })
+  el.addEventListener('touchend', disarm, { capture: true })
+  el.addEventListener('touchcancel', disarm, { capture: true })
 }
 
 export default function WaypointLayer() {
@@ -83,6 +102,7 @@ export default function WaypointLayer() {
       segmentMarkersRef.current = []
 
       const debugDefaultMarker = useDefaultWaypointMarkerDebug()
+      const markerDragTolerance = isIosFieldHud() ? 14 : 4
 
       // rebuild markers
       waypoints.forEach((wp) => {
@@ -100,17 +120,21 @@ export default function WaypointLayer() {
             pitchAlignment: 'map',
             rotationAlignment: 'map',
             subpixelPositioning: true,
+            clickTolerance: markerDragTolerance,
           })
             .setLngLat([wp.lng, wp.lat])
             .addTo(map)
           marker.on('dragstart', () => {
+            setWaypointMarkerTouchActive(true)
             map.dragPan.disable()
           })
           marker.on('dragend', () => {
+            setWaypointMarkerTouchActive(false)
             map.dragPan.enable()
             const pos = marker.getLngLat()
             updateWaypoint(wp.id, { lng: pos.lng, lat: pos.lat })
           })
+          bindWaypointMarkerTouchHandlers(marker.getElement())
           marker.getElement().addEventListener('contextmenu', (ev) => {
             ev.preventDefault()
             ev.stopPropagation()
@@ -185,7 +209,7 @@ export default function WaypointLayer() {
         const marker = new maplibregl.Marker({
           element: root,
           draggable: true,
-          clickTolerance: 4,
+          clickTolerance: markerDragTolerance,
           anchor: 'bottom',
           offset: WAYPOINT_PIN_OFFSET_PX,
           pitchAlignment: 'map',
@@ -195,13 +219,16 @@ export default function WaypointLayer() {
           .setLngLat([wp.lng, wp.lat])
           .addTo(map)
         marker.on('dragstart', () => {
+          setWaypointMarkerTouchActive(true)
           map.dragPan.disable()
         })
         marker.on('dragend', () => {
+          setWaypointMarkerTouchActive(false)
           map.dragPan.enable()
           const pos = marker.getLngLat()
           updateWaypoint(wp.id, { lng: pos.lng, lat: pos.lat })
         })
+        bindWaypointMarkerTouchHandlers(root)
         markersRef.current[wp.id] = marker
 
         if (overlaysReady && showMapLabels) {

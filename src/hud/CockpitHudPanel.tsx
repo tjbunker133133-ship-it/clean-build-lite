@@ -54,6 +54,8 @@ export type CockpitHudPanelProps = {
   accent?: string
   /** Shown in the dock strip (and undocked title bar when set). Body stays hidden while docked/minimized. */
   dockedHeaderTrailing?: React.ReactNode
+  /** Field panels with dense controls (e.g. waypoint types) must not auto-collapse to header-only after idle. */
+  disableMobileDensityCollapse?: boolean
   children: React.ReactNode
 }
 
@@ -145,6 +147,7 @@ export default function CockpitHudPanel({
   minHeight = 120,
   accent: accentProp,
   dockedHeaderTrailing,
+  disableMobileDensityCollapse = false,
   children,
 }: CockpitHudPanelProps) {
   if (
@@ -249,6 +252,7 @@ export default function CockpitHudPanel({
   const lastViewportClampRef = useRef<{ x: number; y: number } | null>(null)
   const lastViewportSizeRef = useRef<{ vw: number; vh: number } | null>(null)
   const mobileResizeSyncSuppressedRef = useRef(false)
+  const waypointHeightBootstrappedRef = useRef(false)
   const waypointOscillationDiagRef = useRef<{ count: number; windowStart: number; lastLogAt: number }>({
     count: 0,
     windowStart: 0,
@@ -513,6 +517,10 @@ export default function CockpitHudPanel({
   }, [layout?.x, layout?.y, layout?.w, layout?.h, layout?.minimized, layout?.docked, layout?.dockSide])
 
   useEffect(() => {
+    if (disableMobileDensityCollapse || panelId === 'waypoints') {
+      setMobileDensityCollapsed(false)
+      return
+    }
     if (!isMobile || docked || minimized) {
       setMobileDensityCollapsed(false)
       return
@@ -520,9 +528,10 @@ export default function CockpitHudPanel({
     if (dragMode !== 'none' || isTopPanel) {
       setMobileDensityCollapsed(false)
     }
-  }, [isMobile, docked, minimized, dragMode, isTopPanel])
+  }, [disableMobileDensityCollapse, isMobile, docked, minimized, dragMode, isTopPanel, panelId])
 
   useEffect(() => {
+    if (disableMobileDensityCollapse || panelId === 'waypoints') return
     if (!isMobile || docked || minimized || dragMode !== 'none' || isTopPanel) return
     if (mobileDensityTimerRef.current != null) {
       window.clearTimeout(mobileDensityTimerRef.current)
@@ -537,7 +546,42 @@ export default function CockpitHudPanel({
         mobileDensityTimerRef.current = null
       }
     }
-  }, [isMobile, docked, minimized, dragMode, isTopPanel, pos.x, pos.y])
+  }, [disableMobileDensityCollapse, isMobile, docked, minimized, dragMode, isTopPanel, panelId, pos.x, pos.y])
+
+  useEffect(() => {
+    if (panelId !== 'waypoints' || !isMobile || docked || minimized) {
+      if (panelId === 'waypoints' && docked) waypointHeightBootstrappedRef.current = false
+      return
+    }
+    if (layout?.h != null) {
+      waypointHeightBootstrappedRef.current = true
+      return
+    }
+    if (waypointHeightBootstrappedRef.current || dragMode !== 'none') return
+    const { vw, vh } = viewportSize()
+    const preset = mobilePresetDimensions(
+      'normal',
+      { vw, vh },
+      { w: minWidthEffective, h: minHeightEffective },
+    )
+    const nextW = layout?.w ?? preset.w
+    const nextH = preset.h
+    waypointHeightBootstrappedRef.current = true
+    sizeRef.current = { w: nextW, h: nextH }
+    setSize({ w: nextW, h: nextH })
+    safeUpdatePanel(panelId, { w: nextW, h: nextH })
+  }, [
+    panelId,
+    isMobile,
+    docked,
+    minimized,
+    layout?.h,
+    layout?.w,
+    dragMode,
+    minWidthEffective,
+    minHeightEffective,
+    safeUpdatePanel,
+  ])
 
   useEffect(() => {
     if (layout?.docked === true) {
@@ -1538,7 +1582,13 @@ export default function CockpitHudPanel({
   const dockedHeight = computeDockMetrics(viewportSize().vh, sideDockCount).height
   const dockHeaderHeight = docked ? dockRailChromeHeight : chromeStripHeight
   const dockActionHeight = dockRailChromeHeight
-  const effectiveMobileCollapsed = isMobile && mobileDensityCollapsed && !docked && !minimized
+  const effectiveMobileCollapsed =
+    isMobile &&
+    mobileDensityCollapsed &&
+    !docked &&
+    !minimized &&
+    !disableMobileDensityCollapse &&
+    panelId !== 'waypoints'
 
   const onDockPointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
     if (!docked) return

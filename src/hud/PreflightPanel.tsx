@@ -12,7 +12,7 @@ import {
 } from '../lib/devicePermissions'
 import { COCKPIT_STORAGE_KEY } from '../types/cockpit'
 import { resetAppState } from '../utils/resetApp'
-import { forceUpdateApp } from '../utils/forceUpdate'
+import { forceUpdateApp, isForceUpdateInFlight } from '../utils/forceUpdate'
 import { iosInstallCopy } from '../lib/iosInstallGuide'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 import { updatePermission } from '../runtime/runtimeSnapshot'
@@ -115,6 +115,7 @@ export default function PreflightPanel() {
   const [recheckTick, setRecheckTick] = useState(0)
   const [lastRecheckAt, setLastRecheckAt] = useState<number | null>(null)
   const [requestingPerms, setRequestingPerms] = useState(false)
+  const [forceUpdating, setForceUpdating] = useState(false)
   const [manual, setManual] = useState<Record<ManualCheckKey, boolean>>({
     contactsLoaded: false,
     audioAudible: false,
@@ -1132,20 +1133,29 @@ export default function PreflightPanel() {
           <button
             type="button"
             data-no-drag
-            onClick={() => void forceUpdateApp()}
+            disabled={forceUpdating || isForceUpdateInFlight()}
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              if (forceUpdating || isForceUpdateInFlight()) return
+              setForceUpdating(true)
+              void forceUpdateApp()
+            }}
             style={{
               minHeight: tapMin,
               borderRadius: 8,
               border: '1px solid rgba(125,209,255,0.45)',
               background: 'rgba(125,209,255,0.12)',
               color: '#d8eefc',
-              cursor: 'pointer',
+              cursor: forceUpdating ? 'wait' : 'pointer',
               fontSize: fontSm,
               letterSpacing: '0.08em',
               fontWeight: 700,
+              touchAction: 'manipulation',
+              opacity: forceUpdating ? 0.72 : 1,
             }}
           >
-            FORCE UPDATE APP
+            {forceUpdating ? 'UPDATING…' : 'FORCE UPDATE APP'}
           </button>
           <button
             type="button"

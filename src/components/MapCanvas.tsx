@@ -26,6 +26,8 @@ import {
   mapLayerDiag,
 } from '../lib/mapLayerDiag'
 import { tier1Debug } from '../lib/tier1DebugLog'
+import { isWaypointPlacementAllowed } from '../lib/waypointPlacement'
+import { isWaypointMarkerTouchActive } from '../lib/waypointMarkerTouchGate'
 import {
   __probeStyleForTrailLayersForTests,
   __resetSnapCapabilityDevLogForTests,
@@ -825,6 +827,7 @@ export default function MapCanvas() {
 
       const placeWaypoint = (e: any, source: 'click' | 'touch'): boolean => {
         if (!map) return false
+        if (isWaypointMarkerTouchActive()) return false
         // CONTRACT-SENSITIVE (trail snap): while a preview is open, ignore
         // further map taps — operator must use explicit buttons. Never queue
         // multiple previews; gate ensures no duplicate placement from stacked gestures.
@@ -834,7 +837,12 @@ export default function MapCanvas() {
         if (!ll || typeof ll.lat !== 'number' || typeof ll.lng !== 'number') return false
         const lat = ll.lat
         const lng = ll.lng
-        if (waypointDropBlockedRef.current) {
+        if (
+          !isWaypointPlacementAllowed(
+            waypointDropBlockedRef.current,
+            pendingTypeRef.current,
+          )
+        ) {
           return false
         }
         const now = Date.now()
