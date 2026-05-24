@@ -8,6 +8,7 @@ import {
   mapStyleFingerprint,
   mapTilerRasterFallbackFingerprint,
   maptilerTerrainRgbTileJson,
+  maptilerBasemapsConfigured,
   isAppleWebKitMapSwitch,
   resolveBasemapStyle,
   validatedEmergencyFallbackStyle,
@@ -26,7 +27,8 @@ describe('MAP_STYLES (hard-locked registry)', () => {
     }
   })
 
-  it('each layer resolves to a distinct URL', () => {
+  it('each layer resolves to a distinct URL when MapTiler key is configured', () => {
+    if (!maptilerBasemapsConfigured()) return
     const urls = ALL_LAYERS.map((layer) => getStyleUrl(layer))
     expect(new Set(urls).size).toBe(ALL_LAYERS.length)
   })

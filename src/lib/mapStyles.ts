@@ -40,16 +40,12 @@ export type MapStyleInput = StyleSpecification | string
 
 /** Resolve basemap URL for a layer key (aligned with `LayerType` / layer panel). */
 export function getStyleUrl(style: MapStyleKey): string {
-  const url = MAP_STYLES[style]
-  if (!url) {
-    if (import.meta.env.DEV) {
-      console.warn(
-        `[mapStyles] No URL for "${String(style)}" — set VITE_MAPTILER_KEY in .env.local`,
-      )
-    }
-    return MAP_STYLES.streets || ''
-  }
-  return url
+  return MAP_STYLES[style] || ''
+}
+
+/** True when MapTiler vector URLs are available at build time (inlined `VITE_MAPTILER_KEY`). */
+export function maptilerBasemapsConfigured(): boolean {
+  return Boolean(maptilerKey())
 }
 
 /** MapTiler terrain-rgb TileJSON — uses VITE_MAPTILER_KEY. */
@@ -184,12 +180,21 @@ export function isAppleWebKitMapSwitch(): boolean {
   return p.isIOS || (p.isAppleWebKit && (p.isPWA || p.isStandalone))
 }
 
-/** Primary basemap: MapTiler vector style.json (raster only used in MapCanvas recovery). */
+/**
+ * Primary basemap: MapTiler vector style.json per layer.
+ * Falls back to per-layer raster TileJSON, then caller may use OSM emergency.
+ */
 export function resolveBasemapStyle(layer: MapStyleKey): {
   style: string | StyleSpecification
   delivery: BasemapDelivery
 } {
-  return { style: getStyleUrl(layer), delivery: 'vector' }
+  const vectorUrl = getStyleUrl(layer)
+  if (vectorUrl) return { style: vectorUrl, delivery: 'vector' }
+  const raster = getMapTilerRasterFallbackStyle(layer)
+  if (raster) return { style: raster, delivery: 'maptiler-raster' }
+  const emerg = validatedEmergencyFallbackStyle()
+  if (emerg) return { style: emerg, delivery: 'maptiler-raster' }
+  return { style: '', delivery: 'vector' }
 }
 
 export const WAYPOINT_COLORS: Record<string, string> = {

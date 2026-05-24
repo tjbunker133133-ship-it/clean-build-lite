@@ -32,13 +32,15 @@ The file `src/.cursorrules` is the **architectural contract** for tiers, map/pan
 
 ## Deploy (Vercel — production)
 
-Production is deployed on **Vercel** (`vercel.json` at the repo root). Netlify remains configured in `netlify.toml` as a fallback when credits are available.
+Production is on **Vercel** (`vercel.json`). **One git push should produce one production deployment.**
 
-1. Connect the Git repo to your Vercel project (production branch: `stable/2026-05-23` or `main`).
-2. Vercel runs `npm ci`, then `npm run ensure:index && npx vite build`, and publishes `dist/`.
-3. Set environment variables in **Project Settings → Environment Variables** (see `.env.example`). `VITE_*` values are inlined at build time — redeploy after changing them.
+1. Connect **only one** Vercel project to **one** repo remote (recommended: `upstream` → `tjbunker133133-ship-it/clean-build-lite`, branch `stable/2026-05-23`).
+2. In Vercel → Project Settings → Git: disable redundant projects on the same repo, and turn off **Automatic Preview Deployments** if you do not need per-commit previews (they multiply build count).
+3. `vercel.json` skips preview builds via `ignoreCommand`; `netlify.toml` skips Netlify CI (`ignore = exit 0`) so Netlify does not also build on every push.
+4. Vercel runs `npm ci` then `npm run build` (includes `ensure:index` via `prebuild`).
+5. Set **`VITE_MAPTILER_KEY`** and other `VITE_*` vars in Vercel → Environment Variables (see `.env.example`). Without the MapTiler key, all basemap layers degrade to the same emergency tiles.
 
-`netlify.toml` is kept for optional Netlify hosting; do not rely on it while Netlify credits are exhausted.
+`netlify.toml` remains for manual Netlify hosting only; it is intentionally disabled for auto-build.
 
 ## Scripts
 

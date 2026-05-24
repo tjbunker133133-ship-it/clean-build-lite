@@ -1,8 +1,14 @@
 {
   "framework": "vite",
-  "buildCommand": "npm run ensure:index && npx vite build",
+  "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "installCommand": "npm ci",
+  "ignoreCommand": "sh scripts/vercel-should-build.sh",
+  "git": {
+    "deploymentEnabled": {
+      "stable/2026-05-23": true
+    }
+  },
   "rewrites": [{ "source": "/(.*)", "destination": "/" }],
   "headers": [
     {

@@ -1235,6 +1235,7 @@ export default function MapCanvas() {
 
     function markStyleReady(phase: 'load' | 'idle' | 'data') {
       if (cancelled || gen !== styleSwitchGenRef.current || styleReady) return
+      if (activeLayerRef.current !== layerKey) return
       logStyleSwitchTiming(activeLayer, phase, msSinceStart(), { recoveryMode })
       hudObsMark(`hud:map:style:${gen}:ready`)
       hudObsMeasure(`hud:map:style:${gen}`, `hud:map:style:${gen}:start`, `hud:map:style:${gen}:ready`)
@@ -1256,8 +1257,8 @@ export default function MapCanvas() {
       }
       setStaticFallbackVisible(false)
       setStatusRef.current('ready')
-      currentAppliedLayerRef.current = activeLayer
-      syncTopoTerrain(mapCtl, activeLayer)
+      currentAppliedLayerRef.current = layerKey
+      syncTopoTerrain(mapCtl, layerKey)
       nudgeMapRenderAfterStyleChange(mapCtl)
       logLayerActivation(activeLayer, recoveryMode === 'none' ? 'ready' : recoveryMode === 'maptiler-raster' ? 'raster-fallback' : 'osm-emergency', {
         fp: appliedFpForThisGen,
@@ -1295,9 +1296,10 @@ export default function MapCanvas() {
 
     function onStyleLoadOnce() {
       if (cancelled || gen !== styleSwitchGenRef.current) return
+      if (activeLayerRef.current !== layerKey) return
       styleLoadSeen = true
       try {
-        syncTopoTerrain(mapCtl, activeLayer)
+        syncTopoTerrain(mapCtl, layerKey)
       } catch {
         /* ignore */
       }
@@ -1425,6 +1427,14 @@ export default function MapCanvas() {
     }
 
     function beginLayerSwitch() {
+      if (
+        typeof nextStyle === 'string' &&
+        !nextStyle &&
+        switchDelivery === 'vector'
+      ) {
+        applyEmergencyFallback('MapTiler vector URL missing for layer')
+        return
+      }
       setStatusRef.current('initial')
       currentAppliedLayerRef.current = null
       mapCtl.on('error', onStyleError)
