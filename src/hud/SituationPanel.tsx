@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import type { MapMouseEvent } from 'maplibre-gl'
 import HudPanel from './HudPanel'
 import { useMapContext } from '../context/MapContext'
 import { usePanelData } from '../context/PanelDataContext'
 import { useGPS } from '../hooks/useGPS'
 import { tier1Debug } from '../lib/tier1DebugLog'
-import { getDeviceProfile } from '../runtime/deviceProfile'
+import { getDeviceProfile, isIosFieldHud } from '../runtime/deviceProfile'
 import {
   copyTextToClipboard,
   safariLocationFixClipboardLines,
@@ -130,6 +130,9 @@ export default function SituationPanel() {
 
   const isIOS = useMemo(() => getDeviceProfile().isIOS, [])
   const isMobile = getDeviceProfile().interactionMode === 'mobile'
+  const iosFieldHud = isIosFieldHud()
+  /** Skip micro-GPS jitter recentering on touch field HUD (Safari flyTo stacking feels clunky). */
+  const followRecenterMinMi = iosFieldHud ? 0.006 : 0
   const [locationHelpHint, setLocationHelpHint] = useState<string | null>(null)
   const fontSm = touchFontSm(isMobile)
   const fontMd = touchFontMd(isMobile)
@@ -225,12 +228,21 @@ export default function SituationPanel() {
       elevPrev.current = { ft: baseFt, lat: c.lat, lng: c.lng }
     }
 
-    map.on('moveend', sample)
-    map.on('idle', sample)
+    let sampleRaf: number | null = null
+    const scheduleSample = () => {
+      if (sampleRaf != null) return
+      sampleRaf = requestAnimationFrame(() => {
+        sampleRaf = null
+        sample()
+      })
+    }
+    map.on('moveend', scheduleSample)
+    map.on('idle', scheduleSample)
     void sample()
     return () => {
-      map.off('moveend', sample)
-      map.off('idle', sample)
+      if (sampleRaf != null) cancelAnimationFrame(sampleRaf)
+      map.off('moveend', scheduleSample)
+      map.off('idle', scheduleSample)
     }
   }, [map, panel.elevationMeters, panelsLocationBlocked])
 
@@ -253,18 +265,28 @@ export default function SituationPanel() {
     }
 
     updateFromCenter()
-    map.on('mousemove', updateFromEvent)
-    map.on('move', updateFromCenter)
+    // Touch field HUD has no hover pointer — skip mousemove to reduce WebKit work during pan.
+    if (!isMobile) map.on('mousemove', updateFromEvent)
     map.on('moveend', updateFromCenter)
     map.on('idle', updateFromCenter)
 
     return () => {
-      map.off('mousemove', updateFromEvent)
-      map.off('move', updateFromCenter)
+      if (!isMobile) map.off('mousemove', updateFromEvent)
       map.off('moveend', updateFromCenter)
       map.off('idle', updateFromCenter)
     }
-  }, [map])
+  }, [map, isMobile])
+
+  const centerMapOnFix = useCallback(
+    (lat: number, lng: number, zoom: number) => {
+      if (!map) return
+      const opts = { center: [lng, lat] as [number, number], zoom, essential: true as const }
+      // iOS WebKit: short ease avoids stacked flyTo animations fighting touch pan.
+      if (iosFieldHud) map.easeTo({ ...opts, duration: 420 })
+      else map.flyTo(opts)
+    },
+    [map, iosFieldHud],
+  )
 
   useEffect(() => {
     if (!followLock) return
@@ -272,13 +294,24 @@ export default function SituationPanel() {
     if (gps.lat == null || gps.lng == null) return
     if (gps.locationState !== 'granted') return
     const prev = lastFollowCenterRef.current
-    if (prev && Math.abs(prev.lat - gps.lat) < 1e-7 && Math.abs(prev.lng - gps.lng) < 1e-7) {
-      return
+    if (prev) {
+      const movedMi = distMi(prev.lat, prev.lng, gps.lat, gps.lng)
+      if (movedMi < followRecenterMinMi) return
     }
     lastFollowCenterRef.current = { lat: gps.lat, lng: gps.lng }
     const zoom = zoomMode === 'dynamic' ? zoomForAccuracy(gps.accuracy) : map.getZoom()
-    map.flyTo({ center: [gps.lng, gps.lat], zoom, essential: true })
-  }, [followLock, gps.lat, gps.lng, gps.accuracy, gps.locationState, map, zoomMode])
+    centerMapOnFix(gps.lat, gps.lng, zoom)
+  }, [
+    followLock,
+    gps.lat,
+    gps.lng,
+    gps.accuracy,
+    gps.locationState,
+    map,
+    zoomMode,
+    followRecenterMinMi,
+    centerMapOnFix,
+  ])
 
   useEffect(() => {
     try {
@@ -296,7 +329,7 @@ export default function SituationPanel() {
     if (gps.locationState !== 'granted') return
     lastFollowCenterRef.current = { lat: gps.lat, lng: gps.lng }
     const zoom = zoomMode === 'dynamic' ? zoomForAccuracy(gps.accuracy) : Math.max(14, map.getZoom())
-    map.flyTo({ center: [gps.lng, gps.lat], zoom, essential: true })
+    centerMapOnFix(gps.lat, gps.lng, zoom)
   }
 
   const hasFix = gps.lat != null && gps.lng != null && gps.locationState === 'granted'
@@ -641,24 +674,26 @@ export default function SituationPanel() {
         </div>
       </div>
 
-      <div style={sectionDivider()}>
-        <SectionLabel>Map pointer</SectionLabel>
-        <div
-          style={{
-            padding: '6px 10px',
-            color: '#c7cec6',
-            borderRadius: 6,
-            fontFamily: 'var(--font-mono, monospace)',
-            fontSize: fontMd,
-            border: '1px solid rgba(199,206,198,0.2)',
-            background: 'rgba(10,12,13,0.45)',
-          }}
-        >
-          {mapCoordsReady
-            ? `Lng: ${mapCoords.lng.toFixed(5)} · Lat: ${mapCoords.lat.toFixed(5)}`
-            : 'Loading map coordinates…'}
+      {!iosFieldHud ? (
+        <div style={sectionDivider()}>
+          <SectionLabel>Map pointer</SectionLabel>
+          <div
+            style={{
+              padding: '6px 10px',
+              color: '#c7cec6',
+              borderRadius: 6,
+              fontFamily: 'var(--font-mono, monospace)',
+              fontSize: fontMd,
+              border: '1px solid rgba(199,206,198,0.2)',
+              background: 'rgba(10,12,13,0.45)',
+            }}
+          >
+            {mapCoordsReady
+              ? `Lng: ${mapCoords.lng.toFixed(5)} · Lat: ${mapCoords.lat.toFixed(5)}`
+              : 'Loading map coordinates…'}
+          </div>
         </div>
-      </div>
+      ) : null}
     </HudPanel>
   )
 }

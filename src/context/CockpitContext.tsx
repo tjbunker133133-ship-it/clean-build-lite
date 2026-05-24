@@ -21,7 +21,12 @@ import {
   SNAP_PX,
 } from '../types/cockpit'
 import { cockpitViewport } from '../lib/viewport'
-import { clampMobileToReachableViewport, sanitizeMobilePanelRect } from '../lib/mobilePanelHelpers'
+import {
+  clampMobileToReachableViewport,
+  computeDockMetrics,
+  dockLaneSlotY,
+  sanitizeMobilePanelRect,
+} from '../lib/mobilePanelHelpers'
 import { emitPanelCommit } from '../diag/devEvents'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 import { enforcePolicyAttempt, getCurrentPolicyMode, reportPolicyAttempt } from '../runtime/devicePolicy'
@@ -487,21 +492,6 @@ function panelHeightGuess(pid: string, p: CockpitPanelRect): number {
   return Math.max(minBar, p.h ?? (p.minimized ? minBar : (defaults[pid] ?? 220)))
 }
 
-function computeDockMetrics(vh: number, count: number) {
-  const minY = DOCK_TOP_OFFSET_PX
-  const safeCount = Math.max(1, count)
-  const available = Math.max(140, vh - minY - DOCK_BOTTOM_GUTTER_PX)
-  const stackTotal = Math.max(0, safeCount - 1) * DOCKED_PANEL_STACK_PX
-  const perPanel = Math.floor((available - stackTotal) / safeCount)
-  const height = Math.max(
-    DOCKED_PANEL_MIN_HEIGHT_PX,
-    Math.min(DOCKED_PANEL_MAX_HEIGHT_PX, perPanel),
-  )
-  const step = height + DOCKED_PANEL_STACK_PX
-  const maxY = Math.max(minY, vh - height - DOCK_BOTTOM_GUTTER_PX)
-  return { minY, maxY, step, height }
-}
-
 /** Minimum visible gap between floating panels (kiss / snap — never overlap). */
 const PANEL_KISS_GAP_PX = 8
 
@@ -523,13 +513,11 @@ export function relayoutDockedPanels(panels: PanelMap): PanelMap {
       .filter((id) => (next[id].dockSide ?? 'left') === side)
       .sort((a, b) => (next[a].y === next[b].y ? a.localeCompare(b) : next[a].y - next[b].y))
     if (!lane.length) continue
-    const { minY, maxY, step } = computeDockMetrics(vh, lane.length)
-    const slotCount = Math.max(1, Math.floor((maxY - minY) / step) + 1)
+    const stackFromBottom = getDeviceProfile().interactionMode === 'mobile'
     lane.forEach((id, idx) => {
-      const slot = Math.min(slotCount - 1, idx)
       const p = next[id]
       p.w = DOCKED_PANEL_WIDTH_PX
-      p.y = Math.max(minY, Math.min(minY + slot * step, maxY))
+      p.y = dockLaneSlotY(idx, lane.length, vh, stackFromBottom)
       p.x =
         side === 'right'
           ? Math.max(0, vw - p.w - DOCK_EDGE_INSET_PX)

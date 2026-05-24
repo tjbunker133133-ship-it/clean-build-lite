@@ -16,6 +16,8 @@ import {
   clampMobileToReachableViewport,
   chooseMobileMinimizeDockSideAutoBalance,
   clampMobilePanelFontScale,
+  computeDockMetrics,
+  dockLaneSlotY,
   cycleMobilePanelFontScalePreset,
   cycleMobilePanelSizePreset,
   mobileFocusOpacity,
@@ -90,21 +92,6 @@ const IOS_RO_DIM_EPS_PX = 4
 // reject the very first move event.
 const MOBILE_PREDRAG_TOLERANCE_PX = 14
 const MOBILE_DOUBLE_TAP_MS = 250
-
-function computeDockMetrics(vh: number, count: number) {
-  const minY = DOCK_TOP_OFFSET_PX
-  const safeCount = Math.max(1, count)
-  const available = Math.max(140, vh - minY - DOCK_BOTTOM_GUTTER_PX)
-  const stackTotal = Math.max(0, safeCount - 1) * DOCKED_PANEL_STACK_PX
-  const perPanel = Math.floor((available - stackTotal) / safeCount)
-  const height = Math.max(
-    DOCKED_PANEL_MIN_HEIGHT_PX,
-    Math.min(DOCKED_PANEL_MAX_HEIGHT_PX, perPanel),
-  )
-  const step = height + DOCKED_PANEL_STACK_PX
-  const maxY = Math.max(minY, vh - height - DOCK_BOTTOM_GUTTER_PX)
-  return { minY, maxY, step, height }
-}
 
 function dockBadge(panelId: string, title: string): { icon: string; abbr: string } {
   const id = panelId.toLowerCase()
@@ -689,13 +676,9 @@ export default function CockpitHudPanel({
       }
       lane.sort((a, b) => (a.y === b.y ? a.id.localeCompare(b.id) : a.y - b.y))
       const idx = Math.max(0, lane.findIndex((p) => p.id === panelId))
-      const { minY, maxY, step } = computeDockMetrics(vh, lane.length)
-      const slotCount = Math.max(1, Math.floor((maxY - minY) / step) + 1)
-      const slot = Math.min(slotCount - 1, idx)
-      const y = minY + slot * step
-      return Math.max(minY, Math.min(y, maxY))
+      return dockLaneSlotY(idx, lane.length, vh, isMobile)
     },
-    [panelId, panels],
+    [panelId, panels, isMobile],
   )
 
   /**
@@ -1252,6 +1235,11 @@ export default function CockpitHudPanel({
     }
 
     if (docked) {
+      // Mobile/iOS: undock only via the dock strip (tap/swipe) — header tap caused accidental pull-out.
+      if (isMobile) {
+        raisePanel(panelId)
+        return
+      }
       pendingFloatingDefaultSizeRef.current = true
       const nw = DEFAULT_FLOATING_PANEL_SIZE.w
       const { vw, vh } = viewportSize()
@@ -1562,10 +1550,12 @@ export default function CockpitHudPanel({
         : '#9ea7a0'
   const panelTextShadow = prefs.screen_hue === 'red_tactical' ? '0 0 2px rgba(0,0,0,0.8)' : lowLightGlow
   // Wider peek when the strip carries extra controls (e.g. waypoint delete); still a single rail width for plain panels.
-  const dockReveal =
+  const dockRevealBase =
     dockedHeaderTrailing != null
       ? Math.max(DOCK_VISIBLE_STRIP_PX, 104)
       : DOCK_VISIBLE_STRIP_PX
+  const dockReveal =
+    isMobile && isIOSWebKit ? Math.max(dockRevealBase, 88) : dockRevealBase
   // Keep dock strip metrics aligned with committed context layout to avoid
   // per-panel height divergence that can visually overlap docked lanes.
   const committedSelf = panels[panelId]
@@ -1593,7 +1583,12 @@ export default function CockpitHudPanel({
   const onDockPointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
     if (!docked) return
     dockGesture.current = { active: true, x: e.clientX, y: e.clientY, moved: false }
-    e.currentTarget.setPointerCapture(e.pointerId)
+    if (e.pointerType !== 'mouse' && e.cancelable) e.preventDefault()
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId)
+    } catch {
+      // ignore capture failures (iOS WebKit)
+    }
   }
 
   const onDockPointerMove = (e: React.PointerEvent<HTMLButtonElement>) => {
@@ -1793,10 +1788,45 @@ export default function CockpitHudPanel({
           </div>
         ) : (
           <>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <span>{title}</span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 }}>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {title}
+              </span>
+              {isMobile ? (
+                <button
+                  type="button"
+                  data-no-drag
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    minimizeToDock()
+                  }}
+                  aria-label={`Minimize ${title} to dock`}
+                  title="Minimize to dock"
+                  style={{
+                    background: `${accent}14`,
+                    border: `1px solid ${accent}77`,
+                    color: accent,
+                    cursor: 'pointer',
+                    borderRadius: 4,
+                    minHeight: mobileTapMin,
+                    minWidth: mobileTapMin,
+                    lineHeight: 1,
+                    fontSize: touchFontMd(isMobile),
+                    fontWeight: 700,
+                    letterSpacing: '0.08em',
+                    textShadow: `0 0 8px ${accent}55`,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: 0,
+                    flexShrink: 0,
+                  }}
+                >
+                  ▬
+                </button>
+              ) : null}
             </span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
               {dockedHeaderTrailing ? (
                 <span style={{ pointerEvents: 'auto', flexShrink: 0 }}>{dockedHeaderTrailing}</span>
               ) : null}
@@ -1991,36 +2021,38 @@ export default function CockpitHudPanel({
                   </button>
                 </>
               ) : null}
-              <button
-                type="button"
-                data-no-drag
-                onClick={(e) => {
-                  e.stopPropagation()
-                  minimizeToDock()
-                }}
-                aria-label={`Minimize ${title} to dock`}
-                title="Minimize to dock"
-                style={{
-                  background: `${accent}14`,
-                  border: `1px solid ${accent}77`,
-                  color: accent,
-                  cursor: 'pointer',
-                  borderRadius: 4,
-                  minHeight: isMobile ? 48 : isCoarsePointer ? 44 : 32,
-                  minWidth: isMobile ? 48 : isCoarsePointer ? 44 : 32,
-                  lineHeight: 1,
-                  fontSize: touchFontMd(isMobile),
-                  fontWeight: 700,
-                  letterSpacing: '0.08em',
-                  textShadow: `0 0 8px ${accent}55`,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  padding: 0,
-                }}
-              >
-                ▬
-              </button>
+              {!isMobile ? (
+                <button
+                  type="button"
+                  data-no-drag
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    minimizeToDock()
+                  }}
+                  aria-label={`Minimize ${title} to dock`}
+                  title="Minimize to dock"
+                  style={{
+                    background: `${accent}14`,
+                    border: `1px solid ${accent}77`,
+                    color: accent,
+                    cursor: 'pointer',
+                    borderRadius: 4,
+                    minHeight: isCoarsePointer ? 44 : 32,
+                    minWidth: isCoarsePointer ? 44 : 32,
+                    lineHeight: 1,
+                    fontSize: touchFontMd(isMobile),
+                    fontWeight: 700,
+                    letterSpacing: '0.08em',
+                    textShadow: `0 0 8px ${accent}55`,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: 0,
+                  }}
+                >
+                  ▬
+                </button>
+              ) : null}
               {!mobileFieldHud ? (
                 <span style={{ opacity: 0.65, fontSize: 8, color: panelSubtleText }}>⋮⋮</span>
               ) : null}

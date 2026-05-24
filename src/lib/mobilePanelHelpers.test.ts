@@ -8,6 +8,7 @@ import {
   shouldRunMaterialViewportRecovery,
   sanitizeMobilePanelRect,
   chooseMobileMinimizeDockSideAutoBalance,
+  dockLaneSlotY,
   clampMobilePanelFontScale,
   cycleMobilePanelFontScalePreset,
   mobileFloatingCommitCoords,
@@ -56,6 +57,15 @@ describe('cycleMobilePanelFontScalePreset', () => {
   })
 })
 
+describe('dockLaneSlotY', () => {
+  it('stacks from bottom when requested', () => {
+    const vh = 844
+    const top = dockLaneSlotY(0, 3, vh, false)
+    const bottom = dockLaneSlotY(0, 3, vh, true)
+    expect(bottom).toBeGreaterThan(top)
+  })
+})
+
 describe('chooseMobileMinimizeDockSideAutoBalance', () => {
   it('picks side with fewer docked panels', () => {
     const panels: Record<string, CockpitPanelRect | undefined> = {
@@ -67,14 +77,14 @@ describe('chooseMobileMinimizeDockSideAutoBalance', () => {
     expect(side).toBe('right')
   })
 
-  it('tie-breaks by nearest viewport half', () => {
+  it('tie-breaks to left rail for thumb reach', () => {
     const panels: Record<string, CockpitPanelRect | undefined> = {
       a: panel(true, 'left'),
       b: panel(true, 'right'),
       self: panel(false),
     }
     expect(chooseMobileMinimizeDockSideAutoBalance(panels, 'self', 10, 100, 400)).toBe('left')
-    expect(chooseMobileMinimizeDockSideAutoBalance(panels, 'self', 250, 100, 400)).toBe('right')
+    expect(chooseMobileMinimizeDockSideAutoBalance(panels, 'self', 250, 100, 400)).toBe('left')
   })
 
   it('excludes self panel from counts', () => {
