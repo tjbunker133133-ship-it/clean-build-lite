@@ -95,11 +95,10 @@ const MOBILE_DOUBLE_TAP_MS = 250
 
 function dockBadge(panelId: string, title: string): { icon: string; abbr: string } {
   const id = panelId.toLowerCase()
-  if (id === 'layers') return { icon: '▦', abbr: 'LYR' }
+  if (id === 'layers') return { icon: '▦', abbr: 'MAP' }
   if (id === 'waypoints') return { icon: '⌖', abbr: 'WPT' }
   if (id === 'deadman') return { icon: '☠', abbr: 'DMS' }
   if (id === 'situation') return { icon: '◉', abbr: 'SIT' }
-  if (id === 'display') return { icon: '◫', abbr: 'DSP' }
   if (id === 'voice') return { icon: '🎤', abbr: 'VOC' }
   if (id === 'weather') return { icon: '⛅', abbr: 'WTH' }
   if (id === 'presets') return { icon: '⚙', abbr: 'PST' }

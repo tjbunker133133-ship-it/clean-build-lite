@@ -1,4 +1,4 @@
-/** Human-readable build label for StatusRail / diagnostics. */
+/** Human-readable build label for diagnostics. */
 export function formatBuildLabel(raw: string): string {
   const id = (raw ?? '').trim()
   if (!id) return 'unknown'

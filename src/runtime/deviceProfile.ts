@@ -3,7 +3,7 @@
  *
  * This module replaces the five legacy detection strategies that previously
  * lived in `utils/device.ts`, `lib/systemSettingsLinks.ts`, `CockpitContext`,
- * `CockpitHudPanel`, `MapCanvas`, `StatusRail`, `TopBar`, and inline regex
+ * `CockpitHudPanel`, `MapCanvas`, `TopBar`, and inline regex
  * tests across the codebase.
  *
  * Read it once via `getDeviceProfile()` (cached), or subscribe with

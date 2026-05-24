@@ -375,7 +375,7 @@ html.platform-mobile .hud-readout {
   font-size: 14px;
 }
 
-/* Mobile GPU: solid chrome instead of backdrop-filter blur (TopBar/StatusRail set inline). */
+/* Mobile GPU: solid chrome instead of backdrop-filter blur (TopBar sets inline). */
 html.platform-mobile #display-mode-overlay.mode-bright {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;

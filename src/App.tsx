@@ -19,12 +19,10 @@ const RouteLayer = lazy(() => import('./layers/RouteLayer'))
 const LayerPanel = lazy(() => import('./hud/LayerPanel'))
 const WaypointTypePanel = lazy(() => import('./hud/WaypointTypePanel'))
 const DeadManPanel = lazy(() => import('./hud/DeadManPanel'))
-const DisplayModePanel = lazy(() => import('./hud/DisplayModePanel'))
 const SituationPanel = lazy(() => import('./hud/SituationPanel'))
 const VoicePanel = lazy(() => import('./hud/VoicePanel'))
 const WeatherPanel = lazy(() => import('./hud/WeatherPanel'))
 const CommandPalette = lazy(() => import('./hud/CommandPalette'))
-const StatusRail = lazy(() => import('./hud/StatusRail'))
 const PresetPanel = lazy(() => import('./hud/PresetPanel'))
 const CheckInPanel = lazy(() => import('./hud/CheckInPanel'))
 const SOSPanel = lazy(() => import('./hud/SOSPanel'))
@@ -79,7 +77,6 @@ export default function App() {
             <TopBar />
             <Suspense fallback={null}>
               <SituationPanel />
-              <DisplayModePanel />
               <CheckInPanel />
               <VoicePanel />
               <SOSPanel />
@@ -101,7 +98,6 @@ export default function App() {
               </Suspense>
             </div>
             <Suspense fallback={null}>
-              <StatusRail />
               <CommandPalette />
             </Suspense>
           </CockpitHudShell>

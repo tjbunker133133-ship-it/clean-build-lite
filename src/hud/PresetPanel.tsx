@@ -29,7 +29,7 @@ export default function PresetPanel() {
   const applyDayNav = () => {
     setScreenHue('bright_day')
     setDisplayTuning({ low_hud_brightness: 0.9, low_map_brightness: 0.16, panel_gap_px: 0 })
-    updatePanel('layers', { x: 16, y: 60, docked: false })
+    updatePanel('layers', { x: 16, y: 60, w: 280, docked: false })
     updatePanel('waypoints', { x: 20, y: 420, docked: false })
   }
 
@@ -86,7 +86,7 @@ export default function PresetPanel() {
       red_saturation: 0.52,
       red_brightness: 0.66,
     })
-    updatePanel('layers', { x: 16, y: 60, docked: false, minimized: false })
+    updatePanel('layers', { x: 16, y: 60, w: 280, docked: false, minimized: false })
     updatePanel('waypoints', { x: 20, y: 420, docked: false, minimized: false })
     updatePanel('voice', { x: 1180, y: 280, docked: false, minimized: false })
     updatePanel('sos', { x: 1180, y: 520, docked: false, minimized: false })
@@ -104,9 +104,8 @@ export default function PresetPanel() {
       red_saturation: 0.52,
       red_brightness: 0.66,
     })
-    updatePanel('layers', { x: 16, y: 60, w: 180, docked: false, minimized: false })
+    updatePanel('layers', { x: 16, y: 60, w: 300, docked: false, minimized: false })
     updatePanel('waypoints', { x: 20, y: 420, w: 340, docked: false, minimized: false })
-    updatePanel('display', { x: 980, y: 60, w: 300, docked: false, minimized: false })
     updatePanel('situation', { x: 980, y: 260, w: 320, docked: false, minimized: false })
     updatePanel('voice', { x: 980, y: 500, w: 340, docked: false, minimized: false })
   }
