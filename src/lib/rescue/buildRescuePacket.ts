@@ -20,7 +20,7 @@
 
 import { fetchEmergencyContacts } from '../emergencyContacts'
 
-export type RescueTriggerType = 'SOS' | 'DEADMAN'
+export type RescueTriggerType = 'SOS' | 'DEADMAN' | 'CHECKIN'
 
 export type RescueContactPair = {
   name: string

@@ -421,12 +421,12 @@ export function requestLocation(): Promise<LocationState> {
       void navigator.permissions
         .query({ name: 'geolocation' as PermissionName })
         .then((status) => {
-          console.log('[GPS PERMISSION]', status.state)
+          if (gpsTelemetryVerboseEnabled()) console.log('[GPS PERMISSION]', status.state)
         })
         .catch(() => {
-          console.log('[GPS PERMISSION]', 'unknown')
+          if (gpsTelemetryVerboseEnabled()) console.log('[GPS PERMISSION]', 'unknown')
         })
-    } else {
+    } else if (gpsTelemetryVerboseEnabled()) {
       console.log('[GPS PERMISSION]', 'unsupported')
     }
 
@@ -505,21 +505,23 @@ export function useGPS(): GPSData & { requestLocation: typeof requestLocation; s
     gpsAutoInitAttempted = true
     if (typeof navigator === 'undefined' || !navigator.geolocation) return
     if (!('permissions' in navigator) || typeof navigator.permissions?.query !== 'function') {
-      console.log('[GPS AUTO START FALLBACK]')
+      if (gpsTelemetryVerboseEnabled()) console.log('[GPS AUTO START FALLBACK]')
       startWatchSafely()
       return
     }
     void navigator.permissions
       .query({ name: 'geolocation' as PermissionName })
       .then((result) => {
-        console.log('[GPS PERMISSION AUTO CHECK]', result.state)
+        if (gpsTelemetryVerboseEnabled()) {
+          console.log('[GPS PERMISSION AUTO CHECK]', result.state)
+        }
         if (result.state === 'granted') {
-          console.log('[GPS AUTO START]')
+          if (gpsTelemetryVerboseEnabled()) console.log('[GPS AUTO START]')
           startWatchSafely()
         }
       })
       .catch(() => {
-        console.log('[GPS AUTO START FALLBACK]')
+        if (gpsTelemetryVerboseEnabled()) console.log('[GPS AUTO START FALLBACK]')
         startWatchSafely()
       })
   }, [])

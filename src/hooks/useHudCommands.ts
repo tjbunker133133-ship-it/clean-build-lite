@@ -28,6 +28,7 @@ import {
   installBuiltinCommandVerifiers,
 } from '../runtime/commandExecution'
 import { traceAction } from '../runtime/actionTrace'
+import { normalizeVoiceTranscript } from '../lib/voice/normalizeVoiceTranscript'
 
 /**
  * Single source of truth for HUD commands.
@@ -62,7 +63,7 @@ export type CommandDescriptor = {
 }
 
 function normalize(input: string): string {
-  return input.toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim()
+  return normalizeVoiceTranscript(input)
 }
 
 function bearingDeg(lat1: number, lng1: number, lat2: number, lng2: number): number {
@@ -617,15 +618,21 @@ export function useHudCommands(): {
         },
       },
       {
-        id: 'location panel',
-        label: 'Open location panel',
-        aliases: ['open location', 'open location panel'],
+        id: 'situation panel',
+        label: 'Open situation panel',
+        aliases: [
+          'open situation',
+          'open situation panel',
+          'open location',
+          'open location panel',
+          'location panel',
+        ],
         paletteVisible: true,
         group: 'Panels',
         run: () => {
-          updatePanel('location', { docked: false, minimized: false })
-          raisePanel('location')
-          return ok('Location panel opened.')
+          updatePanel('situation', { docked: false, minimized: false })
+          raisePanel('situation')
+          return ok('Situation panel opened.')
         },
       },
       {

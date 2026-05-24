@@ -10,14 +10,14 @@ const ROUTE_LAYER_ID = 'tactical-route-layer'
 export default function RouteLayer() {
   const { map } = useMapContext()
   const { state } = useAppContext()
+  const { waypoints } = state
 
   useEffect(() => {
     if (!map) return
     let rafId: number | null = null
 
     const buildGeojson = (): GeoJSON.FeatureCollection => {
-      // GeoJSON LineString requires [lng, lat] (matches marker setLngLat / map APIs).
-      const coordinates = state.waypoints.map((w) => [w.lng, w.lat] as [number, number])
+      const coordinates = waypoints.map((w) => [w.lng, w.lat] as [number, number])
       return {
         type: 'FeatureCollection',
         features:
@@ -62,7 +62,7 @@ export default function RouteLayer() {
     }
 
     const runUpdate = () => {
-      tier1Debug('route', 'recalc', { pointCount: state.waypoints.length })
+      tier1Debug('route', 'recalc', { pointCount: waypoints.length })
       const legacyCorridorId = 'tactical-route-corridor-layer'
       if (map.getLayer(legacyCorridorId)) {
         try {
@@ -75,7 +75,6 @@ export default function RouteLayer() {
       const source = map.getSource(ROUTE_SOURCE_ID) as maplibregl.GeoJSONSource | undefined
       if (source) {
         source.setData(geojson)
-        // setStyle() can remove layers while leaving the GeoJSON source; re-add line layers if missing.
         if (!map.getLayer(ROUTE_LAYER_ID)) {
           ensureRouteLayers(geojson)
         }
@@ -111,7 +110,7 @@ export default function RouteLayer() {
       }
       map.off('styledata', onStyleData)
     }
-  }, [state.waypoints, map])
+  }, [waypoints, map])
 
   return null
 }

@@ -7,28 +7,26 @@ import TopBar from './hud/TopBar'
 import LayerPanel from './hud/LayerPanel'
 import WaypointTypePanel from './hud/WaypointTypePanel'
 import DeadManPanel from './hud/DeadManPanel'
-import CoordDisplay from './hud/CoordDisplay'
 import ScanlineOverlay from './hud/ScanlineOverlay'
 import CockpitKeyboard from './hud/CockpitKeyboard'
 import CockpitEdgeZones from './hud/CockpitEdgeZones'
 import CockpitLayoutHotspot from './hud/CockpitLayoutHotspot'
 import CockpitHudShell from './hud/CockpitHudShell'
 import DisplayModeOverlay from './hud/DisplayModeOverlay'
-import ElevationReadout from './hud/ElevationReadout'
 import PermissionPromptOverlay from './hud/PermissionPromptOverlay'
 import SwUpdateBanner from './hud/SwUpdateBanner'
 
 const MapCanvas = lazy(() => import('./components/MapCanvas'))
 const WaypointLayer = lazy(() => import('./layers/WaypointLayer'))
 const RouteLayer = lazy(() => import('./layers/RouteLayer'))
-const ClockPanel = lazy(() => import('./hud/ClockPanel'))
 const DisplayModePanel = lazy(() => import('./hud/DisplayModePanel'))
-const LocationPanel = lazy(() => import('./hud/LocationPanel'))
+const SituationPanel = lazy(() => import('./hud/SituationPanel'))
 const VoicePanel = lazy(() => import('./hud/VoicePanel'))
 const WeatherPanel = lazy(() => import('./hud/WeatherPanel'))
 const CommandPalette = lazy(() => import('./hud/CommandPalette'))
 const StatusRail = lazy(() => import('./hud/StatusRail'))
 const PresetPanel = lazy(() => import('./hud/PresetPanel'))
+const CheckInPanel = lazy(() => import('./hud/CheckInPanel'))
 const SOSPanel = lazy(() => import('./hud/SOSPanel'))
 const PreflightPanel = lazy(() => import('./hud/PreflightPanel'))
 const InstallHelperBanner = lazy(() => import('./hud/InstallHelperBanner'))
@@ -80,16 +78,15 @@ export default function App() {
             <CockpitLayoutHotspot />
             <TopBar />
             <Suspense fallback={null}>
-              <ClockPanel />
+              <SituationPanel />
               <DisplayModePanel />
-              <LocationPanel />
+              <CheckInPanel />
               <VoicePanel />
               <SOSPanel />
               <WeatherPanel />
               <PresetPanel />
               <PreflightPanel />
             </Suspense>
-            <ElevationReadout />
             <div
               style={{
                 position: 'absolute',
@@ -101,7 +98,6 @@ export default function App() {
               <WaypointTypePanel />
               <DeadManPanel />
             </div>
-            <CoordDisplay />
             <Suspense fallback={null}>
               <StatusRail />
               <CommandPalette />

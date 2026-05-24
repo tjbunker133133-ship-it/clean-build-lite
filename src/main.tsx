@@ -23,9 +23,10 @@ import {
   SW_DEFERRED_RELOAD_KEY,
 } from './runtime/forceUpdateMeta'
 import { traceAction } from './runtime/actionTrace'
+import { hudDevLog } from './lib/tier1DebugLog'
 
-console.log('[BUILD ID]', __BUILD_ID__)
-console.log('[DEVICE DETECT]', getDeviceEnvironment())
+logInfo('RUNTIME', 'build id', __BUILD_ID__)
+logInfo('RUNTIME', 'device detect', getDeviceEnvironment())
 
 if (import.meta.env.DEV && typeof window !== 'undefined') {
   try {
@@ -37,7 +38,7 @@ if (import.meta.env.DEV && typeof window !== 'undefined') {
       lastSeenBuildId: lastSeen,
     })
     if (freshness.staleRuntimeSuspected) {
-      console.info('[HUD DEV] build-freshness', {
+      hudDevLog('build-freshness', {
         currentBuildId: __BUILD_ID__,
         runtimeBuildId: runtimeBuild,
         lastSeenBuildId: lastSeen,
@@ -174,7 +175,7 @@ if (typeof window !== 'undefined') {
     }
     location.reload()
   }
-  console.log('[FORCE RELOAD AVAILABLE] window.__forceReload()')
+  logInfo('RUNTIME', 'force reload available: window.__forceReload()')
 
   const onViewportChange = () => {
     if (import.meta.env.DEV) {
@@ -352,7 +353,7 @@ if (typeof window !== 'undefined') {
             runtimeBuildId: getRuntimeSnapshot().buildId,
             lastSeenBuildId: sessionStorage.getItem('hud_last_build_id'),
           })
-          console.info('[HUD DEV] force-update-runtime-state', {
+          hudDevLog('force-update-runtime-state', {
             currentBuildId: __BUILD_ID__,
             runtimeBuildId: getRuntimeSnapshot().buildId,
             controllerUrl,

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Map } from 'maplibre-gl'
 import {
   __probeStyleForTrailLayersForTests,
+  collectTrailSnapLayerIds,
   createTrailSnapPreviewGate,
   distancePointToSegmentMeters,
   findNearestTrailCandidate,
@@ -9,6 +10,7 @@ import {
   MAX_SNAP_RADIUS_M,
   MIN_SNAP_ZOOM,
   projectPointOnSegment,
+  resolveTrailSnapClass,
 } from './snapToTrail'
 
 type StubFeature = {
@@ -18,6 +20,8 @@ type StubFeature = {
     coordinates?: unknown
   }
   properties?: Record<string, unknown>
+  sourceLayer?: string
+  layer?: { id?: string }
 }
 
 function vectorTrailStyle() {
@@ -31,6 +35,22 @@ function vectorTrailStyle() {
         type: 'line',
         source: 'openmaptiles',
         'source-layer': 'transportation',
+      },
+    ],
+  }
+}
+
+function outdoorTrailStyle() {
+  return {
+    version: 8 as const,
+    name: 'MapTiler Outdoor (test)',
+    sources: { outdoor: { type: 'vector' } },
+    layers: [
+      {
+        id: 'trail_hiking',
+        type: 'line',
+        source: 'outdoor',
+        'source-layer': 'trail',
       },
     ],
   }
@@ -83,7 +103,14 @@ function stubMap(overrides: {
   return {
     isStyleLoaded: () => overrides.styleLoaded !== false,
     project: () => screen,
-    queryRenderedFeatures: () => overrides.features ?? [],
+    queryRenderedFeatures: (_box: unknown, opts?: { layers?: string[] }) => {
+      let feats = overrides.features ?? []
+      const layers = opts?.layers
+      if (Array.isArray(layers) && layers.length > 0) {
+        feats = feats.filter((f) => f.layer?.id != null && layers.includes(f.layer.id))
+      }
+      return feats
+    },
     getZoom: overrides.getZoom ?? (() => 14),
     getStyle: overrides.getStyle ?? (() => vectorTrailStyle()),
   } as unknown as Map
@@ -143,6 +170,38 @@ describe('distancePointToSegmentMeters', () => {
   })
 })
 
+describe('resolveTrailSnapClass', () => {
+  it('accepts MapTiler Outdoor trail layer class=hiking', () => {
+    expect(
+      resolveTrailSnapClass({
+        sourceLayer: 'trail',
+        properties: { class: 'hiking' },
+        layer: { id: 'trail_hiking' },
+      }),
+    ).toBe('hiking')
+  })
+
+  it('accepts transportation path + subclass footway', () => {
+    expect(
+      resolveTrailSnapClass({
+        sourceLayer: 'transportation',
+        properties: { class: 'path', subclass: 'footway' },
+        layer: { id: 'road_path' },
+      }),
+    ).toBe('path')
+  })
+
+  it('rejects motorways', () => {
+    expect(
+      resolveTrailSnapClass({
+        sourceLayer: 'transportation',
+        properties: { class: 'primary' },
+        layer: { id: 'road_primary' },
+      }),
+    ).toBeNull()
+  })
+})
+
 describe('findNearestTrailCandidate', () => {
   it('returns null for non-finite raw coordinates', () => {
     const map = stubMap({
@@ -185,7 +244,7 @@ describe('findNearestTrailCandidate', () => {
     expect(findNearestTrailCandidate(map, { lat: 40.0, lng: -73.5, radiusMeters: 5 })).toBeNull()
   })
 
-  it('returns null when style is not loaded (safe fallback)', () => {
+  it('still queries rendered features when isStyleLoaded() is false (tiles may still paint)', () => {
     const map = stubMap({
       styleLoaded: false,
       features: [
@@ -196,10 +255,12 @@ describe('findNearestTrailCandidate', () => {
         },
       ],
     })
-    expect(findNearestTrailCandidate(map, { lat: 40.0, lng: -74.005, radiusMeters: MAX_SNAP_RADIUS_M })).toBeNull()
+    const c = findNearestTrailCandidate(map, { lat: 40.0, lng: -74.005, radiusMeters: MAX_SNAP_RADIUS_M })
+    expect(c).not.toBeNull()
+    expect(c!.sourceClass).toBe('path')
   })
 
-  it('invalid geometry: rejects non-LineString', () => {
+  it('snaps to MultiLineString trail geometry', () => {
     const map = stubMap({
       features: [
         {
@@ -210,6 +271,31 @@ describe('findNearestTrailCandidate', () => {
               [
                 [-74.02, 40.0],
                 [-74.0, 40.0],
+              ],
+            ],
+          },
+          properties: { class: 'path' },
+        },
+      ],
+    })
+    const c = findNearestTrailCandidate(map, { lat: 40.0, lng: -74.01, radiusMeters: MAX_SNAP_RADIUS_M })
+    expect(c).not.toBeNull()
+    expect(c!.sourceClass).toBe('path')
+  })
+
+  it('invalid geometry: rejects Polygon', () => {
+    const map = stubMap({
+      features: [
+        {
+          type: 'Feature',
+          geometry: {
+            type: 'Polygon',
+            coordinates: [
+              [
+                [-74.02, 40.0],
+                [-74.0, 40.0],
+                [-74.0, 40.02],
+                [-74.02, 40.0],
               ],
             ],
           },
@@ -244,6 +330,30 @@ describe('findNearestTrailCandidate', () => {
       ],
     })
     expect(findNearestTrailCandidate(map, { lat: 40.0, lng: -74.005, radiusMeters: MAX_SNAP_RADIUS_M })).toBeNull()
+  })
+
+  it('snaps to MapTiler Outdoor trail layer (class=hiking)', () => {
+    const map = stubMap({
+      getStyle: () => outdoorTrailStyle(),
+      features: [
+        {
+          type: 'Feature',
+          sourceLayer: 'trail',
+          layer: { id: 'trail_hiking' },
+          geometry: {
+            type: 'LineString',
+            coordinates: [
+              [-74.02, 40.0],
+              [-74.0, 40.0],
+            ],
+          },
+          properties: { class: 'hiking' },
+        },
+      ],
+    })
+    const c = findNearestTrailCandidate(map, { lat: 40.0, lng: -74.01, radiusMeters: MAX_SNAP_RADIUS_M })
+    expect(c).not.toBeNull()
+    expect(c!.sourceClass).toBe('hiking')
   })
 
   it('nearest segment selection on whitelisted trail', () => {
@@ -376,6 +486,12 @@ describe('isSnapAvailable (capability gate)', () => {
   it('is true when source-layer is transportation_name (relaxed match)', () => {
     const map = stubMap({ getStyle: () => relaxedTransportationNameStyle() })
     expect(isSnapAvailable(map)).toBe(true)
+  })
+
+  it('is true for MapTiler Outdoor trail source-layer', () => {
+    const map = stubMap({ getStyle: () => outdoorTrailStyle() })
+    expect(isSnapAvailable(map)).toBe(true)
+    expect(collectTrailSnapLayerIds(map)).toContain('trail_hiking')
   })
 
   it('is false when only matching layer is over a raster source', () => {

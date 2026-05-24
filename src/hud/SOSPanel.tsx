@@ -6,6 +6,12 @@ import { useCockpit } from '../context/CockpitContext'
 import { emitHaptic } from '../runtime/haptics'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 import { buildRescuePacket, rescuePacketDevLogSummary } from '../lib/rescue/buildRescuePacket'
+import {
+  buildRescueDispatchHeaders,
+  classifyRescueDispatchKey,
+  hasRescueDispatchAuth,
+  parseRescueDispatchFailure,
+} from '../lib/rescue/rescueDispatch'
 import { getRescueEligibility } from '../lib/rescue/eligibility'
 import { traceAction } from '../runtime/actionTrace'
 import {
@@ -16,6 +22,7 @@ import {
   touchGapSm as touchGapSmFn,
   touchMinTarget as touchMinTargetFn,
 } from './tokens'
+import { resolveRapidEndpoint } from '../lib/rescue/resolveRapidEndpoint'
 
 const HOLD_MS = 3000
 const ALARM_PULSE_MS = 420
@@ -75,37 +82,6 @@ function sleep(ms: number) {
 // `emergency_contacts_saved`, `titanium_route_contacts`,
 // `current_route_contacts`). The dispatch path is now backend-truth-only via
 // `buildRescuePacket()` → `fetchEmergencyContacts()`.
-
-// CONTRACT-SENSITIVE: dispatch endpoint resolver. The fallback order
-// (VITE_RESCUE_EMAIL_URL → VITE_RAPID_ENDPOINT_URL → localStorage
-// `heartbeatFnUrl`) is part of the operator contract — changing it can
-// silently misroute live SOS dispatches. Mirror any change in
-// `DeadManPanel.tsx::resolveRapidEndpoint` to keep both paths aligned.
-function resolveRapidEndpoint(): string {
-  const rescue = ((import.meta as any).env?.VITE_RESCUE_EMAIL_URL as string | undefined)?.trim()
-  if (rescue) return rescue
-  const env = ((import.meta as any).env?.VITE_RAPID_ENDPOINT_URL as string | undefined)?.trim()
-  if (env) return env
-  try {
-    for (let i = 0; i < localStorage.length; i += 1) {
-      const key = localStorage.key(i)
-      if (!key) continue
-      const value = localStorage.getItem(key)
-      if (!value) continue
-      try {
-        const parsed = JSON.parse(value)
-        if (parsed && typeof parsed.heartbeatFnUrl === 'string' && parsed.heartbeatFnUrl.trim()) {
-          return parsed.heartbeatFnUrl.trim()
-        }
-      } catch {
-        // noop
-      }
-    }
-  } catch {
-    // noop
-  }
-  return ''
-}
 
 export default function SOSPanel() {
   // CONTRACT-SENSITIVE (subscriptions): both calls are intentional. They
@@ -605,10 +581,20 @@ export default function SOSPanel() {
     const ac = new AbortController()
     rescueFetchAbortRef.current = ac
     try {
-      traceAction('sos_dispatch', 'async_start', { step: 'post_dispatch', contactCount })
+      const dispatchKeyKind = classifyRescueDispatchKey(
+        ((import.meta as unknown as { env?: Record<string, string | undefined> }).env
+          ?.VITE_SUPABASE_ANON_KEY ?? '') as string,
+      )
+      traceAction('sos_dispatch', 'async_start', {
+        step: 'post_dispatch',
+        contactCount,
+        hasDispatchAuth: hasRescueDispatchAuth(),
+        dispatchKeyKind,
+        signed: Boolean(packet.signature),
+      })
       const res = await fetch(endpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: buildRescueDispatchHeaders(),
         body: JSON.stringify(packet),
         signal: ac.signal,
       })
@@ -616,8 +602,13 @@ export default function SOSPanel() {
         safeSetStatus(`SOS SENT TO ${contactCount} CONTACTS`)
         traceAction('sos_dispatch', 'async_complete', { status: res.status, contactCount })
       } else {
-        safeSetStatus(`SOS SEND FAILED (${res.status})`)
-        traceAction('sos_dispatch', 'failure', { reason: 'http_error', status: res.status })
+        const fail = await parseRescueDispatchFailure(res, 'SOS')
+        safeSetStatus(fail.operatorMessage)
+        traceAction('sos_dispatch', 'failure', {
+          reason: 'http_error',
+          status: fail.status,
+          code: fail.code,
+        })
       }
     } catch (e: unknown) {
       if ((e as { name?: string })?.name === 'AbortError') return

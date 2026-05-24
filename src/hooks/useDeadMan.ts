@@ -198,9 +198,14 @@ export function useDeadMan(onExpire?: () => void): UseDeadManReturn {
   }, [durationMs])
 
   const deactivate = useCallback(() => {
+    firedRef.current = false
     setIsActive(false)
+    setExtended(false)
+    const previewExpiry = Date.now() + durationMs
+    setExpiresAt(previewExpiry)
+    setRemainingMs(durationMs)
     clear()
-  }, [])
+  }, [durationMs])
 
   const setDurationMinutes = useCallback(
     (minutes: number) => {

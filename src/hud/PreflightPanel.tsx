@@ -15,6 +15,7 @@ import { resetAppState } from '../utils/resetApp'
 import { forceUpdateApp } from '../utils/forceUpdate'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 import { updatePermission } from '../runtime/runtimeSnapshot'
+import { hudDevLog, isHudVerboseDebug } from '../lib/tier1DebugLog'
 import { touchFontSm, touchFontMd, touchGapMd, touchGapSm, touchMinTarget } from './tokens'
 import {
   fetchEmergencyContacts,
@@ -149,11 +150,11 @@ export default function PreflightPanel() {
   }, [])
 
   useEffect(() => {
-    if (!import.meta.env.DEV) return
+    if (!isHudVerboseDebug()) return
     const sig = `${contactsStatus}:${contacts.length}:${contactError ?? ''}`
     if (sig === lastContactDiagSig) return
     setLastContactDiagSig(sig)
-    console.info('[HUD DEV] contact-hydration', {
+    hudDevLog('contact-hydration', {
       status: contactsStatus,
       hydratedCount: contacts.length,
       validationReason: contactError ?? null,
@@ -161,7 +162,7 @@ export default function PreflightPanel() {
   }, [contactsStatus, contacts.length, contactError, lastContactDiagSig])
 
   useEffect(() => {
-    if (!import.meta.env.DEV) return
+    if (!isHudVerboseDebug()) return
     const profile = getDeviceProfile()
     const layout = panels.preflight
     const { vw, vh } = cockpitViewport()
@@ -171,7 +172,7 @@ export default function PreflightPanel() {
     const sig = `${profile.interactionMode}:${Boolean(layout)}:${layout?.docked ?? false}:${layout?.minimized ?? false}:${reachable}:${layout?.z ?? 0}`
     if (sig === lastVisibilityDiagSig) return
     setLastVisibilityDiagSig(sig)
-    console.info('[HUD DEV] emergency-panel-visibility', {
+    hudDevLog('emergency-panel-visibility', {
       panel: 'preflight',
       interactionMode: profile.interactionMode,
       mounted: Boolean(layout),
@@ -196,14 +197,12 @@ export default function PreflightPanel() {
     )
     if (Math.abs(reachable.x - layout.x) <= 0.5 && Math.abs(reachable.y - layout.y) <= 0.5) return
     updatePanel('preflight', { x: reachable.x, y: reachable.y })
-    if (import.meta.env.DEV) {
-      console.info('[HUD DEV] emergency-panel-recovery', {
+    hudDevLog('emergency-panel-recovery', {
         panel: 'preflight',
         reason: 'offscreen_or_unreachable',
         from: { x: layout.x, y: layout.y },
         to: reachable,
       })
-    }
   }, [panels.preflight, updatePanel])
 
   useEffect(() => {
@@ -235,12 +234,10 @@ export default function PreflightPanel() {
   // explicit operator action (after add/delete). Failures collapse to
   // 'unavailable' — never crash the HUD.
   useEffect(() => {
-    if (import.meta.env.DEV) {
-      console.info('[HUD DEV] emergency-config-panel-mounted', {
-        panel: 'preflight',
-        interactionMode: getDeviceProfile().interactionMode,
-      })
-    }
+    hudDevLog('emergency-config-panel-mounted', {
+      panel: 'preflight',
+      interactionMode: getDeviceProfile().interactionMode,
+    })
     let alive = true
     void fetchEmergencyContacts()
       .then(({ data, error }) => {
@@ -450,11 +447,11 @@ export default function PreflightPanel() {
   const goHoldColor = goHold === 'GO' ? '#7dff8a' : '#ff6b87'
 
   useEffect(() => {
-    if (!import.meta.env.DEV) return
+    if (!isHudVerboseDebug()) return
     const sig = `${contactsStatus}:${contacts.length}:${Boolean(endpoint)}`
     if (sig === lastEligibilityDiagSig) return
     setLastEligibilityDiagSig(sig)
-    console.info('[HUD DEV] rescue-eligibility-state', {
+    hudDevLog('rescue-eligibility-state', {
       contactsStatus,
       hydratedContacts: contacts.length,
       endpointConfigured: Boolean(endpoint),
@@ -600,7 +597,7 @@ export default function PreflightPanel() {
   }
 
   useEffect(() => {
-    if (import.meta.env.DEV) console.log('[BUILD]', buildId)
+    hudDevLog('build', { buildId })
   }, [buildId])
 
   return (
@@ -620,13 +617,11 @@ export default function PreflightPanel() {
               )
               updatePanel('preflight', { docked: false, minimized: false, x: next.x, y: next.y })
               raisePanel('preflight')
-              if (import.meta.env.DEV) {
-                console.info('[HUD DEV] emergency-panel-recovery', {
+              hudDevLog('emergency-panel-recovery', {
                   panel: 'preflight',
                   reason: 'operator_reachability_action',
                   to: next,
                 })
-              }
             }}
             style={{
               minHeight: tapMin,

@@ -46,10 +46,7 @@ export default function WaypointTypePanel() {
   } = state
   const selectedType = pendingWaypointType
   const routeDistance = useMemo(
-    () =>
-      totalRouteDistance(
-        waypoints.map((w) => ({ lat: w.lat, lng: w.lng })),
-      ),
+    () => totalRouteDistance(waypoints.map((w) => ({ lat: w.lat, lng: w.lng }))),
     [waypoints],
   )
   const isMobile = getDeviceProfile().interactionMode === 'mobile'
@@ -291,7 +288,7 @@ export default function WaypointTypePanel() {
           <label
             title={
               trailSnapAssistCapable
-                ? 'Preview only — choose Use Snapped or Use Raw after each drop.'
+                ? 'When placing pins: preview snap to nearest trail (Use Snapped / Use Raw). Route line stays pin-to-pin.'
                 : 'Unavailable until the map loads vector trails at zoom 12+.'
             }
             style={{

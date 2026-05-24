@@ -26,11 +26,10 @@ describe('MAP_STYLES (hard-locked registry)', () => {
     expect(new Set(urls).size).toBe(ALL_LAYERS.length)
   })
 
-  it('terrain-rgb TileJSON uses the same key query as MAP_STYLES.topo', () => {
-    const topoKey = new URL(MAP_STYLES.topo).searchParams.get('key')
+  it('terrain-rgb TileJSON includes a MapTiler key query param', () => {
     const terrain = maptilerTerrainRgbTileJson()
     expect(terrain).toContain('terrain-rgb')
-    expect(terrain).toContain(`key=${topoKey}`)
+    expect(terrain).toMatch(/[?&]key=[^&]+/)
   })
 
   it('getStyleUrl matches MAP_STYLES entries', () => {

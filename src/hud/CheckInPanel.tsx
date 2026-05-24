@@ -1,0 +1,157 @@
+import React, { useEffect, useRef, useState } from 'react'
+import HudPanel from './HudPanel'
+import { useGPS } from '../hooks/useGPS'
+import { useAppContext } from '../context/AppContext'
+import { getDeviceProfile } from '../runtime/deviceProfile'
+import { traceAction } from '../runtime/actionTrace'
+import { buildRescuePacket, rescuePacketDevLogSummary } from '../lib/rescue/buildRescuePacket'
+import { getRescueEligibility } from '../lib/rescue/eligibility'
+import { hasRescueDispatchAuth } from '../lib/rescue/rescueDispatch'
+import { postRescuePacket } from '../lib/rescue/postRescuePacket'
+import { resolveRapidEndpoint } from '../lib/rescue/resolveRapidEndpoint'
+import {
+  touchFontSm,
+  touchFontMd,
+  touchGapMd,
+  touchMinTarget,
+} from './tokens'
+
+export default function CheckInPanel() {
+  useGPS()
+  useAppContext()
+
+  const mountedRef = useRef(true)
+  const sendingRef = useRef(false)
+  const [status, setStatus] = useState('READY')
+
+  const isMobile = getDeviceProfile().interactionMode === 'mobile'
+  const fontSm = touchFontSm(isMobile)
+  const fontMd = touchFontMd(isMobile)
+  const gapMd = touchGapMd(isMobile)
+  const tapMin = touchMinTarget(isMobile)
+  const buttonMinHeight = isMobile ? 64 : 44
+  const buttonFontSize = isMobile ? 18 : 13
+  const panelPadding = isMobile ? 16 : 12
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
+  const safeSetStatus = (next: string) => {
+    if (mountedRef.current) setStatus(next)
+  }
+
+  const sendCheckIn = async () => {
+    traceAction('checkin_dispatch', 'handler_enter')
+    if (sendingRef.current) {
+      traceAction('checkin_dispatch', 'guard_reject', { reason: 'already_sending' })
+      return
+    }
+    sendingRef.current = true
+    safeSetStatus('BUILDING CHECK-IN…')
+    try {
+      traceAction('checkin_dispatch', 'async_start', { step: 'build_packet' })
+      const packet = await buildRescuePacket('CHECKIN')
+      const contactCount = packet.contacts.length
+      const endpoint = resolveRapidEndpoint()
+
+      if (import.meta.env.DEV) {
+        console.log('[rescue] check-in send (redacted)', rescuePacketDevLogSummary(packet))
+      }
+
+      const eligibility = getRescueEligibility({ contactCount, endpoint })
+      if (!eligibility.dispatchReady && eligibility.reason === 'no_contacts') {
+        safeSetStatus('CHECK-IN: NO CONTACTS FOUND')
+        traceAction('checkin_dispatch', 'guard_reject', { reason: 'no_contacts' })
+        return
+      }
+      if (!eligibility.dispatchReady && eligibility.reason === 'no_endpoint') {
+        safeSetStatus(`CHECK-IN READY (${contactCount} CONTACTS) — NO ENDPOINT SET`)
+        traceAction('checkin_dispatch', 'guard_reject', { reason: 'no_endpoint', contactCount })
+        return
+      }
+
+      safeSetStatus('SENDING CHECK-IN…')
+      traceAction('checkin_dispatch', 'async_start', {
+        step: 'post_dispatch',
+        contactCount,
+        hasDispatchAuth: hasRescueDispatchAuth(),
+        signed: Boolean(packet.signature),
+      })
+
+      const result = await postRescuePacket(packet, endpoint, 'CHECKIN')
+      if (result.ok) {
+        safeSetStatus(`CHECK-IN SENT TO ${contactCount} CONTACTS`)
+        traceAction('checkin_dispatch', 'async_complete', { status: result.status, contactCount })
+      } else if (result.reason === 'http_error') {
+        safeSetStatus(result.failure.operatorMessage)
+        traceAction('checkin_dispatch', 'failure', {
+          reason: 'http_error',
+          status: result.failure.status,
+          code: result.failure.code,
+        })
+      } else {
+        safeSetStatus('CHECK-IN SEND FAILED (NETWORK)')
+        traceAction('checkin_dispatch', 'failure', { reason: 'network_error' })
+      }
+    } finally {
+      sendingRef.current = false
+    }
+  }
+
+  return (
+    <HudPanel
+      panelId="checkin"
+      title="CHECK-IN"
+      initialPos={{ x: 1220, y: 340 }}
+      initialWidth={280}
+    >
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: gapMd,
+          padding: panelPadding,
+          fontSize: fontSm,
+        }}
+      >
+        <div style={{ opacity: 0.85, lineHeight: 1.35 }}>
+          One tap sends your current location to emergency contacts — same secure rescue channel as
+          SOS and Deadman.
+        </div>
+        <button
+          type="button"
+          onClick={() => void sendCheckIn()}
+          style={{
+            minHeight: buttonMinHeight,
+            minWidth: tapMin,
+            width: '100%',
+            fontSize: buttonFontSize,
+            fontWeight: 700,
+            letterSpacing: '0.04em',
+            border: '1px solid rgba(120, 220, 160, 0.55)',
+            borderRadius: 8,
+            background: 'linear-gradient(180deg, rgba(40, 90, 60, 0.95), rgba(20, 50, 35, 0.98))',
+            color: '#d8ffe6',
+            cursor: 'pointer',
+          }}
+        >
+          SEND CHECK-IN
+        </button>
+        <div
+          style={{
+            fontSize: fontMd,
+            fontWeight: 600,
+            color: status.includes('FAILED') || status.includes('NO ') ? '#ff8fa3' : '#a8e6ff',
+            minHeight: '1.4em',
+          }}
+        >
+          {status}
+        </div>
+      </div>
+    </HudPanel>
+  )
+}

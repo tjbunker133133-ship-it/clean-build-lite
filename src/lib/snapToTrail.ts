@@ -35,6 +35,46 @@ export const ALLOWED_TRAIL_CLASSES = new Set([
   'bridleway',
 ])
 
+/** OpenMapTiles `transportation.subclass` — footways often use class `path`/`minor` + subclass. */
+export const ALLOWED_TRAIL_SUBCLASSES = new Set([
+  'path',
+  'track',
+  'footway',
+  'cycleway',
+  'bridleway',
+  'steps',
+  'pedestrian',
+  'corridor',
+  'hiking',
+])
+
+/** MapTiler Outdoor `trail` source-layer (`foot`, `hiking`, …). */
+export const OUTDOOR_TRAIL_CLASSES = new Set([
+  'foot',
+  'hiking',
+  'via_ferrata',
+  'bicycle',
+  'horse',
+  'wheelchair',
+])
+
+/** Ski tileset route classes that behave like hiking trails. */
+export const SKI_HIKE_TRAIL_CLASSES = new Set(['hike', 'skitour', 'snowshoe'])
+
+const TRAIL_VECTOR_SOURCE_LAYERS = new Set(['trail', 'transportation', 'ski'])
+
+/** Motor vehicle classes — never snap, even if a style mis-tags a layer id. */
+const REJECTED_ROAD_CLASSES = new Set([
+  'motorway',
+  'trunk',
+  'primary',
+  'secondary',
+  'tertiary',
+  'busway',
+  'bus_guideway',
+  'ferry',
+])
+
 /** Bounding box padding in screen px around the tap for feature queries. */
 const QUERY_PAD_PX = 120
 
@@ -117,16 +157,12 @@ function isFiniteLngLatPair(c: unknown): c is [number, number] {
   )
 }
 
-/** Only `LineString` segments — MultiPolygon etc. rejected by spec. */
-function forEachLineStringSegmentBudgeted(
-  geometry: { type?: string; coordinates?: unknown },
+function forEachCoordRingSegmentsBudgeted(
+  ring: unknown,
   budget: { left: number },
   fn: (c1: [number, number], c2: [number, number]) => void,
 ): void {
-  if (geometry?.type !== 'LineString' || !geometry.coordinates || budget.left <= 0) return
-
-  const coords = geometry.coordinates as unknown[]
-  if (!Array.isArray(coords) || coords.length < 2) return
+  if (!Array.isArray(ring) || ring.length < 2 || budget.left <= 0) return
 
   const pair = (c1: unknown, c2: unknown) => {
     if (budget.left <= 0) return
@@ -135,16 +171,39 @@ function forEachLineStringSegmentBudgeted(
     fn(c1, c2)
   }
 
-  for (let i = 1; i < coords.length && budget.left > 0; i += 1) {
-    pair(coords[i - 1], coords[i])
+  for (let i = 1; i < ring.length && budget.left > 0; i += 1) {
+    pair(ring[i - 1], ring[i])
+  }
+}
+
+/** LineString + MultiLineString trail segments — other geometry types rejected. */
+function forEachLineStringSegmentBudgeted(
+  geometry: { type?: string; coordinates?: unknown },
+  budget: { left: number },
+  fn: (c1: [number, number], c2: [number, number]) => void,
+): void {
+  if (!geometry?.coordinates || budget.left <= 0) return
+
+  if (geometry.type === 'LineString') {
+    forEachCoordRingSegmentsBudgeted(geometry.coordinates, budget, fn)
+    return
+  }
+
+  if (geometry.type === 'MultiLineString') {
+    const lines = geometry.coordinates as unknown
+    if (!Array.isArray(lines)) return
+    for (const line of lines) {
+      if (budget.left <= 0) break
+      forEachCoordRingSegmentsBudgeted(line, budget, fn)
+    }
   }
 }
 
 /** Layer-id substrings that signal trail/foot geometry on relaxed-schema styles. */
 const TRAIL_LAYER_ID_HINTS = ['trail', 'path', 'track', 'footway', 'cycleway', 'bridleway']
 
-/** Source-layer substrings accepted as transportation on OpenMapTiles-style schemas. */
-const TRANSPORTATION_SOURCE_LAYER_HINTS = ['transportation', 'transportation_name']
+/** Vector source-layers that can carry hike / foot / path geometry (OpenMapTiles + MapTiler Outdoor). */
+const TRAIL_SOURCE_LAYER_HINTS = ['trail', 'transportation', 'transportation_name', 'ski']
 
 type CapabilityProbe = {
   hasStyle: boolean
@@ -170,7 +229,7 @@ type CapabilityProbe = {
  * Fail-closed: any thrown access or non-line/non-vector layer is ignored.
  *
  * Accepts (relaxed for MapTiler outdoor-v4 / topo-v4):
- *   - line layer whose `source-layer` contains `transportation` or `transportation_name`
+ *   - line layer whose `source-layer` is `trail`, `transportation`, `transportation_name`, or `ski`
  *   - OR line layer whose `id` includes trail / path / track / footway / cycleway / bridleway
  *
  * Rejects:
@@ -275,8 +334,8 @@ function probeStyleForTrailLayers(map: Map): CapabilityProbe {
     const sl = typeof sourceLayer === 'string' ? sourceLayer.toLowerCase() : ''
     let sourceLayerMatched = false
     if (sl) {
-      for (const hint of TRANSPORTATION_SOURCE_LAYER_HINTS) {
-        if (sl.includes(hint)) {
+      for (const hint of TRAIL_SOURCE_LAYER_HINTS) {
+        if (sl === hint || sl.includes(hint)) {
           probe.matchedTransportationSourceLayers += 1
           sourceLayerMatched = true
           break
@@ -310,8 +369,9 @@ function devLogCapability(map: Map, zoom: number, available: boolean, probe: Cap
   let devEnabled = false
   try {
     devEnabled = Boolean(
-      (typeof import.meta !== 'undefined' && (import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV) ||
-        (typeof window !== 'undefined' && window.localStorage?.getItem('hud_snap_debug') === '1'),
+      typeof window !== 'undefined' &&
+        (window.localStorage?.getItem('hud_snap_debug') === '1' ||
+          window.localStorage?.getItem('hud_tier1_debug') === '1'),
     )
   } catch {
     devEnabled = false
@@ -405,6 +465,105 @@ export function createTrailSnapPreviewGate(): TrailSnapPreviewGate {
   }
 }
 
+function normalizeTag(value: unknown): string {
+  return typeof value === 'string' ? value.toLowerCase().trim() : ''
+}
+
+function layerIdLooksTrail(layerId: string): boolean {
+  if (!layerId) return false
+  const id = layerId.toLowerCase()
+  return TRAIL_LAYER_ID_HINTS.some((hint) => id.includes(hint))
+}
+
+function featureSourceLayer(feature: {
+  sourceLayer?: string
+  layer?: { 'source-layer'?: string; sourceLayer?: string }
+}): string {
+  const direct = normalizeTag(feature.sourceLayer)
+  if (direct) return direct
+  const fromLayer = feature.layer as { 'source-layer'?: string; sourceLayer?: string } | undefined
+  return normalizeTag(fromLayer?.['source-layer'] ?? fromLayer?.sourceLayer)
+}
+
+type SnapFeatureLike = {
+  properties?: Record<string, unknown> | null
+  sourceLayer?: string
+  layer?: { id?: string; 'source-layer'?: string; sourceLayer?: string }
+}
+
+/**
+ * Decide whether a rendered vector feature is trail geometry and return a
+ * diagnostic class tag for logging / waypoint metadata.
+ */
+export function resolveTrailSnapClass(feature: SnapFeatureLike): string | null {
+  const props = feature.properties ?? {}
+  const cls = normalizeTag(props.class)
+  const sub = normalizeTag(props.subclass)
+  const srcLayer = featureSourceLayer(feature)
+  const layerId = normalizeTag(feature.layer?.id)
+
+  if (cls && REJECTED_ROAD_CLASSES.has(cls)) return null
+
+  if (cls && ALLOWED_TRAIL_CLASSES.has(cls)) return cls
+  if (cls && OUTDOOR_TRAIL_CLASSES.has(cls)) return cls
+  if (cls && SKI_HIKE_TRAIL_CLASSES.has(cls)) return cls
+  if (sub && ALLOWED_TRAIL_SUBCLASSES.has(sub)) return sub
+
+  if (srcLayer === 'trail') return cls || sub || 'trail'
+  if (srcLayer === 'ski' && cls && SKI_HIKE_TRAIL_CLASSES.has(cls)) return cls
+
+  if (layerIdLooksTrail(layerId) && TRAIL_VECTOR_SOURCE_LAYERS.has(srcLayer)) {
+    return cls || sub || 'trail'
+  }
+
+  return null
+}
+
+function trailFeaturePriority(feature: SnapFeatureLike): number {
+  const src = featureSourceLayer(feature)
+  if (src === 'trail') return 0
+  if (src === 'transportation') return 1
+  if (src === 'ski') return 2
+  return 3
+}
+
+/**
+ * Collect visible line layer ids that render trail / path geometry (for tighter queries).
+ */
+export function collectTrailSnapLayerIds(map: Map): string[] {
+  let spec: unknown
+  try {
+    spec = map.getStyle?.()
+  } catch {
+    return []
+  }
+  const layers = (spec as { layers?: unknown })?.layers
+  if (!Array.isArray(layers)) return []
+
+  const ids: string[] = []
+  for (const layer of layers) {
+    if (!layer || typeof layer !== 'object') continue
+    const L = layer as Record<string, unknown>
+    if (L.type !== 'line') continue
+    const layout = L.layout as { visibility?: unknown } | undefined
+    if (layout?.visibility === 'none') continue
+    const sl = normalizeTag(L['source-layer'])
+    const id = typeof L.id === 'string' ? L.id : ''
+    let match = false
+    if (sl) {
+      for (const hint of TRAIL_SOURCE_LAYER_HINTS) {
+        if (sl === hint || sl.includes(hint)) {
+          match = true
+          break
+        }
+      }
+    }
+    if (!match && layerIdLooksTrail(id)) match = true
+    if (match && id) ids.push(id)
+  }
+  return ids
+}
+
 /**
  * Synchronous, local-only: queries vectors already rendered in the viewport.
  * Returns null if nothing qualifies within the clamped radius.
@@ -423,27 +582,40 @@ export function findNearestTrailCandidate(
 
   let features: ReturnType<Map['queryRenderedFeatures']> = []
   try {
-    if (!map.isStyleLoaded()) return null
     const pt = map.project([rawLng, rawLat])
     const pad = QUERY_PAD_PX
-    features = map.queryRenderedFeatures(
-      [
-        [pt.x - pad, pt.y - pad],
-        [pt.x + pad, pt.y + pad],
-      ],
-      {},
-    )
+    const box: [[number, number], [number, number]] = [
+      [pt.x - pad, pt.y - pad],
+      [pt.x + pad, pt.y + pad],
+    ]
+    const layerIds = collectTrailSnapLayerIds(map)
+    try {
+      if (layerIds.length > 0) {
+        features = map.queryRenderedFeatures(box, { layers: layerIds })
+        if (features.length === 0) {
+          features = map.queryRenderedFeatures(box, {})
+        }
+      } else {
+        features = map.queryRenderedFeatures(box, {})
+      }
+    } catch {
+      features = map.queryRenderedFeatures(box, {})
+    }
   } catch {
     return null
   }
 
+  const ordered = [...features].sort(
+    (a, b) => trailFeaturePriority(a) - trailFeaturePriority(b),
+  )
+
   const acc: { best: TrailSnapCandidate | null } = { best: null }
   const segBudget = { left: MAX_SEGMENT_EVALUATIONS }
 
-  for (const f of features) {
+  for (const f of ordered) {
     if (segBudget.left <= 0) break
-    const cls = f.properties?.class
-    if (typeof cls !== 'string' || !ALLOWED_TRAIL_CLASSES.has(cls)) continue
+    const snapClass = resolveTrailSnapClass(f)
+    if (!snapClass) continue
     const geom = f.geometry as { type?: string; coordinates?: unknown }
     forEachLineStringSegmentBudgeted(geom, segBudget, (c1, c2) => {
       const a: LatLng = { lat: c1[1], lng: c1[0] }
@@ -456,7 +628,7 @@ export function findNearestTrailCandidate(
           snappedLat: proj.lat,
           snappedLng: proj.lng,
           distanceMeters: dist,
-          sourceClass: cls,
+          sourceClass: snapClass,
         }
       }
     })
@@ -477,8 +649,8 @@ export function findNearestTrailCandidate(
  *     and toggles false during normal pan/zoom on mobile networks — which
  *     would make the toggle "stuck disabled" even when trails are clearly
  *     rendered. Tile readiness is enforced where it actually matters
- *     (`findNearestTrailCandidate`'s own `isStyleLoaded()` guard before
- *     `queryRenderedFeatures`). This stays fail-closed for raster /
+ *     (`findNearestTrailCandidate` uses try/catch around `queryRenderedFeatures`
+ *     without gating on `isStyleLoaded()`). This stays fail-closed for raster /
  *     satellite styles because they yield zero qualifying line layers.
  *
  * Compatible with MapTiler outdoor-v4 / topo-v4 / streets schemas (relaxed

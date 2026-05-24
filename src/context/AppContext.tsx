@@ -30,7 +30,7 @@ const initialState: AppState = {
   deadManActive: true,
 }
 
-function appReducer(state: AppState, action: AppAction): AppState {
+export function appReducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
     case 'ADD_WAYPOINT': {
       const wp = action.payload
@@ -92,6 +92,8 @@ function appReducer(state: AppState, action: AppAction): AppState {
       return { ...state, showMapDistances: action.payload }
     case 'SET_SNAP_TO_TRAIL':
       return { ...state, snapToTrailEnabled: action.payload }
+    case 'SET_TRAIL_SNAP_ASSIST_CAPABLE':
+      return { ...state, trailSnapAssistCapable: action.payload }
     case 'SET_DEAD_MAN_TIME':
       return { ...state, deadManTimeLeft: action.payload }
     case 'RESET_DEAD_MAN':
@@ -236,7 +238,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const setLayer = useCallback((layer: LayerType) => {
-    console.log('[SET LAYER DISPATCH]', layer, Date.now())
     dispatch({ type: 'SET_LAYER', payload: layer })
   }, [])
 

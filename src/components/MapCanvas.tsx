@@ -24,6 +24,7 @@ import {
   MAX_SNAP_RADIUS_M,
   MIN_SNAP_ZOOM,
 } from '../lib/snapToTrail'
+import { computeTrailRoute, diagnoseTrailLeg } from '../lib/trailRoute'
 import { hudObsMark, hudObsMeasure } from '../diag/hudObs'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 
@@ -265,6 +266,8 @@ export default function MapCanvas() {
   pendingTypeRef.current = pendingWaypointType
   const waypointCountRef = useRef(waypoints.length)
   waypointCountRef.current = waypoints.length
+  const waypointsRef = useRef(waypoints)
+  waypointsRef.current = waypoints
   const lastDropAtRef = useRef(0)
   const nextWaypointLabelRef = useRef(nextWaypointLabel)
   nextWaypointLabelRef.current = nextWaypointLabel
@@ -675,6 +678,25 @@ export default function MapCanvas() {
           __resetSnapCapabilityDevLogForTests()
           syncSnapAssistCapability()
           return snap
+        }
+        ;(window as unknown as { __hudTrailRouteDiag?: () => unknown }).__hudTrailRouteDiag = () => {
+          const wps = waypointsRef.current
+          if (!map) return { error: 'no map' }
+          if (wps.length < 2) return { error: 'need 2+ waypoints', count: wps.length }
+          const route = computeTrailRoute(map, wps, isSnapAvailable(map))
+          const legs = wps.slice(1).map((wp, i) => {
+            const prev = wps[i]
+            return diagnoseTrailLeg(map, { lat: prev.lat, lng: prev.lng }, { lat: wp.lat, lng: wp.lng })
+          })
+          const out = {
+            capable: isSnapAvailable(map),
+            allTrail: route.allTrail,
+            coordCount: route.coordinates.length,
+            totalMiles: route.totalDistance.miles,
+            legs,
+          }
+          try { console.info('[hud-trail-route-diag]', out) } catch { /* ignore */ }
+          return out
         }
       }
 
@@ -1106,6 +1128,8 @@ export default function MapCanvas() {
       } catch {
         // ignore resize errors
       }
+      const snapSync = snapAssistSyncRef.current
+      if (typeof snapSync === 'function') snapSync()
       try {
         mapCtl.off('data', onData)
       } catch {
@@ -1340,7 +1364,7 @@ export default function MapCanvas() {
       userMarkerRef.current = new maplibregl.Marker({ element: el })
         .setLngLat([gps.lng, gps.lat])
         .addTo(map)
-      console.log('[USER MARKER CREATED]')
+      tier1Debug('map', 'user marker created')
       return
     }
     userMarkerRef.current.setLngLat([gps.lng, gps.lat])

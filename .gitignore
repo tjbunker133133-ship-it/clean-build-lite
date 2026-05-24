@@ -3,6 +3,7 @@ dist/
 .env
 .env.*
 !.env.example
+env/*.local
 .vite/
 *.log
 .DS_Store
@@ -13,3 +14,4 @@ netlify-dist-deploy.zip
 
 scripts/rescue-smoke.cjs
 
+node_modules

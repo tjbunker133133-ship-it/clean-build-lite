@@ -46,3 +46,51 @@ export function totalRouteDistance(
   }
   return { miles: totalMiles, feet: totalMiles * 5280 }
 }
+
+/** Sum of segment great-circle distances along a vertex path (trail-following mileage). */
+export function polylineDistance(
+  points: Array<{ lat: number; lng: number }>,
+): { miles: number; feet: number } {
+  if (points.length < 2) return { miles: 0, feet: 0 }
+  let meters = 0
+  for (let i = 1; i < points.length; i++) {
+    meters += haversineMeters(
+      points[i - 1].lat,
+      points[i - 1].lng,
+      points[i].lat,
+      points[i].lng,
+    )
+  }
+  const miles = meters / METERS_PER_MILE
+  return { miles, feet: miles * 5280 }
+}
+
+/** Point halfway along a polyline by trail distance (for segment labels). */
+export function midpointAlongPolyline(
+  points: Array<{ lat: number; lng: number }>,
+): { lat: number; lng: number } | null {
+  if (points.length === 0) return null
+  if (points.length === 1) return { lat: points[0].lat, lng: points[0].lng }
+  const totalM = polylineDistance(points).miles * METERS_PER_MILE
+  if (totalM <= 0) return { lat: points[0].lat, lng: points[0].lng }
+  const half = totalM / 2
+  let acc = 0
+  for (let i = 1; i < points.length; i++) {
+    const segM = haversineMeters(
+      points[i - 1].lat,
+      points[i - 1].lng,
+      points[i].lat,
+      points[i].lng,
+    )
+    if (acc + segM >= half) {
+      const t = segM > 0 ? (half - acc) / segM : 0
+      return {
+        lat: points[i - 1].lat + t * (points[i].lat - points[i - 1].lat),
+        lng: points[i - 1].lng + t * (points[i].lng - points[i - 1].lng),
+      }
+    }
+    acc += segM
+  }
+  const last = points[points.length - 1]
+  return { lat: last.lat, lng: last.lng }
+}

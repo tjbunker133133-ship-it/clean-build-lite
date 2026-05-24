@@ -8,6 +8,7 @@ import React, {
   useState,
   type ReactNode,
 } from 'react'
+import { tier1Debug } from '../lib/tier1DebugLog'
 import { useGPS } from '../hooks/useGPS'
 import { fetchElevationOpenElevation } from '../lib/openElevation'
 import { fetchWeather, type WeatherResult } from '../lib/weather'
@@ -79,16 +80,11 @@ export function PanelDataProvider({ children }: { children: ReactNode }) {
   }, [userLocation?.lat, userLocation?.lng])
 
   const runDataFetch = useCallback(async (includeWeather: boolean) => {
-    if (import.meta.env.DEV) {
-      // DEV-only: leaks raw GPS coordinates. MUST stay gated — production
-      // operator consoles, screen recordings, and shared debug sessions
-      // must not surface fix coordinates here.
-      console.log('[PANEL DATA INPUT]', {
-        lat: gps.lat,
-        lng: gps.lng,
-        source: gps.source,
-      })
-    }
+    tier1Debug('panel', 'data input', {
+      lat: gps.lat,
+      lng: gps.lng,
+      source: gps.source,
+    })
     const lat = userLocation?.lat
     const lng = userLocation?.lng
     if (lat == null || lng == null) {

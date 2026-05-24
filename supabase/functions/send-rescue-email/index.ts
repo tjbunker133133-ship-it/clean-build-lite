@@ -228,7 +228,7 @@ function isFiniteNum(v: unknown): v is number {
 }
 
 type ValidPacket = {
-  triggerType: "SOS" | "DEADMAN";
+  triggerType: "SOS" | "DEADMAN" | "CHECKIN";
   timestamp: string;
   coordinates: { lat: number; lng: number } | null;
   contacts: { name: string; email: string }[];
@@ -248,13 +248,13 @@ function parseAndValidate(body: unknown):
   const o = body as Record<string, unknown>;
 
   const triggerType = o.triggerType;
-  if (triggerType !== "SOS" && triggerType !== "DEADMAN") {
+  if (triggerType !== "SOS" && triggerType !== "DEADMAN" && triggerType !== "CHECKIN") {
     return {
       ok: false,
       response: jsonErr(
         400,
         "BAD_PAYLOAD",
-        'triggerType must be "SOS" or "DEADMAN"',
+        'triggerType must be "SOS", "DEADMAN", or "CHECKIN"',
       ),
     };
   }
@@ -406,8 +406,10 @@ function buildEmailText(p: ValidPacket, recipientName: string): string {
   return lines.join("\n");
 }
 
-function subjectForTrigger(t: "SOS" | "DEADMAN"): string {
-  return t === "SOS" ? "[SOS ALERT]" : "[DEADMAN ALERT]";
+function subjectForTrigger(t: "SOS" | "DEADMAN" | "CHECKIN"): string {
+  if (t === "SOS") return "[SOS ALERT]";
+  if (t === "DEADMAN") return "[DEADMAN ALERT]";
+  return "[CHECK-IN]";
 }
 
 Deno.serve(async (req: Request) => {

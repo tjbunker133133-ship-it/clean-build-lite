@@ -22,7 +22,7 @@ export default function PresetPanel() {
       red_saturation: 0.5,
       red_brightness: 0.66,
     })
-    updatePanel('location', { x: 980, y: 60, docked: false })
+    updatePanel('situation', { x: 980, y: 60, docked: false })
     updatePanel('weather', { x: 980, y: 280, docked: false })
   }
 
@@ -37,7 +37,7 @@ export default function PresetPanel() {
     setScreenHue('red_tactical')
     setDisplayTuning({ red_hue_rotate: -64, red_saturation: 0.52, red_brightness: 0.64, panel_gap_px: 0 })
     updatePanel('voice', { x: 1240, y: 280, docked: false })
-    updatePanel('location', { x: 1240, y: 60, docked: false })
+    updatePanel('situation', { x: 1240, y: 60, docked: false })
   }
 
   const applyIPhonePreset = () => {
@@ -52,7 +52,7 @@ export default function PresetPanel() {
       red_saturation: 0.5,
       red_brightness: 0.66,
     })
-    updatePanel('location', { x: 940, y: 60, docked: false, minimized: false })
+    updatePanel('situation', { x: 940, y: 60, docked: false, minimized: false })
     updatePanel('voice', { x: 940, y: 260, docked: false, minimized: false })
     updatePanel('sos', { x: 940, y: 470, docked: false, minimized: false })
   }
@@ -69,7 +69,7 @@ export default function PresetPanel() {
       red_saturation: 0.54,
       red_brightness: 0.68,
     })
-    updatePanel('location', { x: 980, y: 60, docked: false, minimized: false })
+    updatePanel('situation', { x: 980, y: 60, docked: false, minimized: false })
     updatePanel('voice', { x: 980, y: 280, docked: false, minimized: false })
     updatePanel('sos', { x: 980, y: 500, docked: false, minimized: false })
   }
@@ -107,7 +107,7 @@ export default function PresetPanel() {
     updatePanel('layers', { x: 16, y: 60, w: 180, docked: false, minimized: false })
     updatePanel('waypoints', { x: 20, y: 420, w: 340, docked: false, minimized: false })
     updatePanel('display', { x: 980, y: 60, w: 300, docked: false, minimized: false })
-    updatePanel('location', { x: 980, y: 260, w: 320, docked: false, minimized: false })
+    updatePanel('situation', { x: 980, y: 260, w: 320, docked: false, minimized: false })
     updatePanel('voice', { x: 980, y: 500, w: 340, docked: false, minimized: false })
   }
 

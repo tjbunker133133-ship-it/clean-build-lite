@@ -23,6 +23,15 @@ import {
   touchGapSm as touchGapSmFn,
   touchMinTarget as touchMinTargetFn,
 } from './tokens'
+import {
+  formatVoicePhraseForDisplay,
+  hasWakeWordPrefix,
+  normalizeForWakeGate,
+  normalizeVoiceTranscript,
+  sliceFromFirstWakeToken,
+  stripRepeatedWakePrefix,
+  stripWakeAckEchoFromContinuation,
+} from '../lib/voice/normalizeVoiceTranscript'
 
 type VoiceState = 'sleeping' | 'listening' | 'processing' | 'success' | 'failure'
 
@@ -33,14 +42,15 @@ type VoiceState = 'sleeping' | 'listening' | 'processing' | 'success' | 'failure
 const WAKE_WORD = 'hud' as const
 
 // Cross-platform utterance continuity window: after a bare "HUD"
-// finalization the runtime keeps a one-shot 2500ms window during which a
+// finalization the runtime keeps a one-shot 5s window during which a
 // short, simple follow-up transcript ("weather", "center map") is
 // treated as if it had "HUD " prefixed. This is NOT conversational mode
 // — the window is one-shot, deterministic, auto-clears on consume /
 // timeout / disarm / SR teardown, and does NOT bypass DEPE wake-word
 // policy (the gate is reported 'enable' both for direct wake-word
 // utterances and for continuation consumption).
-const WAKE_CONTINUATION_MS = 2500
+const WAKE_CONTINUATION_MS = 7000
+const WAKE_ACK_SPOKEN = 'Yes.'
 // Final-transcript sanity bounds. Reject empty/whitespace/single-char
 // finals (common Android Chrome partial-flush garbage) and refuse to
 // consume the continuation window with long, multi-clause speech that
@@ -49,12 +59,26 @@ const SANITY_MIN_FINAL_LEN = 2
 const SANITY_MAX_CONTINUATION_WORDS = 6
 const SANITY_MAX_CONTINUATION_CHARS = 60
 
-function speak(text: string) {
-  if (!('speechSynthesis' in window)) return
-  const u = new SpeechSynthesisUtterance(text)
-  u.rate = 1
-  window.speechSynthesis.cancel()
-  window.speechSynthesis.speak(u)
+function speak(text: string): Promise<void> {
+  return new Promise((resolve) => {
+    if (!('speechSynthesis' in window)) {
+      resolve()
+      return
+    }
+    const trimmed = text.trim()
+    if (!trimmed) {
+      resolve()
+      return
+    }
+    const u = new SpeechSynthesisUtterance(trimmed)
+    u.rate = 1
+    const finish = () => resolve()
+    u.onend = finish
+    u.onerror = finish
+    window.speechSynthesis.cancel()
+    window.speechSynthesis.speak(u)
+    window.setTimeout(finish, Math.min(20_000, trimmed.length * 90 + 1500))
+  })
 }
 
 function playChime() {
@@ -79,10 +103,6 @@ function playChime() {
   } catch {
     // ignore audio errors
   }
-}
-
-function normalize(input: string): string {
-  return input.toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim()
 }
 
 const QUICK_COMMAND_GROUPS: Array<{
@@ -188,6 +208,9 @@ export default function VoicePanel() {
    *  when no bare-wake-word ack is pending. Single-shot: cleared on
    *  consume, timeout, disarm, or SR teardown. */
   const pendingWakeUntilRef = useRef<number | null>(null)
+  const ttsBusyRef = useRef(false)
+  /** Drop SR finals briefly after command TTS so speaker echo cannot re-trigger parse. */
+  const ignoreSrUntilRef = useRef(0)
   armedRef.current = armed
   const parseAndRunRef = useRef<(text: string) => Promise<void>>(async () => {})
   const supportsRec =
@@ -208,6 +231,7 @@ export default function VoicePanel() {
       // Disarm clears any pending utterance-continuity window so a fresh
       // arm cycle never inherits a stale bare-wake state.
       pendingWakeUntilRef.current = null
+      ignoreSrUntilRef.current = 0
       if (restartTimerRef.current != null) {
         window.clearTimeout(restartTimerRef.current)
         restartTimerRef.current = null
@@ -239,22 +263,37 @@ export default function VoicePanel() {
     playChime()
   }
 
+  const speakHandsFree = async (
+    text: string,
+    opts?: { pauseRecognition?: boolean },
+  ) => {
+    const trimmed = text.trim()
+    if (!trimmed) return
+    const pauseRecognition = opts?.pauseRecognition !== false
+    ttsBusyRef.current = true
+    const rec = recognitionRef.current
+    if (pauseRecognition && rec && armedRef.current) {
+      try {
+        rec.stop()
+      } catch {
+        // onend restarts when still armed
+      }
+    }
+    try {
+      await speak(trimmed)
+    } finally {
+      ttsBusyRef.current = false
+      if (pauseRecognition) {
+        ignoreSrUntilRef.current = performance.now() + 900
+      }
+    }
+  }
+
   const report = (text: string, ok = true) => {
     setStatusText(text)
     setVoiceState(ok ? 'success' : 'failure')
-    // Voice continuity hardening: suppress non-critical TTS while SR is
-    // actively listening. Synthesis pollutes the open mic and triggers
-    // spurious partials that fragment the user's next utterance.
-    // Critical failures (`ok === false`) still speak so the operator
-    // hears errors regardless of recognizer state.
-    const shouldSpeak = !armedRef.current || !ok
-    if (shouldSpeak) {
-      speak(text)
-    } else {
-      logInfo(
-        'VOICE',
-        `tts.suppressed-during-active-listening text="${text.slice(0, 40)}"`,
-      )
+    if (text.trim()) {
+      void speakHandsFree(text)
     }
     if (uiResetTimerRef.current != null) {
       window.clearTimeout(uiResetTimerRef.current)
@@ -279,10 +318,10 @@ export default function VoicePanel() {
     source: CommandSource,
     rawTranscript?: string,
   ) => {
-    const cmd = normalize(rawCmd)
+    const cmd = normalizeVoiceTranscript(rawCmd)
     if (!cmd) return
     setVoiceState('processing')
-    setLastHeard(`HUD ${cmd}`)
+    setLastHeard(formatVoicePhraseForDisplay(rawTranscript ?? `hud ${cmd}`))
     const res = await dispatch(cmd, source, rawTranscript ?? `HUD ${cmd}`)
     if (cmd === 'voice continuous') {
       // Already armed if we're hearing this command, but the alias is preserved
@@ -301,8 +340,25 @@ export default function VoicePanel() {
   }
 
   const parseAndRun = async (text: string) => {
-    const norm = normalize(text)
-    if (!norm) return
+    const normWake = normalizeForWakeGate(text)
+    const norm = normalizeVoiceTranscript(text)
+    // #region agent log
+    fetch('http://127.0.0.1:7617/ingest/9454c0bb-b23c-490e-8bfb-46ee1e916bc0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'b6eec3'},body:JSON.stringify({sessionId:'b6eec3',location:'VoicePanel.tsx:parseAndRun',message:'voice_parse_enter',data:{rawLen:text.length,normWake,norm,scopedWake:sliceFromFirstWakeToken(normWake),ttsBusy:ttsBusyRef.current,pendingWake:pendingWakeUntilRef.current!=null,ignoreSr:performance.now()<ignoreSrUntilRef.current},timestamp:Date.now(),hypothesisId:'H5-tts-block'})}).catch(()=>{});
+    // #endregion
+    if (!normWake) return
+    if (performance.now() < ignoreSrUntilRef.current) {
+      // #region agent log
+      fetch('http://127.0.0.1:7617/ingest/9454c0bb-b23c-490e-8bfb-46ee1e916bc0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'b6eec3'},body:JSON.stringify({sessionId:'b6eec3',location:'VoicePanel.tsx:parseAndRun',message:'voice_parse_skipped_tts_echo',data:{normWake:normWake.slice(0,60)},timestamp:Date.now(),hypothesisId:'H8-tts-echo'})}).catch(()=>{});
+      // #endregion
+      return
+    }
+    // Allow follow-up commands while wake ack TTS plays (mic stays open).
+    if (ttsBusyRef.current && pendingWakeUntilRef.current == null && !hasWakeWordPrefix(normWake)) {
+      // #region agent log
+      fetch('http://127.0.0.1:7617/ingest/9454c0bb-b23c-490e-8bfb-46ee1e916bc0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'b6eec3'},body:JSON.stringify({sessionId:'b6eec3',location:'VoicePanel.tsx:parseAndRun',message:'voice_parse_skipped_tts_busy',data:{normWake},timestamp:Date.now(),hypothesisId:'H5-tts-block'})}).catch(()=>{});
+      // #endregion
+      return
+    }
 
     // Utterance continuity window: a recent bare "HUD" finalization left
     // a one-shot 2500ms continuation window open. A short, simple
@@ -312,19 +368,21 @@ export default function VoicePanel() {
     // window from being consumed by long unrelated speech. The window is
     // one-shot — consumption clears it.
     let consumedContinuation = false
+    let continuationCmd = norm
     if (pendingWakeUntilRef.current != null) {
       if (performance.now() <= pendingWakeUntilRef.current) {
-        const directlyHasWake =
-          norm === WAKE_WORD || norm.startsWith(`${WAKE_WORD} `)
+        const directlyHasWake = hasWakeWordPrefix(normWake)
         if (!directlyHasWake) {
-          const wordCount = norm.split(/\s+/).length
+          continuationCmd = stripWakeAckEchoFromContinuation(norm)
+          const wordCount = continuationCmd.split(/\s+/).filter(Boolean).length
           const sane =
-            norm.length <= SANITY_MAX_CONTINUATION_CHARS &&
+            continuationCmd.length >= SANITY_MIN_FINAL_LEN &&
+            continuationCmd.length <= SANITY_MAX_CONTINUATION_CHARS &&
             wordCount <= SANITY_MAX_CONTINUATION_WORDS
           if (sane) {
             consumedContinuation = true
             pendingWakeUntilRef.current = null
-            logInfo('VOICE', `wake-window.consume phrase="${norm.slice(0, 60)}"`)
+            logInfo('VOICE', `wake-window.consume phrase="${continuationCmd.slice(0, 60)}"`)
           }
         }
       } else {
@@ -333,7 +391,10 @@ export default function VoicePanel() {
       }
     }
 
-    const effective = consumedContinuation ? `${WAKE_WORD} ${norm}` : norm
+    const wakeScoped = consumedContinuation
+      ? `${WAKE_WORD} ${continuationCmd}`
+      : (sliceFromFirstWakeToken(normWake) ?? normWake)
+    const effective = wakeScoped
 
     // SYSTEM RULE: HUD is the ONLY valid activation token.
     // No aliases, no fuzzy matching, no fallback activation allowed.
@@ -344,9 +405,12 @@ export default function VoicePanel() {
     // when (and only when) a bare wake-word was recently confirmed AND
     // the follow-up phrase passes sanity bounds — wake-word policy is
     // never bypassed for arbitrary utterances.
-    if (effective !== WAKE_WORD && !effective.startsWith(`${WAKE_WORD} `)) {
+    if (!hasWakeWordPrefix(effective)) {
       reportPolicyAttempt('voice.wakeWordRequired', 'disable', 'parseAndRun.missing-wake-word')
       traceAction('wake_word_activation', 'guard_reject', { reason: 'missing_wake_word' })
+      // #region agent log
+      fetch('http://127.0.0.1:7617/ingest/9454c0bb-b23c-490e-8bfb-46ee1e916bc0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'b6eec3'},body:JSON.stringify({sessionId:'b6eec3',location:'VoicePanel.tsx:parseAndRun',message:'voice_wake_reject',data:{raw:text.slice(0,80),normWake,effective:effective.slice(0,80)},timestamp:Date.now(),hypothesisId:'H6-homophone'})}).catch(()=>{});
+      // #endregion
       return
     }
 
@@ -372,21 +436,25 @@ export default function VoicePanel() {
     pulseWake()
     setVoiceState('listening')
     updateVoiceState('processing')
-    const commandsPart =
-      effective === WAKE_WORD ? '' : effective.slice(WAKE_WORD.length + 1).trim()
+    const commandsPart = stripRepeatedWakePrefix(
+      effective === WAKE_WORD ? '' : effective.slice(WAKE_WORD.length + 1).trim(),
+    )
     const parts = commandsPart.split(/\bthen\b/).map((s) => s.trim()).filter(Boolean)
     if (parts.length === 0) {
-      // Bare wake-word: visual-only acknowledgement. NO TTS — synthesis
-      // would contaminate the open mic and break the user's natural
-      // follow-up cadence. Visual + chime (via pulseWake) and runtime
-      // pulse already confirmed the wake on this turn. We open the
-      // utterance continuity window so that "HUD" + short pause +
-      // "weather" is interpreted as one intent.
-      setStatusText('🎤 HUD ready')
+      setStatusText('🎤 Listening — say your command')
       setVoiceState('success')
-      pendingWakeUntilRef.current = performance.now() + WAKE_CONTINUATION_MS
-      logInfo('VOICE', `wake-window.open ms=${WAKE_CONTINUATION_MS}`)
       logInfo('VOICE', 'wake-word.only-detected')
+      // #region agent log
+      fetch('http://127.0.0.1:7617/ingest/9454c0bb-b23c-490e-8bfb-46ee1e916bc0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'b6eec3'},body:JSON.stringify({sessionId:'b6eec3',location:'VoicePanel.tsx:parseAndRun',message:'voice_wake_only',data:{normWake},timestamp:Date.now(),hypothesisId:'H7-wake-ack'})}).catch(()=>{});
+      // #endregion
+      void (async () => {
+        await speakHandsFree(WAKE_ACK_SPOKEN, { pauseRecognition: false })
+        pendingWakeUntilRef.current = performance.now() + WAKE_CONTINUATION_MS
+        logInfo('VOICE', `wake-window.open ms=${WAKE_CONTINUATION_MS}`)
+        // #region agent log
+        fetch('http://127.0.0.1:7617/ingest/9454c0bb-b23c-490e-8bfb-46ee1e916bc0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'b6eec3'},body:JSON.stringify({sessionId:'b6eec3',location:'VoicePanel.tsx:wakeAckDone',message:'voice_wake_window_open',data:{ms:WAKE_CONTINUATION_MS},timestamp:Date.now(),hypothesisId:'H9-window-timing'})}).catch(()=>{});
+        // #endregion
+      })()
       if (uiResetTimerRef.current != null) {
         window.clearTimeout(uiResetTimerRef.current)
       }
@@ -397,6 +465,9 @@ export default function VoicePanel() {
       updateVoiceState('listening')
       return
     }
+    // #region agent log
+    fetch('http://127.0.0.1:7617/ingest/9454c0bb-b23c-490e-8bfb-46ee1e916bc0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'b6eec3'},body:JSON.stringify({sessionId:'b6eec3',location:'VoicePanel.tsx:parseAndRun',message:'voice_wake_command',data:{parts,consumedContinuation},timestamp:Date.now(),hypothesisId:'H7-wake-ack'})}).catch(()=>{});
+    // #endregion
     for (const p of parts) {
       // Compose a stable `heard` value per part: "HUD <part>" — preserves
       // the wake word in the structured log even when multiple commands
@@ -509,6 +580,8 @@ export default function VoicePanel() {
       const anyProgress = finalText.length > 0 || interimText.length > 0
       if (anyProgress) {
         lastRecognitionAtRef.current = Date.now()
+        const heard = formatVoicePhraseForDisplay(finalText || interimText)
+        if (heard) setLastHeard(heard)
         // Treat progress as health: clear the restart-attempt counter so a
         // subsequent natural onend (silence rotation) starts fresh on the
         // backoff curve instead of escalating.
@@ -919,7 +992,9 @@ export default function VoicePanel() {
         {expanded && (
           <div style={{ fontSize: labelPx(10), color: 'var(--cockpit-panel-subtle)', lineHeight: 1.5, display: 'grid', gap: touchGapMd }}>
             <div>
-              Wake word: <strong>HUD</strong>. Example: <code>HUD status</code>. Last: {lastHeard || '—'}
+              Wake word: <strong>HUD</strong> (say the word, not spelled out). Example:{' '}
+              <code>HUD weather</code> or say <code>HUD</code>, wait for &quot;Yes&quot;, then{' '}
+              <code>weather</code>. Last: {lastHeard || '—'}
             </div>
             <div style={{ fontSize: labelPx(10), letterSpacing: '0.08em', color: 'var(--cockpit-panel-subtle)' }}>
               ONE-TAP COMMANDS (MOBILE READY)

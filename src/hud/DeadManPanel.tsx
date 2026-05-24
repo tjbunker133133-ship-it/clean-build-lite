@@ -38,10 +38,16 @@ import {
 } from '../lib/emergencyContacts'
 import { buildRescuePacket } from '../lib/rescue/buildRescuePacket'
 import {
+  buildRescueDispatchHeaders,
+  hasRescueDispatchAuth,
+  parseRescueDispatchFailure,
+} from '../lib/rescue/rescueDispatch'
+import {
   clearDeadmanDispatchLock,
   recordDeadmanDispatchSuccess,
   shouldSkipDeadmanDispatch,
 } from '../runtime/deadmanDispatchLock'
+import { resolveRapidEndpoint } from '../lib/rescue/resolveRapidEndpoint'
 
 // CONTRACT-SENSITIVE (threshold dedupe): the firing effect uses
 // `firedAlertsRef.current.has(t.label)` as its idempotency key. Two
@@ -64,37 +70,6 @@ const RENEW_WINDOW_S = 60
 // `emergency_contacts_saved`, `titanium_route_contacts`,
 // `current_route_contacts`). The dispatch path is now backend-truth-only via
 // `buildRescuePacket()` → `fetchEmergencyContacts()`.
-
-// CONTRACT-SENSITIVE: dispatch endpoint resolver. The fallback order
-// (VITE_RESCUE_EMAIL_URL → VITE_RAPID_ENDPOINT_URL → localStorage
-// `heartbeatFnUrl`) is part of the operator contract — changing it can
-// silently misroute live Deadman dispatches. Mirror any change in
-// `SOSPanel.tsx::resolveRapidEndpoint` to keep both paths aligned.
-function resolveRapidEndpoint(): string {
-  const rescue = ((import.meta as any).env?.VITE_RESCUE_EMAIL_URL as string | undefined)?.trim()
-  if (rescue) return rescue
-  const env = ((import.meta as any).env?.VITE_RAPID_ENDPOINT_URL as string | undefined)?.trim()
-  if (env) return env
-  try {
-    for (let i = 0; i < localStorage.length; i += 1) {
-      const key = localStorage.key(i)
-      if (!key) continue
-      const value = localStorage.getItem(key)
-      if (!value) continue
-      try {
-        const parsed = JSON.parse(value)
-        if (parsed && typeof parsed.heartbeatFnUrl === 'string' && parsed.heartbeatFnUrl.trim()) {
-          return parsed.heartbeatFnUrl.trim()
-        }
-      } catch {
-        // noop
-      }
-    }
-  } catch {
-    // noop
-  }
-  return ''
-}
 
 /**
  * Local audio playback for dead-man alerts.
@@ -150,7 +125,7 @@ export default function DeadManPanel() {
   useAppContext()
   const {
     formattedTime, remainingMs, isExpired, isCritical, isWarning,
-    isActive, reset, extend, activate, durationMs,
+    isActive, reset, extend, activate, deactivate, durationMs,
     setDurationMinutes, expiresAt,
   } = useDeadMan()
 
@@ -286,10 +261,15 @@ export default function DeadManPanel() {
     const ac = new AbortController()
     rescueFetchAbortRef.current = ac
     try {
-      traceAction('deadman_dispatch', 'async_start', { step: 'post_dispatch', contactCount })
+      traceAction('deadman_dispatch', 'async_start', {
+        step: 'post_dispatch',
+        contactCount,
+        hasDispatchAuth: hasRescueDispatchAuth(),
+        signed: Boolean(packet.signature),
+      })
       const res = await fetch(endpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: buildRescueDispatchHeaders(),
         body: JSON.stringify(packet),
         signal: ac.signal,
       })
@@ -298,9 +278,14 @@ export default function DeadManPanel() {
         // Match SOS main-line wording: "SOS SENT TO N CONTACTS"
         safeShowDispatch(`DEADMAN SENT TO ${contactCount} CONTACTS`)
         traceAction('deadman_dispatch', 'async_complete', { status: res.status, contactCount })
-      } else safeShowDispatch(`DEADMAN SEND FAILED (${res.status})`)
-      if (!res.ok) {
-        traceAction('deadman_dispatch', 'failure', { reason: 'http_error', status: res.status })
+      } else {
+        const fail = await parseRescueDispatchFailure(res, 'DEADMAN')
+        safeShowDispatch(fail.operatorMessage)
+        traceAction('deadman_dispatch', 'failure', {
+          reason: 'http_error',
+          status: fail.status,
+          code: fail.code,
+        })
       }
     } catch (e: unknown) {
       if ((e as { name?: string })?.name === 'AbortError') return
@@ -506,6 +491,16 @@ export default function DeadManPanel() {
     reset()
   }
 
+  const handleDisarm = () => {
+    if (renewTimerRef.current) {
+      window.clearInterval(renewTimerRef.current)
+      renewTimerRef.current = null
+    }
+    setRenewCountdown(null)
+    deactivate()
+    setStatusText('TIMER DISARMED — STANDBY')
+  }
+
   return (
     <>
       {/* Inject keyframes + active-state feedback for the check-in button. */}
@@ -663,7 +658,7 @@ export default function DeadManPanel() {
               className="hud-deadman-checkin"
               style={primaryCheckInStyle('#00ffb4', checkInMinHeight, checkInFontSize)}
             >
-              ACTIVATE
+              ARM TIMER
             </button>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: gapMd }}>
@@ -680,6 +675,13 @@ export default function DeadManPanel() {
                 style={btnStyle('#ffcc00', isMobile)}
               >
                 +1 HR MORE
+              </button>
+
+              <button
+                onClick={e => { e.stopPropagation(); handleDisarm() }}
+                style={btnStyle('#ff6b6b', isMobile)}
+              >
+                DISARM TIMER
               </button>
             </div>
           )}

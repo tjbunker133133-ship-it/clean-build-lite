@@ -9,6 +9,7 @@ import type { DockRequestSource } from '../controllers/InteractionController'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 import { updateActiveController } from '../runtime/runtimeSnapshot'
 import { assertPolicy, reportPolicyAttempt } from '../runtime/devicePolicy'
+import { isHudVerboseDebug, hudDevLog } from '../lib/tier1DebugLog'
 import { logInfo } from '../runtime/logger'
 import { traceAction } from '../runtime/actionTrace'
 import {
@@ -31,6 +32,12 @@ import {
   MOBILE_PANEL_FONT_SCALE_STEP,
 } from '../lib/mobilePanelHelpers'
 import { touchFontSm, touchFontMd } from './tokens'
+
+function dockDevTrace(message: string, detail?: Record<string, unknown>): void {
+  if (!isHudVerboseDebug()) return
+  if (detail !== undefined) console.log(message, detail)
+  else console.log(message)
+}
 
 // ⚠️ LOCKED SYSTEM — Behavior Freeze Active
 // Any change to interaction, layout, display modes, or layers requires explicit approval.
@@ -101,14 +108,13 @@ function dockBadge(panelId: string, title: string): { icon: string; abbr: string
   if (id === 'layers') return { icon: '▦', abbr: 'LYR' }
   if (id === 'waypoints') return { icon: '⌖', abbr: 'WPT' }
   if (id === 'deadman') return { icon: '☠', abbr: 'DMS' }
-  if (id === 'coords') return { icon: '◎', abbr: 'GPS' }
-  if (id === 'elevation') return { icon: '⛰', abbr: 'ELV' }
-  if (id === 'clock') return { icon: '◷', abbr: 'CLK' }
+  if (id === 'situation') return { icon: '◉', abbr: 'SIT' }
   if (id === 'display') return { icon: '◫', abbr: 'DSP' }
-  if (id === 'location') return { icon: '⌖', abbr: 'LOC' }
   if (id === 'voice') return { icon: '🎤', abbr: 'VOC' }
   if (id === 'weather') return { icon: '⛅', abbr: 'WTH' }
   if (id === 'presets') return { icon: '⚙', abbr: 'PST' }
+  if (id === 'checkin') return { icon: '✓', abbr: 'CHK' }
+  if (id === 'sos') return { icon: '🆘', abbr: 'SOS' }
   const compact = title
     .replace(/[^a-z0-9 ]/gi, '')
     .trim()
@@ -312,10 +318,6 @@ export default function CockpitHudPanel({
   )
 
   useEffect(() => {
-    if (import.meta.env.DEV) {
-      console.log('[INTERACTION ROUTE]', isMobile ? 'mobile' : 'desktop')
-      console.warn('[DOCK AUDIT]', 'Verify docking conditionals remain routed through InteractionController')
-    }
     updateActiveController(isMobile ? 'mobile' : 'desktop')
     // DEPE: announce which interaction model is active. Engine compares
     // against the policy table for the current device mode and emits a
@@ -345,7 +347,7 @@ export default function CockpitHudPanel({
     diag.byPanel[panelId] = entries
     if (entries.length >= 4 && now - diag.lastLogAt > 4000) {
       diag.lastLogAt = now
-      console.info('[HUD DEV] panel-remount-churn', { panelId, mountsIn10s: entries.length })
+      hudDevLog('panel-remount-churn', { panelId, mountsIn10s: entries.length })
     }
   }, [panelId])
 
@@ -799,10 +801,10 @@ export default function CockpitHudPanel({
     if (shouldDock) {
       const source: DockIntentSource = 'drag'
       if (!mobileDockAllowed(source, isMobile)) {
-        console.warn('[DOCK BLOCKED - MOBILE]', source)
+        dockDevTrace('[DOCK BLOCKED - MOBILE]', { source })
         return
       }
-      console.log('[DOCK FINAL CHECK]', {
+      dockDevTrace('[DOCK FINAL CHECK]', {
         isMobile,
         source,
         allowed: mobileDockAllowed(source, isMobile),
@@ -1298,8 +1300,8 @@ export default function CockpitHudPanel({
         const source: DockIntentSource = 'toggle'
         if (!mobileDockAllowed(source, isMobile)) {
           traceAction(`panel_toggle_dock:${panelId}`, 'guard_reject', { reason: 'mobile_toggle_blocked' })
-          console.warn('[DOCK BLOCKED - MOBILE]', source)
-          console.log('[DOCK FINAL CHECK]', {
+          dockDevTrace('[DOCK BLOCKED - MOBILE]', { source })
+          dockDevTrace('[DOCK FINAL CHECK]', {
             isMobile,
             source,
             allowed: mobileDockAllowed(source, isMobile),
@@ -1311,7 +1313,7 @@ export default function CockpitHudPanel({
           traceAction(`panel_toggle_dock:${panelId}`, 'guard_reject', { reason: 'controller_rejected' })
           return prev
         }
-        console.log('[DOCK FINAL CHECK]', {
+        dockDevTrace('[DOCK FINAL CHECK]', {
           isMobile,
           source,
           allowed: mobileDockAllowed(source, isMobile),
@@ -1349,7 +1351,7 @@ export default function CockpitHudPanel({
       return
     }
     if (isMobile) {
-      console.log('[MOBILE DOCK TRIGGER] source: button')
+      dockDevTrace('[MOBILE DOCK TRIGGER] source: button')
     }
     const side = isMobile ? chooseMobileMinimizeDockSide() : dockSide
     const s = sizeRef.current
@@ -1370,10 +1372,10 @@ export default function CockpitHudPanel({
     const source: DockIntentSource = 'minimize'
     if (!mobileDockAllowed(source, isMobile)) {
       traceAction(`panel_minimize:${panelId}`, 'guard_reject', { reason: 'mobile_minimize_blocked' })
-      console.warn('[DOCK BLOCKED - MOBILE]', source)
+      dockDevTrace('[DOCK BLOCKED - MOBILE]', { source })
       return
     }
-    console.log('[DOCK FINAL CHECK]', {
+    dockDevTrace('[DOCK FINAL CHECK]', {
       isMobile,
       source,
       allowed: mobileDockAllowed(source, isMobile),

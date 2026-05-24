@@ -25,6 +25,8 @@
  * surfaced in the runtime debug overlay.
  */
 
+import { normalizeVoiceTranscript } from '../lib/voice/normalizeVoiceTranscript'
+
 export interface VoiceCommandLike {
   id: string
   label: string
@@ -78,7 +80,7 @@ export const EMPTY_VOICE_REGISTRY_REPORT: VoiceRegistryReport = {
  * the runtime parser cannot disagree.
  */
 export function normalizeVoicePhrase(input: string): string {
-  return input.toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim()
+  return normalizeVoiceTranscript(input)
 }
 
 export function validateVoiceRegistry(

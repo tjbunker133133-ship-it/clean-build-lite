@@ -1,0 +1,25 @@
+# Tactical HUD — local secrets (copy to project root as `.env.local`)
+# Never commit `.env.local`. Netlify: Site settings → Environment variables (same names).
+
+# ── REQUIRED: Supabase (contacts + SOS/Deadman dispatch) ─────────────────────
+# Dashboard → Project Settings → API → Project URL
+VITE_SUPABASE_URL=
+
+# Dashboard → Project Settings → API → Publishable key (sb_publishable_…)
+# Do NOT use legacy anon JWT here unless you know you need it.
+VITE_SUPABASE_ANON_KEY=
+
+# Same value as Supabase secret RESCUE_SIGNING_KEY (Edge Functions → Secrets)
+# Dashboard → Edge Functions → Secrets, or: npx supabase secrets set RESCUE_SIGNING_KEY=...
+VITE_RESCUE_SIGNING_KEY=
+
+# Full URL to send-rescue-email (replace YOUR_REF with your project ref)
+VITE_RESCUE_EMAIL_URL=https://YOUR_REF.supabase.co/functions/v1/send-rescue-email
+
+# ── OPTIONAL: maps (MapTiler basemaps + terrain — get key at maptiler.com) ───
+VITE_MAPTILER_KEY=
+# VITE_GOOGLE_MAPS_API_KEY=
+# VITE_MAPBOX_ACCESS_TOKEN=
+
+# ── OPTIONAL: legacy alias (only if you still use it) ─────────────────────────
+# VITE_RAPID_ENDPOINT_URL=

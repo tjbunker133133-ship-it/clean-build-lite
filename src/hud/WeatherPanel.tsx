@@ -2,6 +2,7 @@ import HudPanel from './HudPanel'
 import { usePanelData } from '../context/PanelDataContext'
 import { useGPS } from '../hooks/useGPS'
 import { getDeviceProfile } from '../runtime/deviceProfile'
+import { tier1Debug } from '../lib/tier1DebugLog'
 import { touchFontSm, touchFontMd, touchGapMd, touchMinTarget } from './tokens'
 
 export default function WeatherPanel() {
@@ -81,10 +82,7 @@ export default function WeatherPanel() {
           data-no-drag
           disabled={!coordsReady}
           onClick={() => {
-            console.log('[WEATHER REQUEST]', {
-              lat: gps.lat,
-              lng: gps.lng,
-            })
+            tier1Debug('weather', 'request', { lat: gps.lat, lng: gps.lng })
             void refreshPanelData()
           }}
           style={{
