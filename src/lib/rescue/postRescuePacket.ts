@@ -1,6 +1,7 @@
 import type { RescuePacket } from './buildRescuePacket'
 import {
   buildRescueDispatchHeaders,
+  logRescueDispatchTrace,
   parseRescueDispatchFailure,
   type RescueDispatchFailure,
 } from './rescueDispatch'
@@ -19,6 +20,13 @@ export async function postRescuePacket(
   triggerLabel: RescueDispatchLabel,
   signal?: AbortSignal,
 ): Promise<PostRescuePacketResult> {
+  logRescueDispatchTrace({
+    triggerLabel,
+    endpoint,
+    triggerType: packet.triggerType,
+    hasOperator: Boolean(packet.operator),
+    signed: Boolean(packet.signature),
+  })
   try {
     const res = await fetch(endpoint, {
       method: 'POST',

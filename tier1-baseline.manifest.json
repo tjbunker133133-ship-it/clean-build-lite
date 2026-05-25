@@ -1,0 +1,27 @@
+{
+  "freezeId": "tier1-field-proven-2026-05-24",
+  "frozenAt": "2026-05-24",
+  "purpose": "Rollback-safe SHA-256 baseline for locked Tier 1 production surfaces. Intentional Tier 1 edits must update this manifest in the same change set.",
+  "reference": {
+    "path": "src/tier1-hud.html",
+    "sha256": "898d8f46e5dd5b35d78cfcb7b5a3843cba7d61b396a3d9e91540ee78d3dbe397"
+  },
+  "production": {
+    "src/hooks/useGPS.ts": "bdd7b8ec309335ab05c6a819b27d962b516228ef5e37bf37ffbf8efff1b663a0",
+    "src/components/MapCanvas.tsx": "c08fd1284ba448ef4fde30ad30f552fbbd4521f82cc842fda7e27a324f722ea1",
+    "src/lib/mapStyles.ts": "6c097cf2db74aa291d62cea63e31ee35f0d893ac90b968a2a268d4362da27bf0",
+    "src/hud/SOSPanel.tsx": "d6fc0a9b6c4ea7f1528b6eb06288aa5e4f12b5d443a4a01793fdcac3c2c6715e",
+    "src/hud/DeadManPanel.tsx": "9cacdc1d2bf78ce42ffd9c7af367cbf7ddc12561c97d1adda597d573976f0be7",
+    "src/hud/CockpitHudShell.tsx": "816d311cd774fec03c14b26972b78cf0ac5a7bd207810b555e5b9ac041732540",
+    "src/controllers/resolveDockIntent.ts": "a824b236092ce85e7b230380d3a0904546d299920e3714b28e6faee387e08549",
+    "src/context/AppContext.tsx": "e5e40a9f63ccd3b2911c251c0cd15b36ac8f0261673a4282b5a1c413ff38680c",
+    "src/App.tsx": "4b4edabbc46a2e8f4252988c627abf540a0f534cd89168e887f8fabeabbc8afa",
+    "src/main.tsx": "a0f7365274d7804caa0b57dcc113fd452a903abfc3ebe92b58880a00a8e0bec2",
+    "vite.config.ts": "b59eb5198f2469781c2c6a17de9438c1fbcf86e2928506807312a4f689f8297a",
+    "index.html": "05d4c5091478975d6c67b5859302f97c8a222088a6f5052343884906344eda2e",
+    "src/lib/rescue/buildRescuePacket.ts": "1e9a7930c6765276009540281d6468386d40bef963250c1760834db042ac30cc",
+    "src/lib/rescue/postRescuePacket.ts": "f2398e3498dd1cddcdfd05798eaf4ee69296062a775ecfaf47d976c3afcbc9d0",
+    "src/lib/rescue/rescueDispatch.ts": "2700a58ea6047f0e088aa3072b5a1ca64ab02a29444a8fb2cda540f56a0bbda9",
+    "supabase/functions/send-rescue-email/index.ts": "9eb49b731c35767b56a6750c26caa1c1a666cf400616b1cb84aa88a46504cdff"
+  }
+}

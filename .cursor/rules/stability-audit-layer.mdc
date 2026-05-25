@@ -1,0 +1,90 @@
+---
+description: Stability execution contract — GPS/waypoint/offline HUD hard gate, behavior lock, mandatory audit
+alwaysApply: true
+---
+
+# Stability Execution Contract (Hard Gate)
+
+Production-grade GPS + waypoint + offline HUD system. Safety-critical in field use. **Stability overrides features, performance, refactors, and optimizations. No exceptions.**
+
+## Rule 1: No implied changes
+
+Do NOT change any system behavior unless explicitly requested. Off limits without explicit instruction:
+
+- GPS logic
+- waypoint rules
+- distance calculations
+- thresholds (e.g. 50 ft rule)
+- offline map behavior
+- corridor logic
+
+## Rule 2: Behavior lock (immutable unless explicitly approved)
+
+- Raw GPS is the source of truth
+- Waypoints are linear and user-confirmed
+- No auto-advance of waypoints
+- Straight-line distance must always exist
+- Snap-to-trail is optional and cannot replace GPS truth
+- Offline corridor logic must remain bounded and lightweight
+
+If any modification touches these → **STOP and request confirmation**.
+
+## Rule 3: Mandatory pre-execution check
+
+Before ANY change, evaluate:
+
+- Does this modify existing behavior?
+- Does this affect GPS truth handling?
+- Does this affect waypoint progression logic?
+- Does this affect distance calculations?
+- Does this affect offline stability?
+
+If ANY answer is unclear → **DO NOT PROCEED**.
+
+## Rule 4: Required output (before finalizing)
+
+### SYSTEM AUDIT REPORT
+
+**1. Changes** — explicit list of modifications
+
+**2. Behavior Impact** — NONE / MINOR / MAJOR
+
+**3. Regression Check** — possible regressions OR `NO REGRESSIONS DETECTED`
+
+**4. Stability Risk** — LOW / MEDIUM / HIGH
+
+**5. Edge Cases Checked** — GPS drift, offline mode, waypoint triggering, corridor boundaries
+
+**6. Decision** — SAFE TO DEPLOY / NEEDS REVIEW / BLOCKED
+
+## Rule 5: Hard gate
+
+Do NOT finish the task unless:
+
+- ALL checks are completed
+- audit is produced
+- decision is **SAFE TO DEPLOY**
+
+If not safe → **STOP and explain why**.
+
+## Rule 6: Stop before final action
+
+End every task with exactly ONE:
+
+- **STOP** (request clarification)
+- **RECOMMEND CHANGE** (with audit)
+- **PROCEED SAFE DEPLOY** (with audit)
+
+Never silently proceed without one of these.
+
+## Additional guardrails
+
+Forbidden without explicit request and audit justification:
+
+- silent architecture refactors
+- "cleanup" without request
+- optimization at the cost of behavior consistency
+- merging intentionally separated systems
+- removing features or logic currently in use
+
+If unsure → **ask before changing behavior**.

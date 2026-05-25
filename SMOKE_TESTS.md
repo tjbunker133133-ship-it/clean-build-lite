@@ -18,6 +18,21 @@ This document is **manual checklist material**. It does not replace unit tests. 
 
 ---
 
+## 0b. Tier 1 hardening gate (offline safety core)
+
+Automated contract: `npm run verify:tier1` and `src/lib/tier1Contract.test.ts`. Full checklist: `TIER1_HARDENING.md`.
+
+| # | Step | Expected |
+|---|------|----------|
+| T1.1 | Run `npm run verify:tier1` on the release commit. | Exit 0; locked `tier1-hud.html` hash unchanged. |
+| T1.2 | Open production app; set `localStorage.hud_tier1_debug = '1'`; reload. | `[tier1:*]` logs on GPS, waypoint, map-layer events only (no secret values). |
+| T1.3 | SOS panel: tap rail/track without sliding. | Does **not** arm; slide-hold ~3s required. |
+| T1.4 | Prefetch corridor (route with waypoints); then airplane mode. | Map still shows TOPO or emergency raster; no permanent black map. |
+| T1.5 | Add waypoint; walk/simulate approach. | No auto-advance; confirm required; straight-line distance visible. |
+| T1.6 | Disable network; use map + GPS panels only. | No crash loop; Tier 2 panels show degraded state, not hard failure. |
+
+---
+
 ## 1. Pre-flight (single deploy; run once after each release)
 
 | # | Step | Expected |

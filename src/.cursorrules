@@ -46,7 +46,7 @@ src/.cursorrules
 
 ## ARCHITECTURE (Tier 1,2,3 - NEVER reorder or reclassify)
 
-TIER_1: GPS Pulse Engine, 2-Mile Mission Corridor, Map Stack (Vector Topography + Outdoor Layer + Google Streets; see MAP LAYERS), Bento Grid UI, Forensic Vault (encrypted before write), SOS Safety Slider (3-sec sustained), The Field Card (Five Laws only), Optical Morse Signaling
+TIER_1: GPS Pulse Engine, 2-Mile Mission Corridor, Map Stack (Vector Topography + Outdoor Layer + Google Streets; see MAP LAYERS), Bento Grid UI, Forensic Vault (encrypted before write), SOS Safety Slider (3-sec sustained), Optical Morse Signaling
 
 TIER_2: Hydrological Telemetry, Environmental Intel (fire + satellite hybrid), Deadman Switch (server-side ONLY), P2P Mesh Networking, Universal Wearable Bridge, UAV/Scout Sync
 
@@ -81,8 +81,6 @@ TIER_3: AI Co-Pilot, LiDAR Ghost Trails, Foraging AI Engine (Colorado edibles: m
 
 
 ## REFERENCE DOCS (external truth)
-
-- Five Laws: 16-3-311, 13-21-131, 18 USC 242, 42 USC 2000aa, 16-3-103
 
 - Data sources: USGS (hydro), MODIS/VIIRS (fire), GPS (2-min pulse)
 
@@ -210,9 +208,9 @@ TIER_3: AI Co-Pilot, LiDAR Ghost Trails, Foraging AI Engine (Colorado edibles: m
 
 Tier1_implementation = src/tier1-hud.html
 
-Tier1_hash_full = 32e9c1a7d4f8b2e5d9a3c7f1e8b2d4c6a9e7f3b1d8c2a4e6f9b7c3d1e5a8f2c4
+Tier1_hash_full = 898d8f46e5dd5b35d78cfcb7b5a3843cba7d61b396a3d9e91540ee78d3dbe397
 
-Tier1_hash_short = 32e9c1a7d4f8b2e5
+Tier1_hash_short = 898d8f46e5dd5b35
 
 
 
@@ -238,7 +236,7 @@ Forbidden_UI_strings: ["boxes", "20-section", "section [0-9]"] = 0 matches in DO
 
 File: src/tier1-hud.html
 
-Hash: 32e9c1a7d4f8b2e5d9a3c7f1e8b2d4c6a9e7f3b1d8c2a4e6f9b7c3d1e5a8f2c4
+Hash: 898d8f46e5dd5b35d78cfcb7b5a3843cba7d61b396a3d9e91540ee78d3dbe397
 
 Status: LOCKED
 
@@ -248,7 +246,7 @@ Status: LOCKED
 
 File: src/tier2-connectivity.html
 
-Hash: f389d27f7f8a7c2af4060cb4551720ab60dc4d1de2c66c81d1ec21b51cac2a68 (full SHA-256) · f389d27f7f8a7c2a (short)
+Hash: c4709b08dbcda65a0bd084b6a682ffbc1ebd5f55e532f6095058b69e10ed08c8 (full SHA-256) · c4709b08dbcda65a (short)
 
 Status: LOCKED (drift check: optional but recommended; see DRIFT_POLICY)
 
@@ -280,11 +278,21 @@ Status: VALIDATED
 
 
 
+## TIER1_FREEZE (2026-05-24)
+
+Tier 1 is FIELD-PROVEN and FROZEN. See TIER1_FREEZE.md + tier1-baseline.manifest.json.
+
+- Locked production surfaces are hash-gated (npm run verify:tier1).
+- Waypoint progression, off-route, snap-to-trail, trail-route, and advanced corridor nav are Tier 2 (NOT frozen).
+- Tier 2 must be additive; must not replace Tier 1 GPS truth, SOS hold, rescue dispatch, or map/panel baseline.
+
 ## DRIFT_POLICY
 
-If tier1-hud.html deviates from hash 32e9c1a7d4f8b2e5, REJECT PR and revert.
+If tier1-hud.html deviates from hash 898d8f46e5dd5b35, REJECT PR and revert.
 
-If tier2-connectivity.html deviates from hash f389d27f7f8a7c2a (SHA-256 short, first 16 hex chars of file), re-verify stack inheritance before merge.
+If any file in tier1-baseline.manifest.json production drifts without manifest update, REJECT PR and revert.
+
+If tier2-connectivity.html deviates from hash c4709b08dbcda65a (SHA-256 short, first 16 hex chars of file), re-verify stack inheritance before merge.
 
 Any modification to Tier 1 MUST preserve:
 
@@ -316,7 +324,7 @@ Unified stack: **`src/tier3-intelligence.html`** (Tier 1 + Tier 2 + Tier 3). Sta
 
 ### Features
 
-- **Tier 1:** GPS (2 min poll), SOS (3 s sustained slide), Forensic Vault (encrypt before write), Field Card (five laws), Bento Grid UI
+- **Tier 1:** GPS (2 min poll), SOS (3 s sustained slide), Forensic Vault (encrypt before write), Bento Grid UI
 
 - **Tier 2:** Deadman Switch (mock POST heartbeat), USGS hydrological telemetry, environmental MODIS/VIIRS-style mock, connection status bar
 

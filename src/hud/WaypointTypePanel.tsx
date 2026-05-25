@@ -11,6 +11,7 @@ import {
 } from './tokens'
 import type { WaypointType } from '../types'
 import { formatDistance, haversineDistance, totalRouteDistance } from '../lib/haversine'
+import { archivedWaypoints } from '../lib/waypointNavigation'
 import { tier1Debug } from '../lib/tier1DebugLog'
 
 /** Route waypoint tiles — CLEAR ROUTE is a separate command button (not a waypoint type). */
@@ -36,6 +37,7 @@ export default function WaypointTypePanel() {
     setShowMapLabels,
     setShowMapDistances,
     setSnapToTrail,
+    restoreArchivedWaypoint,
   } = useAppContext()
   const { panels } = useCockpit()
   const isDocked = panels.waypoints?.docked === true
@@ -61,7 +63,12 @@ export default function WaypointTypePanel() {
   const tapMin = touchMinTargetFn(isMobile)
   const btnMin = (px: number) => Math.max(tapMin, px)
   const labelPx = (px: number) => Math.max(touchFontSmFn(isMobile), px)
-  const legCount = Math.max(0, waypoints.length - 1)
+  const legCount = Math.max(0, waypoints.filter((w) => w.status !== 'archived').length - 1)
+  const archived = useMemo(() => archivedWaypoints(waypoints), [waypoints])
+  const visibleWaypoints = useMemo(
+    () => waypoints.filter((w) => w.status !== 'archived'),
+    [waypoints],
+  )
   const armedType = selectedType === 'default' ? 'DISARMED' : selectedType.toUpperCase()
   const isArmed = selectedType !== 'default'
 
@@ -241,31 +248,6 @@ export default function WaypointTypePanel() {
           )
         })}
 
-        <div
-          style={{ marginTop: Math.max(gapMd, 10), width: '100%', flexBasis: '100%' }}
-          data-no-drag
-        >
-          <button
-            type="button"
-            id="__FORCE_CLEAR_ROUTE__"
-            data-no-drag
-            style={{
-              width: '100%',
-              minHeight: btnMin(44),
-              padding: '12px',
-              background: 'red',
-              color: 'white',
-              fontWeight: 'bold',
-              border: '2px solid yellow',
-              zIndex: 9999,
-            }}
-            onClick={() => {
-              ;(window as Window & { __FORCE_CLEAR_ROUTE__?: () => void }).__FORCE_CLEAR_ROUTE__?.()
-            }}
-          >
-            🧹 CLEAR ROUTE
-          </button>
-        </div>
       </div>
       <div style={{ marginBottom: Math.max(gapMd, 10), display: 'grid', gap: gapMd }}>
         <label style={{ fontSize: labelPx(11), color: '#b8c4d8', display: 'grid', gap: gapSm }}>
@@ -375,12 +357,12 @@ export default function WaypointTypePanel() {
               <strong style={{ color: '#93c5fd' }}>{waypoints.length}</strong>
             </div>
             <div style={{ marginTop: gapMd, maxHeight: 180, overflowY: 'auto', borderTop: '1px solid #253041', paddingTop: gapSm }}>
-              {waypoints.map((wp, idx) => {
+              {visibleWaypoints.map((wp, idx) => {
                 const leg =
                   idx > 0
                     ? haversineDistance(
-                        waypoints[idx - 1].lat,
-                        waypoints[idx - 1].lng,
+                        visibleWaypoints[idx - 1].lat,
+                        visibleWaypoints[idx - 1].lng,
                         wp.lat,
                         wp.lng,
                       )
@@ -398,6 +380,13 @@ export default function WaypointTypePanel() {
                   >
                     <span style={{ color: '#d5dde7' }}>
                       {idx + 1}. {wp.label}
+                      {wp.status === 'active' ? (
+                        <span style={{ color: '#7dffa8', marginLeft: 6 }}>ACTIVE</span>
+                      ) : wp.status === 'completed' ? (
+                        <span style={{ color: '#64748b', marginLeft: 6 }}>DONE</span>
+                      ) : wp.status === 'archived' ? (
+                        <span style={{ color: '#475569', marginLeft: 6 }}>ARCHIVED</span>
+                      ) : null}
                     </span>
                     <span style={{ color: leg ? '#81f7dd' : '#64748b' }}>
                       {leg ? `${formatDistance(leg.miles)} (${Math.round(leg.feet).toLocaleString()} ft)` : 'START'}
@@ -406,6 +395,34 @@ export default function WaypointTypePanel() {
                 )
               })}
             </div>
+            {archived.length > 0 && (
+              <div style={{ marginTop: gapSm, borderTop: '1px solid #253041', paddingTop: gapSm }}>
+                <div style={{ fontSize: labelPx(10), color: '#64748b', marginBottom: 4 }}>
+                  Archived ({archived.length}) — tap to restore
+                </div>
+                {archived.map((wp) => (
+                  <button
+                    key={wp.id}
+                    type="button"
+                    data-no-drag
+                    onClick={() => restoreArchivedWaypoint(wp.id)}
+                    style={{
+                      display: 'block',
+                      width: '100%',
+                      textAlign: 'left',
+                      padding: '4px 0',
+                      border: 'none',
+                      background: 'transparent',
+                      color: '#94a3b8',
+                      fontSize: labelPx(11),
+                      cursor: 'pointer',
+                    }}
+                  >
+                    ↩ {wp.label}
+                  </button>
+                ))}
+              </div>
+            )}
           </>
         )}
       </div>

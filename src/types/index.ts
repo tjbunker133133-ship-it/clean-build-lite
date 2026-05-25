@@ -1,5 +1,7 @@
 export type WaypointType = 'default' | 'start' | 'camp' | 'water' | 'rest' | 'poi' | 'pin' | 'finish'
 
+export type WaypointStatus = 'pending' | 'active' | 'completed' | 'archived'
+
 export interface Waypoint {
   id: string
   lng: number
@@ -7,6 +9,8 @@ export interface Waypoint {
   label: string
   type: WaypointType
   createdAt: number
+  /** Navigation lifecycle — user-confirmed progression only. */
+  status?: WaypointStatus
   /** Operator tap before snap — present only when `source === 'snapped'`. */
   rawLat?: number
   rawLng?: number
@@ -49,6 +53,8 @@ export type AppAction =
   | { type: 'SET_SHOW_MAP_DISTANCES'; payload: boolean }
   | { type: 'SET_SNAP_TO_TRAIL'; payload: boolean }
   | { type: 'SET_TRAIL_SNAP_ASSIST_CAPABLE'; payload: boolean }
+  | { type: 'CONFIRM_WAYPOINT_ARRIVAL' }
+  | { type: 'RESTORE_ARCHIVED_WAYPOINT'; payload: string }
   | { type: 'SET_DEAD_MAN_TIME'; payload: number }
   | { type: 'RESET_DEAD_MAN' }
   | { type: 'SET_DEAD_MAN_ACTIVE'; payload: boolean }

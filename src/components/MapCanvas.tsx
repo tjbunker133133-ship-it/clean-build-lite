@@ -570,7 +570,18 @@ export default function MapCanvas() {
       setStatus('initial')
 
       const initLayer = activeLayerRef.current as MapStyleKey
-      const bootBasemap = resolveBasemapStyle(initLayer)
+      const offlineBoot =
+        typeof navigator !== 'undefined' && navigator.onLine === false
+      const bootBasemap = offlineBoot
+        ? (() => {
+            const emerg = validatedEmergencyFallbackStyle()
+            if (emerg) {
+              mapLayerDiag('boot-offline-emergency', { layer: initLayer })
+              return { style: emerg, delivery: 'maptiler-raster' as BasemapDelivery }
+            }
+            return resolveBasemapStyle(initLayer)
+          })()
+        : resolveBasemapStyle(initLayer)
       const initialStyle = bootBasemap.style
       currentStyleRef.current =
         bootBasemap.delivery === 'vector' && typeof initialStyle === 'string' ? initialStyle : null

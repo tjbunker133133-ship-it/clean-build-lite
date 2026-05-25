@@ -92,11 +92,14 @@ export default function WaypointLayer() {
       const usePointerDrag = shouldUseWaypointPointerDrag()
       const markerDragTolerance = usePointerDrag ? 24 : 6
 
-      // rebuild markers
+      // rebuild markers — archived hidden, completed dimmed
       waypoints.forEach((wp) => {
-        if (!wp) return
+        if (!wp || wp.status === 'archived') return
 
+        const isCompleted = wp.status === 'completed'
+        const isActive = wp.status === 'active'
         const v = markerVisual(wp.type)
+        const dimOpacity = isCompleted ? 0.45 : 1
 
         if (debugDefaultMarker) {
           const marker = new maplibregl.Marker({
@@ -140,6 +143,8 @@ export default function WaypointLayer() {
             if (ok) removeWaypoint(wp.id)
           })
           markersRef.current[wp.id] = marker
+          markerEl.style.opacity = String(dimOpacity)
+          if (isActive) markerEl.style.filter = 'drop-shadow(0 0 6px rgba(125,255,138,0.75))'
           if (overlaysReady && showMapLabels) {
             const labelEl = document.createElement('div')
             labelEl.className = 'waypoint-label-float'
@@ -164,6 +169,10 @@ export default function WaypointLayer() {
         const root = document.createElement('div')
         root.className = 'marker'
         root.dataset.lowPower = lowPowerMode ? '1' : '0'
+        root.style.opacity = String(dimOpacity)
+        if (isActive) {
+          root.style.filter = 'drop-shadow(0 0 6px rgba(125,255,138,0.75))'
+        }
 
         const icon = document.createElement('div')
         icon.className = 'marker-icon'
@@ -259,9 +268,10 @@ export default function WaypointLayer() {
       })
 
       if (overlaysReady && showMapDistances && waypoints.length >= 2) {
-        for (let i = 1; i < waypoints.length; i++) {
-          const a = waypoints[i - 1]
-          const b = waypoints[i]
+        const visible = waypoints.filter((w) => w.status !== 'archived')
+        for (let i = 1; i < visible.length; i++) {
+          const a = visible[i - 1]
+          const b = visible[i]
           const midLng = (a.lng + b.lng) / 2
           const midLat = (a.lat + b.lat) / 2
           const seg = haversineDistance(a.lat, a.lng, b.lat, b.lng)

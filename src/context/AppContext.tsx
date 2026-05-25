@@ -7,8 +7,14 @@ import React, {
   useMemo,
   type ReactNode
 } from 'react'
-import type { AppState, AppAction, Waypoint, LayerType, WaypointType } from '../types'
+import type { AppState, AppAction, Waypoint, LayerType, WaypointType, WaypointStatus } from '../types'
 import { tier1Debug } from '../lib/tier1DebugLog'
+import {
+  applyWaypointArrivalConfirmation,
+  migrateLegacyWaypointStatuses,
+  restoreArchivedWaypoint,
+  statusForNewWaypoint,
+} from '../lib/waypointNavigation'
 
 const DEAD_MAN_DURATION = 300
 const APP_STORAGE_KEY = 'tactical_hud_app_state_v1'
@@ -34,10 +40,12 @@ export function appReducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
     case 'ADD_WAYPOINT': {
       const wp = action.payload
-      tier1Debug('waypoint', 'add', { id: wp.id, lat: wp.lat, lng: wp.lng, type: wp.type })
+      const navStatus = wp.status ?? statusForNewWaypoint(state.waypoints)
+      const withStatus = { ...wp, status: navStatus }
+      tier1Debug('waypoint', 'add', { id: wp.id, lat: wp.lat, lng: wp.lng, type: wp.type, status: navStatus })
       return {
         ...state,
-        waypoints: [...state.waypoints, wp],
+        waypoints: [...state.waypoints, withStatus],
       }
     }
     case 'SET_WAYPOINTS': {
@@ -94,6 +102,16 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       return { ...state, snapToTrailEnabled: action.payload }
     case 'SET_TRAIL_SNAP_ASSIST_CAPABLE':
       return { ...state, trailSnapAssistCapable: action.payload }
+    case 'CONFIRM_WAYPOINT_ARRIVAL': {
+      const next = applyWaypointArrivalConfirmation(state.waypoints)
+      tier1Debug('waypoint', 'confirm-arrival', { count: next.length })
+      return { ...state, waypoints: next }
+    }
+    case 'RESTORE_ARCHIVED_WAYPOINT':
+      return {
+        ...state,
+        waypoints: restoreArchivedWaypoint(state.waypoints, action.payload),
+      }
     case 'SET_DEAD_MAN_TIME':
       return { ...state, deadManTimeLeft: action.payload }
     case 'RESET_DEAD_MAN':
@@ -121,6 +139,8 @@ interface AppContextValue {
   setShowMapDistances: (show: boolean) => void
   setSnapToTrail: (enabled: boolean) => void
   setTrailSnapAssistCapable: (capable: boolean) => void
+  confirmWaypointArrival: () => void
+  restoreArchivedWaypoint: (id: string) => void
   setDeadManTime: (t: number) => void
   resetDeadMan: () => void
 }
@@ -142,6 +162,10 @@ function isWaypointType(value: unknown): value is WaypointType {
 
 function isLayerType(value: unknown): value is LayerType {
   return typeof value === 'string' && (VALID_LAYERS as readonly string[]).includes(value)
+}
+
+function isWaypointStatus(value: unknown): value is WaypointStatus {
+  return value === 'pending' || value === 'active' || value === 'completed' || value === 'archived'
 }
 
 function sanitizeWaypoint(raw: unknown): Waypoint | null {
@@ -166,6 +190,7 @@ function sanitizeWaypoint(raw: unknown): Waypoint | null {
   if (typeof item.snapDistanceMeters === 'number' && Number.isFinite(item.snapDistanceMeters)) {
     base.snapDistanceMeters = item.snapDistanceMeters
   }
+  if (isWaypointStatus(item.status)) base.status = item.status
   return base
 }
 
@@ -176,9 +201,11 @@ function loadInitialState(): AppState {
     if (!raw) return initialState
     const parsed = JSON.parse(raw) as Partial<AppState> | null
     if (!parsed || typeof parsed !== 'object') return initialState
-    const waypoints = Array.isArray(parsed.waypoints)
-      ? parsed.waypoints.map(sanitizeWaypoint).filter((v): v is Waypoint => Boolean(v))
-      : []
+    const waypoints = migrateLegacyWaypointStatuses(
+      Array.isArray(parsed.waypoints)
+        ? parsed.waypoints.map(sanitizeWaypoint).filter((v): v is Waypoint => Boolean(v))
+        : [],
+    )
     return {
       ...initialState,
       waypoints,
@@ -282,6 +309,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     dispatch({ type: 'SET_TRAIL_SNAP_ASSIST_CAPABLE', payload: capable })
   }, [])
 
+  const confirmWaypointArrival = useCallback(() => {
+    dispatch({ type: 'CONFIRM_WAYPOINT_ARRIVAL' })
+  }, [])
+
+  const restoreArchivedWaypointById = useCallback((id: string) => {
+    dispatch({ type: 'RESTORE_ARCHIVED_WAYPOINT', payload: id })
+  }, [])
+
   const setDeadManTime = useCallback((t: number) => {
     dispatch({ type: 'SET_DEAD_MAN_TIME', payload: t })
   }, [])
@@ -315,6 +350,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setShowMapDistances,
       setSnapToTrail,
       setTrailSnapAssistCapable,
+      confirmWaypointArrival,
+      restoreArchivedWaypoint: restoreArchivedWaypointById,
       setDeadManTime,
       resetDeadMan,
     }),
@@ -334,6 +371,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setShowMapDistances,
       setSnapToTrail,
       setTrailSnapAssistCapable,
+      confirmWaypointArrival,
+      restoreArchivedWaypointById,
       setDeadManTime,
       resetDeadMan,
     ],

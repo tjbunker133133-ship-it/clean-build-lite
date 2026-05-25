@@ -302,6 +302,7 @@ function persistWatchFixIfDue() {
 
 async function triggerIPFallback() {
   if (ipFallbackInFlight || hasGPSFix || shared.source === 'gps') return
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return
   ipFallbackInFlight = true
   try {
     const res = await fetch('https://ipapi.co/json/')

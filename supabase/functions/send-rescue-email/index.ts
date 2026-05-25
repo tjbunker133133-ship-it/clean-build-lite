@@ -227,12 +227,19 @@ function isFiniteNum(v: unknown): v is number {
   return typeof v === "number" && Number.isFinite(v);
 }
 
+type RescueOperatorMeta = {
+  display_name: string;
+  reply_to_email: string;
+  phone?: string;
+};
+
 type ValidPacket = {
   triggerType: "SOS" | "DEADMAN" | "CHECKIN";
   timestamp: string;
   coordinates: { lat: number; lng: number } | null;
-  contacts: { name: string; email: string }[];
+  contacts: { name: string; email: string; phone?: string }[];
   source: typeof SOURCE_EXPECTED;
+  operator?: RescueOperatorMeta;
 };
 
 function parseAndValidate(body: unknown):
@@ -329,7 +336,7 @@ function parseAndValidate(body: unknown):
     };
   }
 
-  const cleaned: { name: string; email: string }[] = [];
+  const cleaned: { name: string; email: string; phone?: string }[] = [];
   let filteredOut = 0;
 
   for (const item of contactsField) {
@@ -340,6 +347,7 @@ function parseAndValidate(body: unknown):
     const row = item as Record<string, unknown>;
     const email = typeof row.email === "string" ? row.email.trim() : "";
     const name = typeof row.name === "string" ? row.name.trim() : "";
+    const phone = typeof row.phone === "string" ? row.phone.trim() : "";
     if (!EMAIL_RE.test(email)) {
       filteredOut++;
       continue;
@@ -347,6 +355,7 @@ function parseAndValidate(body: unknown):
     cleaned.push({
       name: name.length > 0 ? name : "Contact",
       email,
+      ...(phone.length > 0 ? { phone } : {}),
     });
   }
 
@@ -362,6 +371,36 @@ function parseAndValidate(body: unknown):
     };
   }
 
+  let operator: RescueOperatorMeta | undefined;
+  const operatorRaw = o.operator;
+  if (operatorRaw !== undefined && operatorRaw !== null) {
+    if (typeof operatorRaw !== "object" || Array.isArray(operatorRaw)) {
+      return {
+        ok: false,
+        response: jsonErr(400, "BAD_PAYLOAD", "operator must be an object when provided"),
+      };
+    }
+    const op = operatorRaw as Record<string, unknown>;
+    const display_name = typeof op.display_name === "string" ? op.display_name.trim() : "";
+    const reply_to_email = typeof op.reply_to_email === "string" ? op.reply_to_email.trim() : "";
+    const phone = typeof op.phone === "string" ? op.phone.trim() : "";
+    if (display_name.length === 0 && reply_to_email.length === 0 && phone.length === 0) {
+      operator = undefined;
+    } else {
+      if (reply_to_email.length > 0 && !EMAIL_RE.test(reply_to_email)) {
+        return {
+          ok: false,
+          response: jsonErr(400, "BAD_PAYLOAD", "operator.reply_to_email is invalid"),
+        };
+      }
+      operator = {
+        display_name: display_name.length > 0 ? display_name : "Operator",
+        reply_to_email,
+        ...(phone.length > 0 ? { phone } : {}),
+      };
+    }
+  }
+
   return {
     ok: true,
     packet: {
@@ -370,6 +409,7 @@ function parseAndValidate(body: unknown):
       coordinates,
       contacts: cleaned,
       source: SOURCE_EXPECTED,
+      ...(operator ? { operator } : {}),
     },
     filteredOut,
   };
@@ -385,6 +425,17 @@ function buildEmailText(p: ValidPacket, recipientName: string): string {
     `Trigger: ${p.triggerType}`,
     `Time (UTC): ${p.timestamp}`,
   ];
+
+  if (p.operator) {
+    lines.push(``);
+    lines.push(`Operator: ${p.operator.display_name}`);
+    if (p.operator.reply_to_email) {
+      lines.push(`Reply-To: ${p.operator.reply_to_email}`);
+    }
+    if (p.operator.phone) {
+      lines.push(`Operator phone: ${p.operator.phone}`);
+    }
+  }
 
   if (p.coordinates) {
     const lat = p.coordinates.lat.toFixed(6);
@@ -530,6 +581,34 @@ Deno.serve(async (req: Request) => {
     return parsed.response;
   }
 
+  // #region agent log
+  {
+    const p = parsed.packet;
+    const ts = p.timestamp;
+    fetch("http://127.0.0.1:7617/ingest/9454c0bb-b23c-490e-8bfb-46ee1e916bc0", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "a49f65" },
+      body: JSON.stringify({
+        sessionId: "a49f65",
+        runId: "pre-fix",
+        hypothesisId: "C",
+        location: "send-rescue-email/index.ts:post-parse",
+        message: "edge parsed rescue packet",
+        data: {
+          triggerType: p.triggerType,
+          timestampLength: ts.length,
+          timestampLooksIso: /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(ts),
+          hasCoordinates: p.coordinates != null,
+          hasOperator: Boolean(p.operator),
+          operatorHasReplyTo: Boolean(p.operator?.reply_to_email),
+          contactCount: p.contacts.length,
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+  }
+  // #endregion
+
   const gmailUser = Deno.env.get("GMAIL_USER");
   const gmailPass = Deno.env.get("GMAIL_APP_PASSWORD");
 
@@ -580,6 +659,32 @@ Deno.serve(async (req: Request) => {
   });
 
   try {
+    const replyTo =
+      packet.operator?.reply_to_email && EMAIL_RE.test(packet.operator.reply_to_email)
+        ? packet.operator.reply_to_email
+        : undefined;
+
+    // #region agent log
+    fetch("http://127.0.0.1:7617/ingest/9454c0bb-b23c-490e-8bfb-46ee1e916bc0", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "a49f65" },
+      body: JSON.stringify({
+        sessionId: "a49f65",
+        runId: "pre-fix",
+        hypothesisId: "E",
+        location: "send-rescue-email/index.ts:smtp-send",
+        message: "edge smtp dispatch",
+        data: {
+          triggerType: packet.triggerType,
+          replyToSet: Boolean(replyTo),
+          hasOperatorDisplayName: Boolean(packet.operator?.display_name),
+          recipientCount: packet.contacts.length,
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion
+
     for (const c of packet.contacts) {
       const text = buildEmailText(packet, c.name);
       try {
@@ -588,6 +693,7 @@ Deno.serve(async (req: Request) => {
           to: c.email,
           subject,
           content: text,
+          ...(replyTo ? { replyTo } : {}),
         });
         sentEmails.push(c.email);
       } catch (e) {

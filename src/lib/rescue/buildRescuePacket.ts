@@ -1,7 +1,7 @@
 /**
  * Shared rescue dispatch payload builder.
  *
- * Pure async, single side effect: ONE call to `fetchEmergencyContacts()`.
+ * Pure async; reads device-local tactical profile (contacts + operator meta).
  * No timers, no subscriptions, no polling, no sending. Both the SOS
  * slide-success path and the Deadman timeout path call this to produce a
  * normalized packet for the rescue endpoint.
@@ -18,13 +18,27 @@
  * the same signed shape automatically; neither panel needs to change.
  */
 
-import { fetchEmergencyContacts } from '../emergencyContacts'
+import {
+  assessTacticalProfile,
+  loadTacticalProfile,
+  operatorMetaFromProfile,
+  rescueContactsFromProfile,
+} from '../tacticalProfile'
+import { appendRescuePipelineTrace } from './rescuePipelineTrace'
 
 export type RescueTriggerType = 'SOS' | 'DEADMAN' | 'CHECKIN'
 
 export type RescueContactPair = {
   name: string
   email: string
+  /** Reserved for future SMS routing; included in email body when set. */
+  phone?: string
+}
+
+export type RescueOperatorMeta = {
+  display_name: string
+  reply_to_email: string
+  phone?: string
 }
 
 export type RescueCoordinates = {
@@ -38,6 +52,8 @@ export type RescuePacket = {
   coordinates: RescueCoordinates | null
   contacts: RescueContactPair[]
   source: 'tactical-hud'
+  /** Device-local operator identity for email personalization and Reply-To. */
+  operator?: RescueOperatorMeta
   /**
    * HMAC-SHA256(canonicalJSON(rest), VITE_RESCUE_SIGNING_KEY), hex-encoded.
    * Optional in the type so a missing build-time key does not turn into a
@@ -206,7 +222,7 @@ function readLastKnownCoordinates(): RescueCoordinates | null {
  * thrown error here would permanently lock that gate for the current
  * episode and silently suppress rescue dispatch with no visible failure
  * mode. Every internal step is therefore exception-isolated:
- *   - `fetchEmergencyContacts()` rejection → caught, contacts = []
+ *   - tactical profile read failures → caught, contacts = []
  *   - `readLastKnownCoordinates()` failures → return null internally
  *   - `crypto.subtle` unavailable → `hmacSha256Hex` returns null,
  *     packet is unsigned (edge function rejects with 401, operator sees
@@ -255,27 +271,51 @@ export async function buildRescuePacket(
   triggerType: RescueTriggerType,
 ): Promise<RescuePacket> {
   let contacts: RescueContactPair[] = []
+  let operator: RescueOperatorMeta | undefined
   try {
-    const { data, error } = await fetchEmergencyContacts()
-    if (!error && Array.isArray(data)) {
-      contacts = data
-        .filter((c) => typeof c?.email === 'string' && c.email.trim().length > 0)
-        .map((c) => ({
-          name: c.contact_name,
-          email: c.email,
-        }))
+    const profile = loadTacticalProfile()
+    const assessment = assessTacticalProfile(profile)
+    if (assessment.validContactCount > 0) {
+      contacts = rescueContactsFromProfile(profile)
     }
+    operator = operatorMetaFromProfile(profile)
   } catch {
     contacts = []
+    operator = undefined
   }
 
+  const timestamp = new Date().toISOString()
+  const coordinates = readLastKnownCoordinates()
   const base: Omit<RescuePacket, 'signature'> = {
     triggerType,
-    timestamp: new Date().toISOString(),
-    coordinates: readLastKnownCoordinates(),
+    timestamp,
+    coordinates,
     contacts,
     source: 'tactical-hud',
+    ...(operator ? { operator } : {}),
   }
 
-  return signRescuePacketBody(base)
+  const packet = await signRescuePacketBody(base)
+  // #region agent log
+  appendRescuePipelineTrace({
+    runId: 'post-fix',
+    hypothesisId: 'D',
+    location: 'buildRescuePacket.ts:buildRescuePacket',
+    message: 'rescue packet built',
+    data: {
+      triggerType,
+      timestampIso: packet.timestamp,
+      timestampLooksIso:
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(packet.timestamp) ||
+        packet.triggerType === 'CHECKIN',
+      hasCoordinates: packet.coordinates != null,
+      hasOperator: Boolean(packet.operator),
+      operatorHasReplyTo: Boolean(packet.operator?.reply_to_email),
+      operatorHasDisplayName: Boolean(packet.operator?.display_name),
+      contactCount: packet.contacts.length,
+      signed: Boolean(packet.signature),
+    },
+  })
+  // #endregion
+  return packet
 }

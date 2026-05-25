@@ -94,7 +94,7 @@ export function useHudCommands(): {
 
   const [attachedPinId, setAttachedPinId] = useState<string | null>(null)
   const [morseEnabled, setMorseEnabled] = useState(false)
-  const [torchEnabled, setTorchEnabled] = useState(false)
+  const [flashlightEnabled, setFlashlightEnabled] = useState(false)
 
   // Listen for SOS panel state echoes so spoken/textual responses stay accurate.
   useEffect(() => {
@@ -102,15 +102,15 @@ export function useHudCommands(): {
       const detail = (ev as CustomEvent<{ enabled?: boolean }>).detail
       if (typeof detail?.enabled === 'boolean') setMorseEnabled(detail.enabled)
     }
-    const onTorchState = (ev: Event) => {
+    const onFlashlightState = (ev: Event) => {
       const detail = (ev as CustomEvent<{ enabled?: boolean }>).detail
-      if (typeof detail?.enabled === 'boolean') setTorchEnabled(detail.enabled)
+      if (typeof detail?.enabled === 'boolean') setFlashlightEnabled(detail.enabled)
     }
     window.addEventListener('hud:sos-morse-state', onMorseState)
-    window.addEventListener('hud:sos-torch-state', onTorchState)
+    window.addEventListener('hud:sos-flashlight-state', onFlashlightState)
     return () => {
       window.removeEventListener('hud:sos-morse-state', onMorseState)
-      window.removeEventListener('hud:sos-torch-state', onTorchState)
+      window.removeEventListener('hud:sos-flashlight-state', onFlashlightState)
     }
   }, [])
 
@@ -121,8 +121,8 @@ export function useHudCommands(): {
 
   const morseRef = useRef(morseEnabled)
   morseRef.current = morseEnabled
-  const torchRef = useRef(torchEnabled)
-  torchRef.current = torchEnabled
+  const flashlightRef = useRef(flashlightEnabled)
+  flashlightRef.current = flashlightEnabled
 
   const attachedPin = useMemo(
     () => state.waypoints.find((w) => w.id === attachedPinId) ?? null,
@@ -516,44 +516,28 @@ export function useHudCommands(): {
         },
       },
       {
-        id: 'torch on',
-        label: 'Torch on',
-        aliases: ['torch yes'],
+        id: 'flashlight on',
+        label: 'Flashlight on',
         group: 'Safety',
         run: () => {
-          window.dispatchEvent(new CustomEvent('hud:sos-torch', { detail: { enabled: true } }))
+          window.dispatchEvent(new CustomEvent('hud:sos-flashlight', { detail: { enabled: true } }))
           return ok(
-            torchRef.current
-              ? 'Torch is already on. Keeping Morse torch flash enabled.'
-              : 'Torch is currently off. Enabling Morse torch flash.',
+            flashlightRef.current
+              ? 'Flashlight is already on.'
+              : 'Flashlight is currently off. Turning on device flash.',
           )
         },
       },
       {
-        id: 'torch off',
-        label: 'Torch off',
-        aliases: ['torch no'],
+        id: 'flashlight off',
+        label: 'Flashlight off',
         group: 'Safety',
         run: () => {
-          window.dispatchEvent(new CustomEvent('hud:sos-torch', { detail: { enabled: false } }))
+          window.dispatchEvent(new CustomEvent('hud:sos-flashlight', { detail: { enabled: false } }))
           return ok(
-            torchRef.current
-              ? 'Torch is currently on. Disabling Morse torch flash.'
-              : 'Torch is already off. Keeping Morse torch flash disabled.',
-          )
-        },
-      },
-      {
-        id: 'torch toggle',
-        label: 'Torch toggle',
-        group: 'Safety',
-        run: () => {
-          const next = !torchRef.current
-          window.dispatchEvent(new CustomEvent('hud:sos-torch', { detail: { enabled: next } }))
-          return ok(
-            torchRef.current
-              ? 'Torch is currently on. Toggling off Morse torch flash.'
-              : 'Torch is currently off. Toggling on Morse torch flash.',
+            flashlightRef.current
+              ? 'Flashlight is currently on. Turning off device flash.'
+              : 'Flashlight is already off.',
           )
         },
       },

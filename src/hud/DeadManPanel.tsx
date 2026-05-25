@@ -32,14 +32,13 @@ import {
   touchGapMd,
   touchMinTarget,
 } from './tokens'
-import {
-  fetchEmergencyContacts,
-  type EmergencyContact,
-} from '../lib/emergencyContacts'
+import { useTacticalProfile } from '../hooks/useTacticalProfile'
+import { getRescueEligibility } from '../lib/rescue/eligibility'
 import { buildRescuePacket } from '../lib/rescue/buildRescuePacket'
 import {
   buildRescueDispatchHeaders,
   hasRescueDispatchAuth,
+  logRescueDispatchTrace,
   parseRescueDispatchFailure,
 } from '../lib/rescue/rescueDispatch'
 import {
@@ -157,8 +156,8 @@ export default function DeadManPanel() {
   //     reset path is intentionally absent — do NOT add one inside the
   //     fetch finally block, do NOT clear after a failed POST.
   const sentRef = useRef(false)
-  const [linkedContacts, setLinkedContacts] = useState<EmergencyContact[]>([])
-  const [linkedStatus, setLinkedStatus] = useState<'loading' | 'ok' | 'unavailable'>('loading')
+  const { profile, operationalReady, assessment } = useTacticalProfile()
+  const linkedContacts = profile.contacts
   // Mount tracker — guards post-async `setStatusText` calls in
   // `sendDeadmanRescue`. The rescue trigger gate (`sentRef`) is unchanged;
   // this only suppresses status-text writes that would land after unmount.
@@ -234,6 +233,16 @@ export default function DeadManPanel() {
     const packet = await buildRescuePacket('DEADMAN')
     const contactCount = packet.contacts.length
     const endpoint = resolveRapidEndpoint()
+    const profileGate = getRescueEligibility({
+      contactCount,
+      endpoint,
+      profileOperational: operationalReady,
+    })
+    if (!profileGate.dispatchReady && profileGate.reason === 'profile_incomplete') {
+      safeShowDispatch('EXPIRED — COMPLETE TACTICAL PROFILE IN PREFLIGHT')
+      traceAction('deadman_dispatch', 'guard_reject', { reason: 'profile_incomplete' })
+      return
+    }
     const eligibility = classifyDeadmanDispatchEligibility({
       alreadyDispatched,
       alreadySentInMount: false,
@@ -265,6 +274,13 @@ export default function DeadManPanel() {
         step: 'post_dispatch',
         contactCount,
         hasDispatchAuth: hasRescueDispatchAuth(),
+        signed: Boolean(packet.signature),
+      })
+      logRescueDispatchTrace({
+        triggerLabel: 'DEADMAN',
+        endpoint,
+        triggerType: packet.triggerType,
+        hasOperator: Boolean(packet.operator),
         signed: Boolean(packet.signature),
       })
       const res = await fetch(endpoint, {
@@ -318,30 +334,6 @@ export default function DeadManPanel() {
       durationMs,
     })
   }, [isActive, isExpired, isCritical, isWarning, remainingMs, durationMs, renewCountdown])
-
-  // One-shot, read-only fetch of linked emergency contacts. No polling, no
-  // timer, no re-fetch on rerender. Failures collapse to "unavailable" so the
-  // dead-man panel keeps operating even when the backend is offline.
-  useEffect(() => {
-    let alive = true
-    void fetchEmergencyContacts()
-      .then(({ data, error }) => {
-        if (!alive) return
-        if (error) {
-          setLinkedStatus('unavailable')
-          return
-        }
-        setLinkedContacts(data)
-        setLinkedStatus('ok')
-      })
-      .catch(() => {
-        if (!alive) return
-        setLinkedStatus('unavailable')
-      })
-    return () => {
-      alive = false
-    }
-  }, [])
 
   // Pulse animation ref for critical state
   const pulseRef = useRef<HTMLDivElement>(null)
@@ -712,21 +704,18 @@ export default function DeadManPanel() {
                 color: 'var(--cockpit-panel-text, #d6ddd6)',
               }}
             >
-              LINKED CONTACTS
+              LINKED CONTACTS (DEVICE-LOCAL)
             </div>
-            {linkedStatus === 'loading' && (
-              <div>Loading…</div>
+            {!operationalReady && (
+              <div style={{ color: '#ffb8c8', lineHeight: 1.35 }}>
+                Deadman dispatch blocked until tactical profile is complete.
+                {assessment.messages[0] ? ` ${assessment.messages[0]}` : ''}
+              </div>
             )}
-            {linkedStatus === 'unavailable' && (
-              // Shown only when the Supabase fetch genuinely failed (network
-              // error / RLS denial / table missing). An empty contact list
-              // is reported separately as 'none configured'.
-              <div>Status: backend unavailable</div>
-            )}
-            {linkedStatus === 'ok' && linkedContacts.length === 0 && (
+            {linkedContacts.length === 0 && (
               <div>Status: no contacts configured</div>
             )}
-            {linkedStatus === 'ok' && linkedContacts.length > 0 && (
+            {linkedContacts.length > 0 && (
               <>
                 <div>Linked contacts: {linkedContacts.length}</div>
                 {linkedContacts.slice(0, 3).map((c, i) => (
@@ -738,7 +727,7 @@ export default function DeadManPanel() {
                     }}
                   >
                     {i === 0 ? 'Primary' : i === 1 ? 'Backup' : 'Tertiary'}:{' '}
-                    {c.contact_name}
+                    {c.name.trim() || c.email}
                   </div>
                 ))}
                 {linkedContacts.length > 3 && (

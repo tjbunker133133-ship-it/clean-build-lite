@@ -36,9 +36,9 @@ describe('pin-to-pin distance parity (WaypointLayer ↔ WaypointTypePanel)', () 
     expect(layerSrc).toMatch(
       /haversineDistance\(\s*a\.lat\s*,\s*a\.lng\s*,\s*b\.lat\s*,\s*b\.lng\s*,?\s*\)/,
     )
-    // Panel row: `haversineDistance(waypoints[idx - 1].lat, waypoints[idx - 1].lng, wp.lat, wp.lng)`
+    // Panel row: `haversineDistance(visibleWaypoints[idx - 1].lat, …, wp.lat, wp.lng)`
     expect(panelSrc).toMatch(
-      /haversineDistance\(\s*waypoints\[idx\s*-\s*1\]\.lat\s*,\s*waypoints\[idx\s*-\s*1\]\.lng\s*,\s*wp\.lat\s*,\s*wp\.lng\s*,?\s*\)/,
+      /haversineDistance\(\s*visibleWaypoints\[idx\s*-\s*1\]\.lat\s*,\s*visibleWaypoints\[idx\s*-\s*1\]\.lng\s*,\s*wp\.lat\s*,\s*wp\.lng\s*,?\s*\)/,
     )
   })
 

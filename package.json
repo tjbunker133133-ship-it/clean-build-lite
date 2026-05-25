@@ -12,7 +12,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "verify": "tsc --noEmit && vitest run && vite build",
+    "verify:tier1": "node scripts/verify-tier1-contract.mjs && node scripts/verify-tier1-freeze.mjs && vitest run src/lib/tier1Contract.test.ts src/lib/tier1Freeze.test.ts",
+    "verify": "tsc --noEmit && vitest run && node scripts/verify-tier1-contract.mjs && vite build",
     "env:init": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/init-env.ps1",
     "env:setup": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/set-env-interactive.ps1",
     "env:open": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/open-env.ps1",
@@ -21,6 +22,7 @@
     "env:check-signing": "node scripts/check-signing-key-digest.mjs",
     "env:sync-signing": "node scripts/sync-rescue-signing-key.mjs",
     "env:verify-signing": "node scripts/verify-rescue-signing.mjs",
+    "env:verify-contract": "node scripts/verify-rescue-contract.mjs",
     "smoke": "npm run verify"
   },
   "dependencies": {

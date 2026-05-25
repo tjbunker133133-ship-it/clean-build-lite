@@ -10,9 +10,11 @@ import {
   buildRescueDispatchHeaders,
   classifyRescueDispatchKey,
   hasRescueDispatchAuth,
+  logRescueDispatchTrace,
   parseRescueDispatchFailure,
 } from '../lib/rescue/rescueDispatch'
 import { getRescueEligibility } from '../lib/rescue/eligibility'
+import { useTacticalProfile } from '../hooks/useTacticalProfile'
 import { traceAction } from '../runtime/actionTrace'
 import {
   touchFontSm as touchFontSmFn,
@@ -95,17 +97,18 @@ export default function SOSPanel() {
   // Do NOT "clean up" by deleting these calls.
   useAppContext()
   useGPS()
+  const { operationalReady, assessment } = useTacticalProfile()
   const { raisePanel, updatePanel } = useCockpit()
   const [holding, setHolding] = useState(false)
   const [holdProgress, setHoldProgress] = useState(0)
   const [mode, setMode] = useState<AlarmMode>('off')
   const [flashScreen, setFlashScreen] = useState<'yes' | 'no'>('no')
-  const [flashTorch, setFlashTorch] = useState<'yes' | 'no'>('no')
+  const [flashlightEnabled, setFlashlightEnabled] = useState(false)
   const [morsePattern, setMorsePattern] = useState<MorsePattern>('off')
   const [status, setStatus] = useState('READY')
   const [launchCountdown, setLaunchCountdown] = useState<number | null>(null)
   const [flashInvert, setFlashInvert] = useState(false)
-  const [torchActive, setTorchActive] = useState(false)
+  const [flashlightActive, setFlashlightActive] = useState(false)
   // Audible alarm is operator-owned. Its lifecycle is fully decoupled from
   // the SOS rescue dispatch path: only the start/stop alarm functions and
   // the "TEST AUDIBLE ALARM" button mutate this flag. SOS arming, the
@@ -121,8 +124,8 @@ export default function SOSPanel() {
   const compRef = useRef<DynamicsCompressorNode | null>(null)
   const alarmTimerRef = useRef<number | null>(null)
   const morseStopRef = useRef(false)
-  const torchStreamRef = useRef<MediaStream | null>(null)
-  const torchTrackRef = useRef<MediaStreamTrack | null>(null)
+  const flashlightStreamRef = useRef<MediaStream | null>(null)
+  const flashlightTrackRef = useRef<MediaStreamTrack | null>(null)
   const launchTimerRef = useRef<number | null>(null)
   // CONTRACT-SENSITIVE (iOS): absolute wall-clock deadline for the
   // 5-second auto-launch window. iOS Safari throttles or fully pauses
@@ -196,9 +199,9 @@ export default function SOSPanel() {
     setStatus('ALARM OFF')
   }
 
-  const ensureTorchTrack = async () => {
+  const ensureFlashlightTrack = async () => {
     try {
-      if (torchTrackRef.current) return torchTrackRef.current
+      if (flashlightTrackRef.current) return flashlightTrackRef.current
       if (!navigator.mediaDevices?.getUserMedia) return null
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: { ideal: 'environment' } },
@@ -206,17 +209,17 @@ export default function SOSPanel() {
       })
       const track = stream.getVideoTracks()[0]
       if (!track) return null
-      torchStreamRef.current = stream
-      torchTrackRef.current = track
+      flashlightStreamRef.current = stream
+      flashlightTrackRef.current = track
       return track
     } catch {
       return null
     }
   }
 
-  const setTorch = async (on: boolean) => {
+  const setDeviceFlashlight = async (on: boolean) => {
     try {
-      const track = await ensureTorchTrack()
+      const track = await ensureFlashlightTrack()
       if (!track) return false
       const caps = track.getCapabilities?.() as MediaTrackCapabilities & { torch?: boolean }
       if (!caps?.torch) return false
@@ -227,12 +230,14 @@ export default function SOSPanel() {
     }
   }
 
-  const stopTorch = async () => {
+  const stopFlashlight = async () => {
     try {
-      if (torchTrackRef.current) {
-        const caps = torchTrackRef.current.getCapabilities?.() as MediaTrackCapabilities & { torch?: boolean }
+      if (flashlightTrackRef.current) {
+        const caps = flashlightTrackRef.current.getCapabilities?.() as MediaTrackCapabilities & {
+          torch?: boolean
+        }
         if (caps?.torch) {
-          await torchTrackRef.current.applyConstraints({
+          await flashlightTrackRef.current.applyConstraints({
             advanced: [{ torch: false } as MediaTrackConstraintSet],
           })
         }
@@ -241,18 +246,18 @@ export default function SOSPanel() {
       // noop
     }
     try {
-      torchTrackRef.current?.stop()
+      flashlightTrackRef.current?.stop()
     } catch {
       // noop
     }
     try {
-      torchStreamRef.current?.getTracks().forEach((t) => t.stop())
+      flashlightStreamRef.current?.getTracks().forEach((t) => t.stop())
     } catch {
       // noop
     }
-    torchTrackRef.current = null
-    torchStreamRef.current = null
-    setTorchActive(false)
+    flashlightTrackRef.current = null
+    flashlightStreamRef.current = null
+    setFlashlightActive(false)
   }
 
   const startAlarm = () => {
@@ -313,28 +318,28 @@ export default function SOSPanel() {
     for (const step of seq) {
       if (morseStopRef.current) return
       setFlashInvert(step.on)
-      if (flashTorch === 'yes') {
+      if (flashlightEnabled) {
         if (step.on) {
-          const on = await setTorch(true)
-          setTorchActive(on)
+          const on = await setDeviceFlashlight(true)
+          setFlashlightActive(on)
         } else {
-          await setTorch(false)
-          setTorchActive(false)
+          await setDeviceFlashlight(false)
+          setFlashlightActive(false)
         }
       }
       await sleep(step.units * MORSE_UNIT_MS)
     }
   }
 
-  // SOS-side cleanup on disarm. Releases the camera/torch track defensively.
+  // SOS-side cleanup on disarm. Releases the camera/flashlight track when off.
   // The audible alarm is intentionally NOT touched here — alarm lifecycle
   // is owned by the operator (TEST AUDIBLE ALARM button + unmount cleanup).
   // Morse cleanup is driven by disarmAll() setting morsePattern='off'.
   useEffect(() => {
     if (isArmed) return
-    void stopTorch()
+    if (!flashlightEnabled) void stopFlashlight()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isArmed])
+  }, [isArmed, flashlightEnabled])
 
   // Independent Morse signaling effect. Runs purely on morsePattern + the
   // two output channels. No dependency on isArmed, no rescue calls, no
@@ -345,16 +350,16 @@ export default function SOSPanel() {
     if (morsePattern === 'off') {
       morseStopRef.current = true
       setFlashInvert(false)
-      // Pattern fully stopped → release the camera/torch track so the
-      // OS camera indicator clears. Track is re-acquired on next start.
-      void stopTorch()
+      if (!flashlightEnabled) {
+        void stopFlashlight()
+      }
       return
     }
-    if (flashScreen !== 'yes' && flashTorch !== 'yes') {
+    if (flashScreen !== 'yes' && !flashlightEnabled) {
       // pattern selected but no output channel — sit idle, don't loop
       morseStopRef.current = true
       setFlashInvert(false)
-      void stopTorch()
+      void stopFlashlight()
       return
     }
     morseStopRef.current = false
@@ -369,7 +374,17 @@ export default function SOSPanel() {
       setFlashInvert(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [morsePattern, flashScreen, flashTorch])
+  }, [morsePattern, flashScreen, flashlightEnabled])
+
+  // When flashlight is on without an active Morse pattern, hold the device LED on.
+  useEffect(() => {
+    if (!flashlightEnabled || morsePattern !== 'off') return
+    void (async () => {
+      const on = await setDeviceFlashlight(true)
+      setFlashlightActive(on)
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flashlightEnabled, morsePattern])
 
   // CONTRACT-SENSITIVE (unmount cleanup ordering): the statement order
   // below is part of the lifecycle contract. Reordering can resurrect the
@@ -389,7 +404,7 @@ export default function SOSPanel() {
   //      boundary; setting this AFTER stopAlarm is intentional so an
   //      in-flight morse step can complete its current await without
   //      racing the audio teardown.
-  //   7. stopTorch() → fired-and-forgotten last; the camera track release
+  //   7. stopFlashlight() → fired-and-forgotten last; the camera track release
   //      is best-effort and must not block the synchronous cleanup chain.
   // DO NOT "simplify" this block.
   useEffect(() => {
@@ -403,7 +418,7 @@ export default function SOSPanel() {
       }
       stopAlarm()
       morseStopRef.current = true
-      void stopTorch()
+      void stopFlashlight()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -441,27 +456,35 @@ export default function SOSPanel() {
       }
       setStatus(enabled ? 'MORSE SCREEN ENABLED' : 'MORSE SCREEN DISABLED')
     }
-    const onVoiceTorch = (ev: Event) => {
+    const onVoiceFlashlight = async (ev: Event) => {
       const custom = ev as CustomEvent<{ enabled?: boolean }>
       if (typeof custom.detail?.enabled !== 'boolean') return
-      setFlashTorch(custom.detail.enabled ? 'yes' : 'no')
-      setStatus(custom.detail.enabled ? 'MORSE TORCH ENABLED' : 'MORSE TORCH DISABLED')
+      const enabled = custom.detail.enabled
+      setFlashlightEnabled(enabled)
+      if (enabled) {
+        const on = await setDeviceFlashlight(true)
+        setFlashlightActive(on)
+        setStatus(on ? 'FLASHLIGHT ON' : 'FLASHLIGHT ON (DEVICE UNSUPPORTED)')
+      } else {
+        await stopFlashlight()
+        setStatus('FLASHLIGHT OFF')
+      }
     }
     window.addEventListener('hud:sos-morse', onVoiceMorse)
-    window.addEventListener('hud:sos-torch', onVoiceTorch)
+    window.addEventListener('hud:sos-flashlight', onVoiceFlashlight)
     return () => {
       window.removeEventListener('hud:sos-morse', onVoiceMorse)
-      window.removeEventListener('hud:sos-torch', onVoiceTorch)
+      window.removeEventListener('hud:sos-flashlight', onVoiceFlashlight)
     }
   }, [])
 
   useEffect(() => {
     window.dispatchEvent(
-      new CustomEvent('hud:sos-torch-state', {
-        detail: { enabled: flashTorch === 'yes' },
+      new CustomEvent('hud:sos-flashlight-state', {
+        detail: { enabled: flashlightEnabled },
       }),
     )
-  }, [flashTorch])
+  }, [flashlightEnabled])
 
   useEffect(() => {
     window.dispatchEvent(
@@ -473,6 +496,11 @@ export default function SOSPanel() {
 
   const beginHold = () => {
     traceAction('sos_long_hold', 'handler_enter')
+    if (!operationalReady) {
+      setStatus('SOS BLOCKED — COMPLETE TACTICAL PROFILE IN PREFLIGHT')
+      traceAction('sos_long_hold', 'guard_reject', { reason: 'profile_incomplete' })
+      return
+    }
     if (holding || isArmed) {
       traceAction('sos_long_hold', 'guard_reject', { reason: 'already_holding_or_armed' })
       return
@@ -532,7 +560,8 @@ export default function SOSPanel() {
     setMorsePattern('off')
     morseStopRef.current = true
     setFlashInvert(false)
-    await stopTorch()
+    setFlashlightEnabled(false)
+    await stopFlashlight()
   }
 
   const launchRescuePacket = async () => {
@@ -561,7 +590,16 @@ export default function SOSPanel() {
     const safeSetStatus = (s: string) => {
       if (mountedRef.current) setStatus(s)
     }
-    const eligibility = getRescueEligibility({ contactCount, endpoint })
+    const eligibility = getRescueEligibility({
+      contactCount,
+      endpoint,
+      profileOperational: operationalReady,
+    })
+    if (!eligibility.dispatchReady && eligibility.reason === 'profile_incomplete') {
+      safeSetStatus('SOS BLOCKED — COMPLETE TACTICAL PROFILE IN PREFLIGHT')
+      traceAction('sos_dispatch', 'guard_reject', { reason: 'profile_incomplete' })
+      return
+    }
     if (!eligibility.dispatchReady && eligibility.reason === 'no_contacts') {
       if (import.meta.env.DEV) {
         console.info('[HUD DEV] sos-fallback-reason', { reason: 'no_contacts', contactCount })
@@ -590,6 +628,13 @@ export default function SOSPanel() {
         contactCount,
         hasDispatchAuth: hasRescueDispatchAuth(),
         dispatchKeyKind,
+        signed: Boolean(packet.signature),
+      })
+      logRescueDispatchTrace({
+        triggerLabel: 'SOS',
+        endpoint,
+        triggerType: packet.triggerType,
+        hasOperator: Boolean(packet.operator),
         signed: Boolean(packet.signature),
       })
       const res = await fetch(endpoint, {
@@ -705,16 +750,34 @@ export default function SOSPanel() {
             overflowY: 'auto',
           }}
         >
+          {!operationalReady && (
+            <div
+              style={{
+                marginBottom: gapMd,
+                padding: '8px 10px',
+                borderRadius: 8,
+                border: '1px solid rgba(255, 107, 135, 0.45)',
+                background: 'rgba(48, 18, 22, 0.55)',
+                color: '#ffd5dd',
+                fontSize: fontSm,
+                lineHeight: 1.35,
+              }}
+            >
+              <strong>Setup incomplete</strong> — SOS is disabled until display name, reply-to email, and
+              at least one valid emergency contact are saved in Preflight.
+              {assessment.messages[0] ? ` ${assessment.messages[0]}` : ''}
+            </div>
+          )}
           <div
             style={{
-              color: '#ff9aac',
+              color: operationalReady ? '#ff9aac' : '#9ea7a0',
               marginBottom: gapMd,
               letterSpacing: '0.08em',
               fontSize: isMobile ? 16 : 13,
               fontWeight: 700,
             }}
           >
-            SLIDE + HOLD 3 SECONDS TO ARM
+            {operationalReady ? 'SLIDE + HOLD 3 SECONDS TO ARM' : 'SOS DISABLED — COMPLETE PROFILE FIRST'}
           </div>
           <div
             style={{
@@ -868,7 +931,7 @@ export default function SOSPanel() {
               </button>
             </div>
             <div style={{ color: '#ffd5de', fontSize: fontMd, letterSpacing: '0.06em', marginTop: 4, fontWeight: 700 }}>
-              MORSE TORCH FLASH
+              FLASHLIGHT
             </div>
             <div style={{ display: 'flex', gap: gapLg }}>
               <button
@@ -876,7 +939,12 @@ export default function SOSPanel() {
                 data-no-drag
                 onClick={(e) => {
                   e.stopPropagation()
-                  setFlashTorch('yes')
+                  void (async () => {
+                    setFlashlightEnabled(true)
+                    const on = await setDeviceFlashlight(true)
+                    setFlashlightActive(on)
+                    setStatus(on ? 'FLASHLIGHT ON' : 'FLASHLIGHT ON (DEVICE UNSUPPORTED)')
+                  })()
                 }}
                 style={{
                   flex: 1,
@@ -884,22 +952,27 @@ export default function SOSPanel() {
                   minWidth: safeMinPx,
                   fontSize: fontMd,
                   borderRadius: 6,
-                  border: flashTorch === 'yes' ? '1px solid #ff9fb3' : '1px solid #7a2a3a',
-                  background: flashTorch === 'yes' ? 'rgba(255,68,102,0.28)' : 'rgba(60,8,18,0.45)',
+                  border: flashlightEnabled ? '1px solid #ff9fb3' : '1px solid #7a2a3a',
+                  background: flashlightEnabled ? 'rgba(255,68,102,0.28)' : 'rgba(60,8,18,0.45)',
                   color: '#ffd5de',
                   cursor: 'pointer',
                   fontWeight: 700,
                   letterSpacing: '0.08em',
                 }}
+                aria-pressed={flashlightEnabled}
               >
-                YES
+                ON
               </button>
               <button
                 type="button"
                 data-no-drag
                 onClick={(e) => {
                   e.stopPropagation()
-                  setFlashTorch('no')
+                  void (async () => {
+                    setFlashlightEnabled(false)
+                    await stopFlashlight()
+                    setStatus('FLASHLIGHT OFF')
+                  })()
                 }}
                 style={{
                   flex: 1,
@@ -907,15 +980,16 @@ export default function SOSPanel() {
                   minWidth: safeMinPx,
                   fontSize: fontMd,
                   borderRadius: 6,
-                  border: flashTorch === 'no' ? '1px solid #ff9fb3' : '1px solid #7a2a3a',
-                  background: flashTorch === 'no' ? 'rgba(255,68,102,0.22)' : 'rgba(60,8,18,0.45)',
+                  border: !flashlightEnabled ? '1px solid #ff9fb3' : '1px solid #7a2a3a',
+                  background: !flashlightEnabled ? 'rgba(255,68,102,0.22)' : 'rgba(60,8,18,0.45)',
                   color: '#ffd5de',
                   cursor: 'pointer',
                   fontWeight: 700,
                   letterSpacing: '0.08em',
                 }}
+                aria-pressed={!flashlightEnabled}
               >
-                NO
+                OFF
               </button>
             </div>
             <button
@@ -997,7 +1071,7 @@ export default function SOSPanel() {
             </button>
           </div>
           <div style={{ marginTop: gapMd, color: '#c894a0', fontSize: fontSm }}>
-            Torch: {torchActive ? 'ACTIVE' : flashTorch === 'yes' ? 'REQUESTED' : 'OFF'}
+            Flashlight: {flashlightActive ? 'ACTIVE' : flashlightEnabled ? 'ON' : 'OFF'}
           </div>
         </div>
       </HudPanel>

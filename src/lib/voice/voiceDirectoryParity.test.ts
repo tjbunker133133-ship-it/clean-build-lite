@@ -4,9 +4,8 @@ import { validateVoiceRegistry } from '../../runtime/voiceRegistry'
 /** Voice panel quick-access buttons — must resolve in the command registry. */
 const VOICE_DIRECTORY_CMDS = [
   'morse toggle',
-  'torch toggle',
-  'torch on',
-  'torch off',
+  'flashlight on',
+  'flashlight off',
   'center',
   'zoom in',
   'zoom out',

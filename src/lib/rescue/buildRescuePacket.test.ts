@@ -8,13 +8,24 @@ import { createHmac } from 'node:crypto'
 // re-derives identical bytes from the same canonical-JSON algorithm — so
 // keeping THIS algorithm pinned keeps the wire contract pinned.
 
-vi.mock('../emergencyContacts', () => {
+vi.mock('../tacticalProfile', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../tacticalProfile')>()
   return {
-    fetchEmergencyContacts: vi.fn(),
+    ...actual,
+    loadTacticalProfile: vi.fn(),
+    assessTacticalProfile: vi.fn(),
+    rescueContactsFromProfile: vi.fn(),
+    operatorMetaFromProfile: vi.fn(),
   }
 })
 
-import { fetchEmergencyContacts } from '../emergencyContacts'
+import {
+  assessTacticalProfile,
+  loadTacticalProfile,
+  operatorMetaFromProfile,
+  rescueContactsFromProfile,
+  type TacticalProfile,
+} from '../tacticalProfile'
 import {
   appendCheckInNoteToTimestamp,
   applyCheckInNote,
@@ -25,7 +36,20 @@ import {
   sanitizeCheckInNote,
 } from './buildRescuePacket'
 
-const mockedFetch = fetchEmergencyContacts as unknown as ReturnType<typeof vi.fn>
+const mockedLoad = loadTacticalProfile as unknown as ReturnType<typeof vi.fn>
+const mockedAssess = assessTacticalProfile as unknown as ReturnType<typeof vi.fn>
+const mockedContacts = rescueContactsFromProfile as unknown as ReturnType<typeof vi.fn>
+const mockedOperator = operatorMetaFromProfile as unknown as ReturnType<typeof vi.fn>
+
+const SAMPLE_PROFILE: TacticalProfile = {
+  display_name: 'Field Operator',
+  reply_to_email: 'operator@example.com',
+  phone: '',
+  contacts: [],
+  setup_complete: true,
+  created_at: '2026-01-01T00:00:00Z',
+  updated_at: '2026-01-01T00:00:00Z',
+}
 
 // `import.meta.env.VITE_*` access is statically replaced at transform time
 // by Vite, so we can't override it from the test. Instead, we read whatever
@@ -35,30 +59,28 @@ const mockedFetch = fetchEmergencyContacts as unknown as ReturnType<typeof vi.fn
 const importMetaEnv = (import.meta as unknown as { env: Record<string, string | undefined> }).env
 const RUNTIME_SIGNING_KEY = (importMetaEnv.VITE_RESCUE_SIGNING_KEY ?? '').trim()
 
-const SAMPLE_CONTACTS = [
-  {
-    id: '1',
-    operator_id: null,
-    contact_name: 'Alice Operator',
-    email: 'alice@example.com',
-    relationship: 'lead',
-    priority: 1,
-    created_at: '2026-01-01T00:00:00Z',
-  },
-  {
-    id: '2',
-    operator_id: null,
-    contact_name: 'Bob Operator',
-    email: 'bob@example.com',
-    relationship: 'backup',
-    priority: 2,
-    created_at: '2026-01-02T00:00:00Z',
-  },
+const SAMPLE_RESCUE_CONTACTS = [
+  { name: 'Alice Operator', email: 'alice@example.com' },
+  { name: 'Bob Operator', email: 'bob@example.com' },
 ]
 
 beforeEach(() => {
-  mockedFetch.mockReset()
-  mockedFetch.mockResolvedValue({ data: SAMPLE_CONTACTS, error: null })
+  mockedLoad.mockReset()
+  mockedAssess.mockReset()
+  mockedContacts.mockReset()
+  mockedOperator.mockReset()
+  mockedLoad.mockReturnValue(SAMPLE_PROFILE)
+  mockedAssess.mockReturnValue({
+    operationalReady: true,
+    issues: [],
+    validContactCount: 2,
+    messages: [],
+  })
+  mockedContacts.mockReturnValue(SAMPLE_RESCUE_CONTACTS)
+  mockedOperator.mockReturnValue({
+    display_name: 'Field Operator',
+    reply_to_email: 'operator@example.com',
+  })
 })
 
 describe('canonicalJSON', () => {
@@ -218,27 +240,31 @@ describe('buildRescuePacket', () => {
     void _orig
   })
 
-  it('degrades gracefully when fetchEmergencyContacts throws', async () => {
-    mockedFetch.mockRejectedValueOnce(new Error('network down'))
+  it('degrades gracefully when tactical profile read throws', async () => {
+    mockedLoad.mockImplementationOnce(() => {
+      throw new Error('storage down')
+    })
     const packet = await buildRescuePacket('SOS')
     expect(packet.contacts).toEqual([])
     expect(packet.triggerType).toBe('SOS')
   })
 
-  it('degrades gracefully when fetchEmergencyContacts returns an error', async () => {
-    mockedFetch.mockResolvedValueOnce({ data: [], error: new Error('rls') })
+  it('degrades gracefully when no valid contacts in profile', async () => {
+    mockedAssess.mockReturnValueOnce({
+      operationalReady: false,
+      issues: ['no_contacts'],
+      validContactCount: 0,
+      messages: [],
+    })
+    mockedContacts.mockReturnValueOnce([])
     const packet = await buildRescuePacket('SOS')
     expect(packet.contacts).toEqual([])
   })
 
-  it('filters contacts that lack a usable email field', async () => {
-    mockedFetch.mockResolvedValueOnce({
-      data: [
-        { ...SAMPLE_CONTACTS[0] },
-        { ...SAMPLE_CONTACTS[1], email: '' },
-      ],
-      error: null,
-    })
+  it('includes only valid contacts from profile mapping', async () => {
+    mockedContacts.mockReturnValueOnce([
+      { name: 'Alice Operator', email: 'alice@example.com' },
+    ])
     const packet = await buildRescuePacket('SOS')
     expect(packet.contacts).toEqual([
       { name: 'Alice Operator', email: 'alice@example.com' },
@@ -250,31 +276,33 @@ describe('buildRescuePacket', () => {
   // would permanently lock that gate for the current rescue episode and
   // silently suppress dispatch. Every degraded path here MUST resolve
   // with a safe-shape packet so the caller's fetch path can run.
-  it('never rejects when fetchEmergencyContacts throws repeatedly (back-to-back)', async () => {
-    mockedFetch.mockRejectedValue(new Error('boom-1'))
+  it('never rejects when profile read throws repeatedly (back-to-back)', async () => {
+    mockedLoad.mockImplementation(() => {
+      throw new Error('boom-1')
+    })
     await expect(buildRescuePacket('SOS')).resolves.toBeDefined()
     await expect(buildRescuePacket('DEADMAN')).resolves.toBeDefined()
     await expect(buildRescuePacket('SOS')).resolves.toBeDefined()
   })
 
-  it('never rejects when fetchEmergencyContacts returns malformed data', async () => {
-    // null data, undefined data, non-array data, throwing during await —
-    // all must collapse to contacts: [] and resolve normally.
-    mockedFetch.mockResolvedValueOnce({ data: null as unknown as [], error: null })
+  it('never rejects when assessment reports zero valid contacts', async () => {
+    mockedAssess.mockReturnValue({
+      operationalReady: false,
+      issues: ['no_contacts'],
+      validContactCount: 0,
+      messages: [],
+    })
+    mockedContacts.mockReturnValue([])
     const a = await buildRescuePacket('SOS')
     expect(a.contacts).toEqual([])
-
-    mockedFetch.mockResolvedValueOnce({ data: undefined as unknown as [], error: null })
-    const b = await buildRescuePacket('SOS')
+    const b = await buildRescuePacket('DEADMAN')
     expect(b.contacts).toEqual([])
-
-    mockedFetch.mockResolvedValueOnce({ data: 'not-an-array' as unknown as [], error: null })
-    const c = await buildRescuePacket('SOS')
-    expect(c.contacts).toEqual([])
   })
 
   it('always returns the canonical packet shape even on the degraded path', async () => {
-    mockedFetch.mockRejectedValueOnce(new Error('network'))
+    mockedLoad.mockImplementationOnce(() => {
+      throw new Error('storage')
+    })
     const packet = await buildRescuePacket('DEADMAN')
     expect(packet).toMatchObject({
       triggerType: 'DEADMAN',
@@ -320,7 +348,6 @@ describe('check-in note (frontend-only wire encoding)', () => {
 
 describe('rescuePacketDevLogSummary', () => {
   it('excludes PII, coordinates, and signature material from the summary object', async () => {
-    mockedFetch.mockResolvedValue({ data: SAMPLE_CONTACTS, error: null })
     const packet = await buildRescuePacket('SOS')
     const summary = rescuePacketDevLogSummary(packet)
     const json = JSON.stringify(summary)

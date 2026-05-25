@@ -18,12 +18,10 @@ import { getDeviceProfile } from '../runtime/deviceProfile'
 import { updatePermission } from '../runtime/runtimeSnapshot'
 import { hudDevLog, isHudVerboseDebug } from '../lib/tier1DebugLog'
 import { touchFontSm, touchFontMd, touchGapMd, touchGapSm, touchMinTarget } from './tokens'
-import {
-  fetchEmergencyContacts,
-  createEmergencyContact,
-  deleteEmergencyContact,
-  type EmergencyContact,
-} from '../lib/emergencyContacts'
+import { resolveRapidEndpointMeta } from '../lib/rescue/resolveRapidEndpoint'
+import { readRescuePipelineTrace } from '../lib/rescue/rescuePipelineTrace'
+import { useTacticalProfile } from '../hooks/useTacticalProfile'
+import TacticalProfileEditor from './TacticalProfileEditor'
 import { traceAction } from '../runtime/actionTrace'
 import { useCockpit } from '../context/CockpitContext'
 import { clampMobileToReachableViewport, isPanelReachableInViewport } from '../lib/mobilePanelHelpers'
@@ -78,30 +76,6 @@ function readinessBand(score: number): {
   return { label: 'RED', color: '#ff6b87', detail: 'No-Go' }
 }
 
-function readRapidEndpoint(): string {
-  const env = ((import.meta as any).env?.VITE_RAPID_ENDPOINT_URL as string | undefined)?.trim()
-  if (env) return env
-  try {
-    for (let i = 0; i < localStorage.length; i += 1) {
-      const key = localStorage.key(i)
-      if (!key) continue
-      const value = localStorage.getItem(key)
-      if (!value) continue
-      try {
-        const parsed = JSON.parse(value)
-        if (parsed && typeof parsed.heartbeatFnUrl === 'string' && parsed.heartbeatFnUrl.trim()) {
-          return parsed.heartbeatFnUrl.trim()
-        }
-      } catch {
-        // noop
-      }
-    }
-  } catch {
-    // noop
-  }
-  return ''
-}
-
 export default function PreflightPanel() {
   const { panels, updatePanel, raisePanel } = useCockpit()
   const gps = useGPS()
@@ -124,19 +98,8 @@ export default function PreflightPanel() {
     deadmanRenew: false,
     sosDryRun: false,
   })
-  // Single source of truth for backend contacts in this panel. The list
-  // drives the readiness rows + the editor list. Status is set to
-  // 'unavailable' only when the Supabase fetch genuinely fails (network
-  // error, table missing, RLS denial, etc.) — empty arrays are 'ok'.
-  const [contacts, setContacts] = useState<EmergencyContact[]>([])
-  const [contactsStatus, setContactsStatus] = useState<'loading' | 'ok' | 'unavailable'>('loading')
-  const [contactForm, setContactForm] = useState<{ name: string; email: string; relationship: string }>({
-    name: '',
-    email: '',
-    relationship: '',
-  })
-  const [contactBusy, setContactBusy] = useState(false)
-  const [contactError, setContactError] = useState<string | null>(null)
+  const { profile, assessment, operationalReady } = useTacticalProfile()
+  const contactCount = assessment.validContactCount
   const [lastContactDiagSig, setLastContactDiagSig] = useState('')
   const [lastEligibilityDiagSig, setLastEligibilityDiagSig] = useState('')
   const [lastVisibilityDiagSig, setLastVisibilityDiagSig] = useState('')
@@ -154,15 +117,15 @@ export default function PreflightPanel() {
 
   useEffect(() => {
     if (!isHudVerboseDebug()) return
-    const sig = `${contactsStatus}:${contacts.length}:${contactError ?? ''}`
+    const sig = `${operationalReady}:${contactCount}:${profile.updated_at}`
     if (sig === lastContactDiagSig) return
     setLastContactDiagSig(sig)
     hudDevLog('contact-hydration', {
-      status: contactsStatus,
-      hydratedCount: contacts.length,
-      validationReason: contactError ?? null,
+      operationalReady,
+      hydratedCount: contactCount,
+      validationIssues: assessment.issues,
     })
-  }, [contactsStatus, contacts.length, contactError, lastContactDiagSig])
+  }, [operationalReady, contactCount, profile.updated_at, assessment.issues, lastContactDiagSig])
 
   useEffect(() => {
     if (!isHudVerboseDebug()) return
@@ -233,33 +196,14 @@ export default function PreflightPanel() {
     setIsStandalone(getDeviceProfile().isStandalone)
   }, [recheckTick])
 
-  // Load backend contacts once on mount. No polling, no timer. Refresh on
-  // explicit operator action (after add/delete). Failures collapse to
-  // 'unavailable' — never crash the HUD.
   useEffect(() => {
     hudDevLog('emergency-config-panel-mounted', {
       panel: 'preflight',
       interactionMode: getDeviceProfile().interactionMode,
+      operationalReady,
+      contactCount,
     })
-    let alive = true
-    void fetchEmergencyContacts()
-      .then(({ data, error }) => {
-        if (!alive) return
-        if (error) {
-          setContactsStatus('unavailable')
-          return
-        }
-        setContacts(data)
-        setContactsStatus('ok')
-      })
-      .catch(() => {
-        if (!alive) return
-        setContactsStatus('unavailable')
-      })
-    return () => {
-      alive = false
-    }
-  }, [])
+  }, [operationalReady, contactCount])
 
   useEffect(() => {
     let alive = true
@@ -290,7 +234,8 @@ export default function PreflightPanel() {
     }
   }, [])
 
-  const endpoint = useMemo(() => readRapidEndpoint(), [])
+  const endpointMeta = useMemo(() => resolveRapidEndpointMeta(), [recheckTick])
+  const endpoint = endpointMeta.url
   const buildId = useMemo(() => resolveBuildLabel(), [])
   const speechSupported = !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)
   const deviceTuneMeta = useMemo(() => {
@@ -313,7 +258,7 @@ export default function PreflightPanel() {
   }, [recheckTick])
 
   const checks: CheckRow[] = useMemo(() => {
-    const profile = getDeviceProfile()
+    const deviceProfile = getDeviceProfile()
     const gpsLock =
       gps.locationState === 'granted' && gps.lat != null && gps.lng != null
     return [
@@ -329,7 +274,7 @@ export default function PreflightPanel() {
         state: isStandalone ? 'pass' : 'warn',
         detail: isStandalone
           ? 'Home Screen app'
-          : profile.isIOS
+          : deviceProfile.isIOS
             ? 'Safari tab — use Add to Home Screen'
             : 'Browser tab',
         weight: 0.8,
@@ -387,23 +332,25 @@ export default function PreflightPanel() {
       {
         label: 'Rescue Endpoint',
         state: endpoint ? 'pass' : 'warn',
-        detail: endpoint ? 'Configured' : 'Missing (recommended for live rescue ops)',
+        detail: endpoint
+          ? `send-rescue-email (${endpointMeta.source})`
+          : 'Missing (recommended for live rescue ops)',
         weight: 1.4,
         critical: true,
       },
       {
-        label: 'Emergency Contacts',
-        state: contactsStatus === 'ok' && contacts.length > 0 ? 'pass' : 'warn',
-        detail:
-          contactsStatus === 'unavailable'
-            ? 'Backend unavailable'
-            : `${contacts.length} loaded`,
+        label: 'Tactical Profile',
+        state: operationalReady ? 'pass' : 'warn',
+        detail: operationalReady
+          ? `${profile.display_name || 'Operator'} · ${contactCount} contact(s)`
+          : assessment.messages[0] ?? 'Identity or contacts incomplete',
         weight: 1.2,
         critical: true,
       },
     ]
   }, [
     endpoint,
+    endpointMeta.source,
     geoPerm,
     gps.lat,
     gps.lng,
@@ -415,8 +362,10 @@ export default function PreflightPanel() {
     orientationPerm,
     cameraPerm,
     online,
-    contactsStatus,
-    contacts.length,
+    operationalReady,
+    contactCount,
+    profile.display_name,
+    assessment.messages,
     speechSupported,
     recheckTick,
   ])
@@ -444,7 +393,7 @@ export default function PreflightPanel() {
     gps.locationState === 'granted' && gps.lat != null && gps.lng != null
   const hardGates = [
     { label: 'Rescue endpoint configured', pass: !!endpoint },
-    { label: 'Emergency contact loaded', pass: contactsStatus === 'ok' && contacts.length > 0 },
+    { label: 'Tactical profile ready', pass: operationalReady },
     { label: 'GPS permission granted', pass: geoPerm === 'granted' },
     { label: 'GPS lock acquired', pass: gpsLock },
     { label: 'Deadman renew verified', pass: manual.deadmanRenew },
@@ -456,97 +405,19 @@ export default function PreflightPanel() {
 
   useEffect(() => {
     if (!isHudVerboseDebug()) return
-    const sig = `${contactsStatus}:${contacts.length}:${Boolean(endpoint)}`
+    const sig = `${operationalReady}:${contactCount}:${Boolean(endpoint)}`
     if (sig === lastEligibilityDiagSig) return
     setLastEligibilityDiagSig(sig)
     hudDevLog('rescue-eligibility-state', {
-      contactsStatus,
-      hydratedContacts: contacts.length,
+      operationalReady,
+      hydratedContacts: contactCount,
       endpointConfigured: Boolean(endpoint),
-      eligible:
-        contactsStatus === 'ok' &&
-        contacts.length > 0 &&
-        Boolean(endpoint),
+      eligible: operationalReady && Boolean(endpoint),
     })
-  }, [contactsStatus, contacts.length, endpoint, lastEligibilityDiagSig])
+  }, [operationalReady, contactCount, endpoint, lastEligibilityDiagSig])
   const runAutoRecheck = () => {
     setRecheckTick((v) => v + 1)
     setLastRecheckAt(Date.now())
-  }
-
-  // Operator actions on the backend contact roster. Both handlers gate on
-  // contactBusy to prevent overlapping requests and update local state
-  // optimistically (or refetch) so the readiness rows stay in sync.
-  const reloadContacts = async (): Promise<void> => {
-    const { data, error } = await fetchEmergencyContacts()
-    if (error) {
-      setContactsStatus('unavailable')
-      return
-    }
-    setContacts(data)
-    setContactsStatus('ok')
-  }
-
-  const handleAddContact = async () => {
-    traceAction('emergency_contact_add', 'handler_enter')
-    if (contactBusy) {
-      traceAction('emergency_contact_add', 'guard_reject', { reason: 'busy' })
-      return
-    }
-    const name = contactForm.name.trim()
-    const email = contactForm.email.trim()
-    const relationship = contactForm.relationship.trim()
-    if (!name || !email) {
-      setContactError('Name and email required')
-      traceAction('emergency_contact_add', 'guard_reject', { reason: 'validation_missing_fields' })
-      return
-    }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      setContactError('Invalid email format')
-      traceAction('emergency_contact_add', 'guard_reject', { reason: 'validation_invalid_email' })
-      return
-    }
-    setContactBusy(true)
-    setContactError(null)
-    traceAction('emergency_contact_add', 'async_start')
-    const { error } = await createEmergencyContact({
-      contact_name: name,
-      email,
-      relationship: relationship || null,
-      // First contact added becomes priority 1 (primary); subsequent get 2.
-      priority: contacts.length === 0 ? 1 : 2,
-    })
-    if (error) {
-      setContactError(error.message)
-      traceAction('emergency_contact_add', 'failure', { reason: 'backend_error' })
-      setContactBusy(false)
-      return
-    }
-    setContactForm({ name: '', email: '', relationship: '' })
-    await reloadContacts()
-    traceAction('emergency_contact_add', 'async_complete', { hydratedCount: contacts.length + 1 })
-    setContactBusy(false)
-  }
-
-  const handleDeleteContact = async (id: string) => {
-    traceAction('emergency_contact_remove', 'handler_enter')
-    if (contactBusy) {
-      traceAction('emergency_contact_remove', 'guard_reject', { reason: 'busy' })
-      return
-    }
-    setContactBusy(true)
-    setContactError(null)
-    traceAction('emergency_contact_remove', 'async_start')
-    const { error } = await deleteEmergencyContact(id)
-    if (error) {
-      setContactError(error.message)
-      traceAction('emergency_contact_remove', 'failure', { reason: 'backend_error' })
-      setContactBusy(false)
-      return
-    }
-    setContacts((prev) => prev.filter((c) => c.id !== id))
-    traceAction('emergency_contact_remove', 'async_complete', { removed: true })
-    setContactBusy(false)
   }
 
   const requestAllPermissions = async () => {
@@ -824,6 +695,14 @@ export default function PreflightPanel() {
           <div>
             Build: <strong style={{ color: '#d6ddd6' }}>{buildId}</strong>
           </div>
+          {isHudVerboseDebug() && readRescuePipelineTrace().length > 0 ? (
+            <div style={{ fontSize: '0.68rem', color: '#9aa89a', lineHeight: 1.35 }}>
+              Last rescue trace:{' '}
+              <strong style={{ color: '#d6ddd6' }}>
+                {JSON.stringify(readRescuePipelineTrace().slice(-1)[0]?.data ?? {})}
+              </strong>
+            </div>
+          ) : null}
           <div>
             Legacy local contacts: <strong style={{ color: '#d6ddd6' }}>{legacySavedContactsCount}</strong>
           </div>
@@ -882,210 +761,19 @@ export default function PreflightPanel() {
           </div>
         ) : null}
 
-        <div style={{ fontSize: fontSm, color: '#9ea7a0', letterSpacing: '0.08em' }}>BACKEND CONTACTS</div>
-        <div style={{ border: '1px solid rgba(199,206,198,0.16)', borderRadius: 8, padding: 6, display: 'grid', gap: gapSm }}>
-          {contactsStatus === 'loading' && (
-            <div style={{ color: '#9ea7a0', fontSize: fontSm, padding: '4px 4px' }}>Loading…</div>
-          )}
-          {contactsStatus === 'unavailable' && (
-            <div style={{ color: stateColor('warn'), fontSize: fontSm, padding: '4px 4px' }}>
-              Backend unavailable — contacts cannot be loaded
-            </div>
-          )}
-          {contactsStatus === 'ok' && contacts.length === 0 && (
-            <div style={{ color: '#9ea7a0', fontSize: fontSm, padding: '4px 4px' }}>
-              No contacts on file
-            </div>
-          )}
-          {contactsStatus === 'ok' && contacts.length > 0 && (
-            <div style={{ display: 'grid', gap: 2 }}>
-              {contacts.map((c) => (
-                <div
-                  key={c.id}
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: '1fr auto',
-                    gap: gapSm,
-                    padding: '5px 4px',
-                    borderBottom: '1px solid rgba(199,206,198,0.08)',
-                  }}
-                >
-                  <div>
-                    <div style={{ color: '#d6ddd6' }}>
-                      {c.contact_name}
-                      {(c.priority ?? 1) === 1 ? <span style={{ color: '#9ea7a0' }}> · primary</span> : null}
-                    </div>
-                    <div style={{ color: '#9ea7a0', fontSize: fontSm }}>
-                      {c.email}
-                      {c.relationship ? ` · ${c.relationship}` : ''}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    data-no-drag
-                    disabled={contactBusy}
-                    onClick={() => void handleDeleteContact(c.id)}
-                    style={{
-                      minHeight: tapMin,
-                      borderRadius: 6,
-                      border: '1px solid rgba(255,107,135,0.45)',
-                      background: 'rgba(255,107,135,0.12)',
-                      color: '#ffd5dd',
-                      cursor: contactBusy ? 'wait' : 'pointer',
-                      fontSize: fontSm,
-                      letterSpacing: '0.08em',
-                      fontWeight: 700,
-                      padding: '0 10px',
-                    }}
-                  >
-                    REMOVE
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* ── Add-contact form (operator-driven, gated by contactBusy) ── */}
-          <div style={{ display: 'grid', gap: gapSm, paddingTop: 4 }}>
-            <input
-              type="text"
-              data-no-drag
-              placeholder="Contact name"
-              value={contactForm.name}
-              onChange={(e) => setContactForm((f) => ({ ...f, name: e.target.value }))}
-              disabled={contactBusy || contactsStatus === 'unavailable'}
-              style={{
-                minHeight: tapMin,
-                borderRadius: 6,
-                border: '1px solid rgba(199,206,198,0.28)',
-                background: 'rgba(10,12,13,0.8)',
-                color: '#d3dad3',
-                padding: '0 10px',
-                fontSize: fontMd,
-              }}
-            />
-            <input
-              type="email"
-              data-no-drag
-              placeholder="Email"
-              value={contactForm.email}
-              onChange={(e) => setContactForm((f) => ({ ...f, email: e.target.value }))}
-              disabled={contactBusy || contactsStatus === 'unavailable'}
-              style={{
-                minHeight: tapMin,
-                borderRadius: 6,
-                border: '1px solid rgba(199,206,198,0.28)',
-                background: 'rgba(10,12,13,0.8)',
-                color: '#d3dad3',
-                padding: '0 10px',
-                fontSize: fontMd,
-              }}
-            />
-            <input
-              type="text"
-              data-no-drag
-              placeholder="Relationship (optional)"
-              value={contactForm.relationship}
-              onChange={(e) => setContactForm((f) => ({ ...f, relationship: e.target.value }))}
-              disabled={contactBusy || contactsStatus === 'unavailable'}
-              style={{
-                minHeight: tapMin,
-                borderRadius: 6,
-                border: '1px solid rgba(199,206,198,0.28)',
-                background: 'rgba(10,12,13,0.8)',
-                color: '#d3dad3',
-                padding: '0 10px',
-                fontSize: fontMd,
-              }}
-            />
-            <button
-              type="button"
-              data-no-drag
-              onClick={() => void handleAddContact()}
-              disabled={contactBusy || contactsStatus === 'unavailable'}
-              style={{
-                minHeight: tapMin,
-                borderRadius: 8,
-                border: '1px solid rgba(125,255,138,0.45)',
-                background: 'rgba(125,255,138,0.14)',
-                color: '#d8f8dd',
-                cursor: contactBusy ? 'wait' : 'pointer',
-                fontSize: fontSm,
-                letterSpacing: '0.08em',
-                fontWeight: 700,
-              }}
-            >
-              {contactBusy ? 'SAVING…' : 'ADD CONTACT'}
-            </button>
-            {contactError && (
-              <div style={{ color: stateColor('fail'), fontSize: fontSm }}>{contactError}</div>
-            )}
-          </div>
-
-          {/* ── Readiness indicators driven by the live contact list ── */}
-          {(() => {
-            const count = contacts.length
-            const hasPrimary = contacts.some((c) => (c.priority ?? 1) === 1)
-            const escalation = count >= 2
-            type Row = { label: string; state: CheckState; detail: string }
-            const rows: Row[] = (() => {
-              if (contactsStatus === 'loading') {
-                return [
-                  { label: 'Emergency contacts configured', state: 'warn', detail: 'Loading…' },
-                  { label: 'Primary contact available', state: 'warn', detail: 'Loading…' },
-                  { label: 'Rescue escalation available', state: 'warn', detail: 'Loading…' },
-                ]
-              }
-              if (contactsStatus === 'unavailable') {
-                return [
-                  { label: 'Backend unavailable', state: 'warn', detail: 'Supabase fetch failed' },
-                  { label: 'Primary contact available', state: 'warn', detail: 'Cannot verify (backend unavailable)' },
-                  { label: 'Rescue escalation available', state: 'warn', detail: 'Cannot verify (backend unavailable)' },
-                ]
-              }
-              return [
-                {
-                  label: count > 0 ? 'Emergency contacts configured' : 'No emergency contacts configured',
-                  state: count > 0 ? 'pass' : 'warn',
-                  detail: count > 0 ? `${count} on file` : 'Add at least one above',
-                },
-                {
-                  label: 'Primary contact available',
-                  state: hasPrimary ? 'pass' : 'warn',
-                  detail: hasPrimary ? 'Priority 1 set' : 'No priority-1 contact',
-                },
-                {
-                  label: 'Rescue escalation available',
-                  state: escalation ? 'pass' : 'warn',
-                  detail: escalation ? '2+ contacts (chain ready)' : 'Need 2+ contacts',
-                },
-              ]
-            })()
-            return (
-              <div style={{ display: 'grid', gap: 2, paddingTop: 4 }}>
-                {rows.map((row) => (
-                  <div
-                    key={row.label}
-                    style={{
-                      display: 'grid',
-                      gridTemplateColumns: '1fr auto',
-                      gap: gapSm,
-                      padding: '5px 4px',
-                      borderBottom: '1px solid rgba(199,206,198,0.08)',
-                    }}
-                  >
-                    <div>
-                      <div style={{ color: '#d6ddd6' }}>{row.label}</div>
-                      <div style={{ color: '#9ea7a0', fontSize: fontSm }}>{row.detail}</div>
-                    </div>
-                    <div style={{ color: stateColor(row.state), fontWeight: 700, alignSelf: 'center' }}>
-                      {row.state === 'pass' ? 'PASS' : row.state === 'warn' ? 'WARN' : 'FAIL'}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )
-          })()}
+        <div style={{ fontSize: fontSm, color: '#9ea7a0', letterSpacing: '0.08em' }}>
+          TACTICAL PROFILE (DEVICE-LOCAL)
+        </div>
+        <div
+          style={{
+            border: '1px solid rgba(199,206,198,0.16)',
+            borderRadius: 8,
+            padding: 8,
+            display: 'grid',
+            gap: gapSm,
+          }}
+        >
+          <TacticalProfileEditor />
         </div>
 
         <div style={{ fontSize: fontSm, color: '#9ea7a0', letterSpacing: '0.08em' }}>HARD GATE CHECKS (REQUIRED)</div>

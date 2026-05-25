@@ -1,0 +1,48 @@
+---
+description: Tier 1 field-proven freeze — locked paths, Tier 2 exclusions, mandatory STOP before Tier 1 edits
+alwaysApply: true
+---
+
+# Tier 1 Freeze (Field-Proven Baseline)
+
+Tier 1 is **FROZEN** as of 2026-05-24. Authoritative boundary: `TIER1_FREEZE.md`.
+
+## Before editing any file
+
+1. Check path against `tier1-baseline.manifest.json` and `src/lib/tier1FreezeBoundaries.ts`
+2. If path is in manifest `production` or is `src/tier1-hud.html` → **STOP** unless user explicitly approved Tier 1 change
+3. If change touches GPS truth, SOS hold, rescue dispatch, map mount stability, panel dock geometry, or offline Tier 1 layers → **STOP** and request confirmation
+
+## Locked (Tier 1) — surgical fixes only with approval
+
+- `src/tier1-hud.html` (hash-locked reference)
+- `src/hooks/useGPS.ts`
+- `src/components/MapCanvas.tsx`, `src/lib/mapStyles.ts`
+- `src/hud/SOSPanel.tsx`, `src/hud/DeadManPanel.tsx`, `src/hud/CockpitHudShell.tsx`
+- `src/controllers/resolveDockIntent.ts`, `src/context/AppContext.tsx`
+- `src/App.tsx`, `src/main.tsx`, `vite.config.ts`, `index.html`
+- `src/lib/rescue/buildRescuePacket.ts`, `postRescuePacket.ts`, `rescueDispatch.ts`
+- `supabase/functions/send-rescue-email/index.ts`
+
+## Not frozen (Tier 2) — may evolve additively
+
+- Waypoint progression, off-route, snap-to-trail, trail route, navigation monitor, corridor prefetch, route/waypoint layers
+- See `TIER2_EXCLUDED_PATHS` in `src/lib/tier1FreezeBoundaries.ts`
+
+## Forbidden without explicit request
+
+- Silent refactors of locked files
+- Merging Tier 2 navigation into Tier 1 safety/rescue paths
+- Replacing raw GPS with trail/snap in core fix readout
+- Aggressive optimization that changes field behavior
+- Manifest or contract drift without same-PR updates
+
+## Required when Tier 1 files change
+
+- Update `tier1-baseline.manifest.json` hashes in same change set
+- Run `npm run verify:tier1`
+- Produce full SYSTEM AUDIT REPORT per `stability-audit-layer.mdc`
+
+## End state
+
+Finish with **STOP**, **RECOMMEND CHANGE**, or **PROCEED SAFE DEPLOY** only after audit passes.

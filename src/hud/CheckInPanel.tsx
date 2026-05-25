@@ -6,6 +6,7 @@ import { getDeviceProfile } from '../runtime/deviceProfile'
 import { traceAction } from '../runtime/actionTrace'
 import { buildRescuePacket, applyCheckInNote, readCheckInNoteDraft, persistCheckInNoteDraft, CHECKIN_NOTE_MAX_CHARS, rescuePacketDevLogSummary } from '../lib/rescue/buildRescuePacket'
 import { getRescueEligibility } from '../lib/rescue/eligibility'
+import { useTacticalProfile } from '../hooks/useTacticalProfile'
 import { hasRescueDispatchAuth } from '../lib/rescue/rescueDispatch'
 import { postRescuePacket } from '../lib/rescue/postRescuePacket'
 import { resolveRapidEndpoint } from '../lib/rescue/resolveRapidEndpoint'
@@ -19,6 +20,7 @@ import {
 export default function CheckInPanel() {
   useGPS()
   useAppContext()
+  const { operationalReady, assessment } = useTacticalProfile()
 
   const mountedRef = useRef(true)
   const sendingRef = useRef(false)
@@ -64,7 +66,16 @@ export default function CheckInPanel() {
         console.log('[rescue] check-in send (redacted)', rescuePacketDevLogSummary(packet))
       }
 
-      const eligibility = getRescueEligibility({ contactCount, endpoint })
+      const eligibility = getRescueEligibility({
+        contactCount,
+        endpoint,
+        profileOperational: operationalReady,
+      })
+      if (!eligibility.dispatchReady && eligibility.reason === 'profile_incomplete') {
+        safeSetStatus('CHECK-IN BLOCKED — COMPLETE TACTICAL PROFILE IN PREFLIGHT')
+        traceAction('checkin_dispatch', 'guard_reject', { reason: 'profile_incomplete' })
+        return
+      }
       if (!eligibility.dispatchReady && eligibility.reason === 'no_contacts') {
         safeSetStatus('CHECK-IN: NO CONTACTS FOUND')
         traceAction('checkin_dispatch', 'guard_reject', { reason: 'no_contacts' })
@@ -126,6 +137,22 @@ export default function CheckInPanel() {
           One tap sends your current location to emergency contacts — same secure channel as SOS
           and Deadman. An optional note is included in the email time line.
         </div>
+        {!operationalReady && (
+          <div
+            style={{
+              padding: '8px 10px',
+              borderRadius: 8,
+              border: '1px solid rgba(255, 107, 135, 0.45)',
+              background: 'rgba(48, 18, 22, 0.55)',
+              color: '#ffd5dd',
+              fontSize: fontSm,
+              lineHeight: 1.35,
+            }}
+          >
+            <strong>Setup incomplete</strong> — Check-In is disabled until your tactical profile is complete.
+            {assessment.messages[0] ? ` ${assessment.messages[0]}` : ''}
+          </div>
+        )}
         <label style={{ display: 'grid', gap: 6, fontSize: fontSm, color: '#b8c4d8' }}>
           Note (optional)
           <input
@@ -152,6 +179,7 @@ export default function CheckInPanel() {
         <button
           type="button"
           onClick={() => void sendCheckIn()}
+          disabled={!operationalReady}
           style={{
             minHeight: buttonMinHeight,
             minWidth: tapMin,
@@ -161,12 +189,15 @@ export default function CheckInPanel() {
             letterSpacing: '0.04em',
             border: '1px solid rgba(120, 220, 160, 0.55)',
             borderRadius: 8,
-            background: 'linear-gradient(180deg, rgba(40, 90, 60, 0.95), rgba(20, 50, 35, 0.98))',
-            color: '#d8ffe6',
-            cursor: 'pointer',
+            background: operationalReady
+              ? 'linear-gradient(180deg, rgba(40, 90, 60, 0.95), rgba(20, 50, 35, 0.98))'
+              : 'rgba(40, 40, 45, 0.9)',
+            color: operationalReady ? '#d8ffe6' : '#9ea7a0',
+            cursor: operationalReady ? 'pointer' : 'not-allowed',
+            opacity: operationalReady ? 1 : 0.72,
           }}
         >
-          SEND CHECK-IN
+          {operationalReady ? 'SEND CHECK-IN' : 'CHECK-IN DISABLED — COMPLETE PROFILE'}
         </button>
         <div
           style={{

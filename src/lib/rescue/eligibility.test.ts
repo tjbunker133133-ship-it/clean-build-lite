@@ -22,4 +22,17 @@ describe('getRescueEligibility', () => {
       reason: 'ready',
     })
   })
+
+  it('blocks dispatch when profile is not operational', () => {
+    expect(
+      getRescueEligibility({
+        contactCount: 2,
+        endpoint: 'https://x',
+        profileOperational: false,
+      }),
+    ).toEqual({
+      dispatchReady: false,
+      reason: 'profile_incomplete',
+    })
+  })
 })

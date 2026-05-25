@@ -26,6 +26,7 @@ import { hardReloadWithCacheBust } from './runtime/pwaForceUpdate'
 import { forceUpdateApp } from './utils/forceUpdate'
 import { traceAction } from './runtime/actionTrace'
 import { hudDevLog } from './lib/tier1DebugLog'
+import { migrateTacticalProfileIfNeeded } from './lib/tacticalProfile'
 
 logInfo('RUNTIME', 'build id', __BUILD_ID__)
 logInfo('RUNTIME', 'device detect', getDeviceEnvironment())
@@ -409,6 +410,8 @@ if (typeof window !== 'undefined') {
     console.error('[runtime] Unhandled error', event.error)
   })
 }
+
+void migrateTacticalProfileIfNeeded()
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

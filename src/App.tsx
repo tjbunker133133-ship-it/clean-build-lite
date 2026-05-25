@@ -3,6 +3,7 @@ import { AppProvider } from './context/AppContext'
 import { CockpitProvider } from './context/CockpitContext'
 import { MapProvider } from './context/MapContext'
 import { PanelDataProvider } from './context/PanelDataContext'
+import { TrailRouteProvider } from './context/TrailRouteContext'
 import TopBar from './hud/TopBar'
 import ScanlineOverlay from './hud/ScanlineOverlay'
 import CockpitKeyboard from './hud/CockpitKeyboard'
@@ -12,6 +13,7 @@ import CockpitHudShell from './hud/CockpitHudShell'
 import DisplayModeOverlay from './hud/DisplayModeOverlay'
 import PermissionPromptOverlay from './hud/PermissionPromptOverlay'
 import SwUpdateBanner from './hud/SwUpdateBanner'
+import TacticalSetupBanner from './hud/TacticalSetupBanner'
 
 const MapCanvas = lazy(() => import('./components/MapCanvas'))
 const WaypointLayer = lazy(() => import('./layers/WaypointLayer'))
@@ -28,6 +30,7 @@ const CheckInPanel = lazy(() => import('./hud/CheckInPanel'))
 const SOSPanel = lazy(() => import('./hud/SOSPanel'))
 const PreflightPanel = lazy(() => import('./hud/PreflightPanel'))
 const InstallHelperBanner = lazy(() => import('./hud/InstallHelperBanner'))
+const NavigationHud = lazy(() => import('./hud/NavigationHud'))
 
 export default function App() {
   return (
@@ -35,6 +38,7 @@ export default function App() {
       <CockpitProvider>
       <PanelDataProvider>
       <MapProvider>
+        <TrailRouteProvider>
         {/* Full-screen container */}
         <div
           style={{
@@ -65,6 +69,7 @@ export default function App() {
           {/* ── Atmospheric overlays (z-index: 1-2) ── */}
           <ScanlineOverlay />
           <PermissionPromptOverlay />
+          <TacticalSetupBanner />
           <SwUpdateBanner />
           <Suspense fallback={null}>
             <InstallHelperBanner />
@@ -102,7 +107,11 @@ export default function App() {
             </Suspense>
           </CockpitHudShell>
           <DisplayModeOverlay />
+          <Suspense fallback={null}>
+            <NavigationHud />
+          </Suspense>
         </div>
+      </TrailRouteProvider>
       </MapProvider>
       </PanelDataProvider>
       </CockpitProvider>

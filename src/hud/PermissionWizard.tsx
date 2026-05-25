@@ -22,8 +22,12 @@ import {
 } from '../lib/systemSettingsLinks'
 import { traceAction } from '../runtime/actionTrace'
 
+import TacticalProfileEditor from './TacticalProfileEditor'
+import { useTacticalProfile } from '../hooks/useTacticalProfile'
+
 export type WizardStepId =
   | 'intro'
+  | 'identity'
   | 'location'
   | 'microphone'
   | 'camera'
@@ -114,8 +118,10 @@ export default function PermissionWizard({
   onClose,
   onResetApp,
 }: Props) {
+  const { operationalReady } = useTacticalProfile()
+
   const steps = useMemo(() => {
-    const s: WizardStepId[] = ['intro', 'location', 'microphone', 'camera', 'notifications']
+    const s: WizardStepId[] = ['intro', 'identity', 'location', 'microphone', 'camera', 'notifications']
     if (hasOrientationRequest()) s.push('orientation')
     if (hasMotionRequest()) s.push('motion')
     s.push('done')
@@ -288,14 +294,43 @@ export default function PermissionWizard({
           <div style={{ fontSize: fontSm, color: '#b8c4b8', lineHeight: 1.5 }}>
             <p style={{ margin: '0 0 8px' }}>{platformHint}</p>
             <p style={{ margin: 0, color: '#9ec4a8' }}>
-              This wizard walks through <strong>location</strong>, <strong>microphone</strong>, <strong>camera</strong>,{' '}
-              <strong>notifications</strong>
+              This wizard walks through <strong>tactical identity</strong>, <strong>location</strong>,{' '}
+              <strong>microphone</strong>, <strong>camera</strong>, <strong>notifications</strong>
               {steps.includes('orientation') ? ', sensors' : ''} — one tap at a time. Grant what you need for your mission;
               you can change choices later in system settings.
             </p>
           </div>
           <button type="button" onClick={goNext} style={{ ...btnBase, borderColor: 'rgba(125,255,138,0.55)', background: 'rgba(125,255,138,0.16)' }}>
             START
+          </button>
+        </>
+      )}
+
+      {stepId === 'identity' && (
+        <>
+          <div style={{ fontSize: fontSm, color: '#b8c4b8', lineHeight: 1.45 }}>
+            <p style={{ margin: '0 0 8px' }}>
+              SOS, Deadman, and Check-In use a <strong>device-local</strong> profile (display name, reply-to email, shared
+              emergency contacts). You can skip and configure later in Preflight — emergency sends stay disabled until
+              setup is complete.
+            </p>
+            <p style={{ margin: 0, color: operationalReady ? '#7dff8a' : '#ffd166' }}>
+              {operationalReady ? 'Profile ready for emergency dispatch.' : 'Profile not yet ready for dispatch.'}
+            </p>
+          </div>
+          <div
+            style={{
+              maxHeight: 280,
+              overflowY: 'auto',
+              border: '1px solid rgba(199,206,198,0.2)',
+              borderRadius: 8,
+              padding: 8,
+            }}
+          >
+            <TacticalProfileEditor compact />
+          </div>
+          <button type="button" onClick={goNext} style={{ ...btnBase, borderColor: 'rgba(125,255,138,0.45)' }}>
+            {operationalReady ? 'CONTINUE' : 'SKIP FOR NOW'}
           </button>
         </>
       )}
@@ -531,7 +566,7 @@ export default function PermissionWizard({
         </>
       )}
 
-      {stepId !== 'intro' && stepId !== 'done' && (
+      {stepId !== 'intro' && stepId !== 'identity' && stepId !== 'done' && (
         <div style={{ display: 'flex', gap: gapMd, flexWrap: 'wrap' }}>
           <button type="button" onClick={goBack} style={{ ...btnBase, flex: '0 0 auto', minHeight: tapMin }}>
             BACK

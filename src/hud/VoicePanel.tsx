@@ -115,9 +115,8 @@ const QUICK_COMMAND_GROUPS: Array<{
     priority: true,
     items: [
       { label: 'Morse Toggle', cmd: 'morse toggle' },
-      { label: 'Torch Toggle', cmd: 'torch toggle' },
-      { label: 'Torch On', cmd: 'torch on' },
-      { label: 'Torch Off', cmd: 'torch off' },
+      { label: 'Flashlight On', cmd: 'flashlight on' },
+      { label: 'Flashlight Off', cmd: 'flashlight off' },
     ],
   },
   {
@@ -342,21 +341,12 @@ export default function VoicePanel() {
   const parseAndRun = async (text: string) => {
     const normWake = normalizeForWakeGate(text)
     const norm = normalizeVoiceTranscript(text)
-    // #region agent log
-    fetch('http://127.0.0.1:7617/ingest/9454c0bb-b23c-490e-8bfb-46ee1e916bc0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'b6eec3'},body:JSON.stringify({sessionId:'b6eec3',location:'VoicePanel.tsx:parseAndRun',message:'voice_parse_enter',data:{rawLen:text.length,normWake,norm,scopedWake:sliceFromFirstWakeToken(normWake),ttsBusy:ttsBusyRef.current,pendingWake:pendingWakeUntilRef.current!=null,ignoreSr:performance.now()<ignoreSrUntilRef.current},timestamp:Date.now(),hypothesisId:'H5-tts-block'})}).catch(()=>{});
-    // #endregion
     if (!normWake) return
     if (performance.now() < ignoreSrUntilRef.current) {
-      // #region agent log
-      fetch('http://127.0.0.1:7617/ingest/9454c0bb-b23c-490e-8bfb-46ee1e916bc0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'b6eec3'},body:JSON.stringify({sessionId:'b6eec3',location:'VoicePanel.tsx:parseAndRun',message:'voice_parse_skipped_tts_echo',data:{normWake:normWake.slice(0,60)},timestamp:Date.now(),hypothesisId:'H8-tts-echo'})}).catch(()=>{});
-      // #endregion
       return
     }
     // Allow follow-up commands while wake ack TTS plays (mic stays open).
     if (ttsBusyRef.current && pendingWakeUntilRef.current == null && !hasWakeWordPrefix(normWake)) {
-      // #region agent log
-      fetch('http://127.0.0.1:7617/ingest/9454c0bb-b23c-490e-8bfb-46ee1e916bc0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'b6eec3'},body:JSON.stringify({sessionId:'b6eec3',location:'VoicePanel.tsx:parseAndRun',message:'voice_parse_skipped_tts_busy',data:{normWake},timestamp:Date.now(),hypothesisId:'H5-tts-block'})}).catch(()=>{});
-      // #endregion
       return
     }
 
@@ -408,9 +398,6 @@ export default function VoicePanel() {
     if (!hasWakeWordPrefix(effective)) {
       reportPolicyAttempt('voice.wakeWordRequired', 'disable', 'parseAndRun.missing-wake-word')
       traceAction('wake_word_activation', 'guard_reject', { reason: 'missing_wake_word' })
-      // #region agent log
-      fetch('http://127.0.0.1:7617/ingest/9454c0bb-b23c-490e-8bfb-46ee1e916bc0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'b6eec3'},body:JSON.stringify({sessionId:'b6eec3',location:'VoicePanel.tsx:parseAndRun',message:'voice_wake_reject',data:{raw:text.slice(0,80),normWake,effective:effective.slice(0,80)},timestamp:Date.now(),hypothesisId:'H6-homophone'})}).catch(()=>{});
-      // #endregion
       return
     }
 
@@ -444,16 +431,10 @@ export default function VoicePanel() {
       setStatusText('🎤 Listening — say your command')
       setVoiceState('success')
       logInfo('VOICE', 'wake-word.only-detected')
-      // #region agent log
-      fetch('http://127.0.0.1:7617/ingest/9454c0bb-b23c-490e-8bfb-46ee1e916bc0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'b6eec3'},body:JSON.stringify({sessionId:'b6eec3',location:'VoicePanel.tsx:parseAndRun',message:'voice_wake_only',data:{normWake},timestamp:Date.now(),hypothesisId:'H7-wake-ack'})}).catch(()=>{});
-      // #endregion
       void (async () => {
         await speakHandsFree(WAKE_ACK_SPOKEN, { pauseRecognition: false })
         pendingWakeUntilRef.current = performance.now() + WAKE_CONTINUATION_MS
         logInfo('VOICE', `wake-window.open ms=${WAKE_CONTINUATION_MS}`)
-        // #region agent log
-        fetch('http://127.0.0.1:7617/ingest/9454c0bb-b23c-490e-8bfb-46ee1e916bc0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'b6eec3'},body:JSON.stringify({sessionId:'b6eec3',location:'VoicePanel.tsx:wakeAckDone',message:'voice_wake_window_open',data:{ms:WAKE_CONTINUATION_MS},timestamp:Date.now(),hypothesisId:'H9-window-timing'})}).catch(()=>{});
-        // #endregion
       })()
       if (uiResetTimerRef.current != null) {
         window.clearTimeout(uiResetTimerRef.current)
@@ -465,9 +446,6 @@ export default function VoicePanel() {
       updateVoiceState('listening')
       return
     }
-    // #region agent log
-    fetch('http://127.0.0.1:7617/ingest/9454c0bb-b23c-490e-8bfb-46ee1e916bc0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'b6eec3'},body:JSON.stringify({sessionId:'b6eec3',location:'VoicePanel.tsx:parseAndRun',message:'voice_wake_command',data:{parts,consumedContinuation},timestamp:Date.now(),hypothesisId:'H7-wake-ack'})}).catch(()=>{});
-    // #endregion
     for (const p of parts) {
       // Compose a stable `heard` value per part: "HUD <part>" — preserves
       // the wake word in the structured log even when multiple commands
@@ -1066,7 +1044,7 @@ export default function VoicePanel() {
               <strong>TIER 1</strong> Status: status, time, battery, signal, elevation.
             </div>
             <div>
-              <strong>TIER 1</strong> SOS: sos, emergency, rescue, morse yes/no/toggle, torch on/off/toggle.
+              <strong>TIER 1</strong> SOS: sos, emergency, rescue, morse yes/no/toggle, flashlight on/off.
             </div>
             <div>
               <strong>TIER 1</strong> Corridor: corridor, corridor status.

@@ -4,6 +4,7 @@
  */
 
 import { tier1Debug } from '../tier1DebugLog'
+import { appendRescuePipelineTrace } from './rescuePipelineTrace'
 
 function readAnonKey(override?: string): string {
   const fromEnv = (
@@ -42,6 +43,42 @@ export function buildRescueDispatchHeaders(anonKeyOverride?: string): Record<str
 
 export function hasRescueDispatchAuth(anonKeyOverride?: string): boolean {
   return readAnonKey(anonKeyOverride).length > 0
+}
+
+/** Debug-only dispatch trace (no PII). */
+export function logRescueDispatchTrace(input: {
+  triggerLabel: 'SOS' | 'DEADMAN' | 'CHECKIN'
+  endpoint: string
+  triggerType: string
+  hasOperator: boolean
+  signed: boolean
+}): void {
+  // #region agent log
+  let endpointHost = ''
+  let endpointPath = ''
+  try {
+    const u = new URL(input.endpoint)
+    endpointHost = u.host
+    endpointPath = u.pathname
+  } catch {
+    endpointPath = '(invalid-url)'
+  }
+  appendRescuePipelineTrace({
+    runId: 'post-fix',
+    hypothesisId: 'B',
+    location: 'rescueDispatch.ts:logRescueDispatchTrace',
+    message: 'rescue POST dispatch',
+    data: {
+      triggerLabel: input.triggerLabel,
+      endpointHost,
+      endpointPath,
+      isSendRescueEmailPath: endpointPath.includes('send-rescue-email'),
+      triggerType: input.triggerType,
+      hasOperator: input.hasOperator,
+      signed: input.signed,
+    },
+  })
+  // #endregion
 }
 
 export type RescueDispatchFailure = {
