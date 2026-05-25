@@ -69,6 +69,10 @@ export default function WeatherPanel() {
             {hasData ? weather.location : 'Location: --'}
           </div>
           <div style={{ fontSize: fontSm, color: 'var(--cockpit-panel-subtle)', marginTop: 4 }}>
+            Humidity:{' '}
+            {hasData ? `${weather.humidity}%` : weatherLoading ? '…' : '--'}
+          </div>
+          <div style={{ fontSize: fontSm, color: 'var(--cockpit-panel-subtle)', marginTop: 4 }}>
             Wind:{' '}
             {hasData
               ? `${Math.round(weather.windSpeed)} ${weather.windUnit}`

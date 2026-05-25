@@ -1,6 +1,7 @@
 export type WeatherResult =
   | {
       temperature: number
+      humidity: number
       windSpeed: number
       condition: string
       unit: string
@@ -13,7 +14,7 @@ export type WeatherResult =
     }
   | { error: string }
 
-const WEATHER_CACHE_KEY = 'titanium_weather_cache_v1'
+const WEATHER_CACHE_KEY = 'titanium_weather_cache_v2'
 
 export function weatherDescription(code: number): string {
   const codes: Record<number, string> = {
@@ -70,14 +71,15 @@ export async function fetchWeather(
   try {
     const [response, location] = await Promise.all([
       fetch(
-        `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true&temperature_unit=fahrenheit&windspeed_unit=mph&timezone=auto`,
+        `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m&temperature_unit=fahrenheit&windspeed_unit=mph&timezone=auto`,
         { signal },
       ),
       reverseLocation(lat, lon, signal),
     ])
     if (!response.ok) return { error: `Weather service error (${response.status})` }
     const data = await response.json()
-    if (!data?.current_weather) return { error: 'No weather data' }
+    const current = data?.current
+    if (!current) return { error: 'No weather data' }
 
     const timeZone = typeof data.timezone === 'string' ? data.timezone : undefined
 
@@ -88,14 +90,21 @@ export async function fetchWeather(
     // / WebKit). We override to a canonical "mph" string here so both
     // the panel render and the voice formatter agree on the same unit
     // and TTS engines speak it cleanly.
+    const humidityRaw = current.relative_humidity_2m
+    const humidity =
+      humidityRaw != null && Number.isFinite(Number(humidityRaw))
+        ? Math.round(Number(humidityRaw))
+        : null
+
     const out = {
-      temperature: Math.round(Number(data.current_weather.temperature ?? 0)),
-      windSpeed: Number(data.current_weather.windspeed ?? 0),
-      condition: weatherDescription(Number(data.current_weather.weathercode ?? -1)),
-      unit: String(data.current_weather_units?.temperature ?? '°F'),
+      temperature: Math.round(Number(current.temperature_2m ?? 0)),
+      humidity: humidity ?? 0,
+      windSpeed: Number(current.wind_speed_10m ?? 0),
+      condition: weatherDescription(Number(current.weather_code ?? -1)),
+      unit: String(data.current_units?.temperature_2m ?? '°F'),
       windUnit: 'mph',
       location,
-      weatherCode: Number(data.current_weather.weathercode ?? -1),
+      weatherCode: Number(current.weather_code ?? -1),
       updatedAt: Date.now(),
       ...(timeZone ? { timeZone } : {}),
     }
@@ -117,7 +126,12 @@ export async function fetchWeather(
         // Cache entries written prior to the windUnit normalization may
         // still contain the raw "mp/h" API value; force "mph" on read so
         // legacy caches do not resurface the TTS pronunciation issue.
-        return { ...c, condition: `${c.condition} (cached)`, windUnit: 'mph' }
+        return {
+          ...c,
+          humidity: typeof c.humidity === 'number' ? c.humidity : 0,
+          condition: `${c.condition} (cached)`,
+          windUnit: 'mph',
+        }
       }
     } catch {
       // ignore cache parse failures

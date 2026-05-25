@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import type { MapMouseEvent } from 'maplibre-gl'
 import HudPanel from './HudPanel'
 import { useMapContext } from '../context/MapContext'
 import { usePanelData } from '../context/PanelDataContext'
+import type { WeatherResult } from '../lib/weather'
 import { useGPS } from '../hooks/useGPS'
 import { tier1Debug } from '../lib/tier1DebugLog'
 import { getDeviceProfile, isIosFieldHud } from '../runtime/deviceProfile'
@@ -91,6 +91,83 @@ function sectionDivider(): CSSProperties {
   }
 }
 
+function SituationWeatherSection({
+  panelsLocationBlocked,
+  fontSm,
+  fontMd,
+  gapMd,
+  tapMin,
+  btnBase,
+}: {
+  panelsLocationBlocked: boolean
+  fontSm: number
+  fontMd: number
+  gapMd: number
+  tapMin: number
+  btnBase: CSSProperties
+}) {
+  const { weather, weatherLoading, refreshPanelData } = usePanelData()
+  const hasData = !!weather && !('error' in weather)
+  const wx = hasData ? (weather as Extract<WeatherResult, { temperature: number }>) : null
+
+  return (
+    <div style={sectionDivider()}>
+      <SectionLabel>Weather</SectionLabel>
+      <div
+        style={{
+          border: '1px solid rgba(199,206,198,0.28)',
+          borderRadius: 8,
+          padding: '8px 10px',
+          background: 'rgba(10,12,13,0.55)',
+          fontFamily: 'var(--font-mono, monospace)',
+          fontSize: fontMd,
+          color: '#c7cec6',
+          lineHeight: 1.5,
+          display: 'grid',
+          gap: 4,
+        }}
+      >
+        <div>
+          Temp:{' '}
+          {hasData && wx ? `${wx.temperature}${wx.unit}` : weatherLoading ? '…' : '—'}
+        </div>
+        <div>
+          Humidity:{' '}
+          {hasData && wx ? `${wx.humidity}%` : weatherLoading ? '…' : '—'}
+        </div>
+        <div>
+          Wind:{' '}
+          {hasData && wx
+            ? `${Math.round(wx.windSpeed)} ${wx.windUnit}`
+            : weather && 'error' in weather
+              ? weather.error
+              : '—'}
+        </div>
+        {hasData && wx ? (
+          <div style={{ fontSize: fontSm, color: 'var(--cockpit-panel-subtle)' }}>{wx.condition}</div>
+        ) : null}
+      </div>
+      <button
+        type="button"
+        data-no-drag
+        disabled={panelsLocationBlocked}
+        onClick={() => void refreshPanelData()}
+        style={{
+          ...btnBase,
+          marginTop: gapMd,
+          width: '100%',
+          background: panelsLocationBlocked ? 'rgba(70,75,73,0.22)' : 'rgba(199,206,198,0.14)',
+          color: panelsLocationBlocked ? '#7d8680' : '#d6ddd6',
+          cursor: panelsLocationBlocked ? 'not-allowed' : 'pointer',
+          minHeight: tapMin,
+        }}
+      >
+        UPDATE WEATHER
+      </button>
+    </div>
+  )
+}
+
 export default function SituationPanel() {
   const { map } = useMapContext()
   const panel = usePanelData()
@@ -108,9 +185,6 @@ export default function SituationPanel() {
   const [grade, setGrade] = useState('grade —')
   const [band, setBand] = useState<Band>('na')
   const elevPrev = useRef<{ ft: number; lat: number; lng: number } | null>(null)
-
-  const [mapCoords, setMapCoords] = useState({ lng: 0, lat: 0 })
-  const [mapCoordsReady, setMapCoordsReady] = useState(false)
 
   const [followLock, setFollowLock] = useState(() => {
     try {
@@ -245,37 +319,6 @@ export default function SituationPanel() {
       map.off('idle', scheduleSample)
     }
   }, [map, panel.elevationMeters, panelsLocationBlocked])
-
-  useEffect(() => {
-    if (!map) return
-
-    setMapCoordsReady(true)
-
-    const setFromLngLat = (lng: number, lat: number) => {
-      setMapCoords({ lng, lat })
-    }
-
-    const updateFromEvent = (e: MapMouseEvent) => {
-      if (!e?.lngLat) return
-      setFromLngLat(e.lngLat.lng, e.lngLat.lat)
-    }
-    const updateFromCenter = () => {
-      const c = map.getCenter()
-      setFromLngLat(c.lng, c.lat)
-    }
-
-    updateFromCenter()
-    // Touch field HUD has no hover pointer — skip mousemove to reduce WebKit work during pan.
-    if (!isMobile) map.on('mousemove', updateFromEvent)
-    map.on('moveend', updateFromCenter)
-    map.on('idle', updateFromCenter)
-
-    return () => {
-      if (!isMobile) map.off('mousemove', updateFromEvent)
-      map.off('moveend', updateFromCenter)
-      map.off('idle', updateFromCenter)
-    }
-  }, [map, isMobile])
 
   const centerMapOnFix = useCallback(
     (lat: number, lng: number, zoom: number) => {
@@ -417,6 +460,15 @@ export default function SituationPanel() {
         {' · '}
         {locationTimeZone ? 'Location solar time' : 'Device timezone'}
       </div>
+
+      <SituationWeatherSection
+        panelsLocationBlocked={panelsLocationBlocked}
+        fontSm={fontSm}
+        fontMd={fontMd}
+        gapMd={gapMd}
+        tapMin={tapMin}
+        btnBase={btnBase}
+      />
 
       <div style={sectionDivider()}>
         <SectionLabel>Elevation</SectionLabel>
@@ -674,26 +726,6 @@ export default function SituationPanel() {
         </div>
       </div>
 
-      {!iosFieldHud ? (
-        <div style={sectionDivider()}>
-          <SectionLabel>Map pointer</SectionLabel>
-          <div
-            style={{
-              padding: '6px 10px',
-              color: '#c7cec6',
-              borderRadius: 6,
-              fontFamily: 'var(--font-mono, monospace)',
-              fontSize: fontMd,
-              border: '1px solid rgba(199,206,198,0.2)',
-              background: 'rgba(10,12,13,0.45)',
-            }}
-          >
-            {mapCoordsReady
-              ? `Lng: ${mapCoords.lng.toFixed(5)} · Lat: ${mapCoords.lat.toFixed(5)}`
-              : 'Loading map coordinates…'}
-          </div>
-        </div>
-      ) : null}
     </HudPanel>
   )
 }

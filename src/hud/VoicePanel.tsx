@@ -19,6 +19,7 @@ import { shouldAttemptVoiceRecovery, shouldTreatOnEndAsLifecycleSuspend } from '
 import { traceAction } from '../runtime/actionTrace'
 import {
   touchFontSm as touchFontSmFn,
+  touchFontMd as touchFontMdFn,
   touchGapMd as touchGapMdFn,
   touchGapSm as touchGapSmFn,
   touchMinTarget as touchMinTargetFn,
@@ -105,6 +106,18 @@ function playChime() {
   }
 }
 
+/** Stubs shown in registry but not offered as live voice phrases. */
+const VOICE_STUB_COMMAND_IDS = new Set([
+  'fire',
+  'water',
+  'deadman',
+  'ai route',
+  'biometric',
+  'forage',
+  'lidar',
+  'ar',
+])
+
 const QUICK_COMMAND_GROUPS: Array<{
   group: string
   priority?: boolean
@@ -126,20 +139,32 @@ const QUICK_COMMAND_GROUPS: Array<{
       { label: 'Zoom In', cmd: 'zoom in' },
       { label: 'Zoom Out', cmd: 'zoom out' },
       { label: 'Status', cmd: 'status' },
+      { label: 'Read Situation', cmd: 'situation' },
     ],
   },
   {
     group: 'Route',
     items: [
       { label: 'Add Pin', cmd: 'add pin' },
+      { label: 'Next Waypoint', cmd: 'next waypoint' },
       { label: 'Route Stats', cmd: 'route stats' },
       { label: 'Reset Layout', cmd: 'reset' },
+    ],
+  },
+  {
+    group: 'Map baselayers',
+    items: [
+      { label: 'Streets', cmd: 'streets map' },
+      { label: 'Topo', cmd: 'topo map' },
+      { label: 'Outdoor', cmd: 'outdoor map' },
+      { label: 'Satellite', cmd: 'satellite map' },
     ],
   },
   {
     group: 'Display & Weather',
     items: [
       { label: 'Weather', cmd: 'weather' },
+      { label: 'Refresh Weather', cmd: 'weather refresh' },
       { label: 'Night Mode', cmd: 'night' },
       { label: 'Low Light', cmd: 'low light' },
       { label: 'Bright', cmd: 'bright' },
@@ -155,6 +180,7 @@ export default function VoicePanel() {
   const tapMin = touchMinTargetFn(isMobileHud)
   const btnMin = (px: number) => Math.max(tapMin, px)
   const labelPx = (px: number) => Math.max(touchFontSmFn(isMobileHud), px)
+  const bodyPx = touchFontMdFn(isMobileHud)
 
   // Flatten the voice directory definition into the validator's expected
   // shape. This lets us answer "are any directory items missing from the
@@ -168,6 +194,22 @@ export default function VoicePanel() {
       ),
     [],
   )
+
+  /** Full registry catalog for the expanded command reference (no stubs). */
+  const voiceCommandCatalog = useMemo(() => {
+    const byGroup = new Map<string, typeof commands>()
+    for (const c of commands) {
+      if (VOICE_STUB_COMMAND_IDS.has(c.id)) continue
+      const g = c.group ?? 'Other'
+      const list = byGroup.get(g) ?? []
+      list.push(c)
+      byGroup.set(g, list)
+    }
+    for (const list of byGroup.values()) {
+      list.sort((a, b) => a.id.localeCompare(b.id))
+    }
+    return [...byGroup.entries()].sort(([a], [b]) => a.localeCompare(b))
+  }, [commands])
 
   useEffect(() => {
     const report = validateVoiceRegistry(commands, directoryItems)
@@ -864,8 +906,8 @@ export default function VoicePanel() {
       panelId="voice"
       title="Voice Directory"
       initialPos={{ x: 1240, y: 280 }}
-      initialWidth={330}
-      minHeight={130}
+      initialWidth={isMobileHud ? 340 : 380}
+      minHeight={150}
       accent={voiceState === 'failure' ? '#ff3b4d' : undefined}
     >
       <div style={{ display: 'grid', gap: touchGapMd }}>
@@ -968,35 +1010,55 @@ export default function VoicePanel() {
         )}
 
         {expanded && (
-          <div style={{ fontSize: labelPx(10), color: 'var(--cockpit-panel-subtle)', lineHeight: 1.5, display: 'grid', gap: touchGapMd }}>
-            <div>
-              Wake word: <strong>HUD</strong> (say the word, not spelled out). Example:{' '}
-              <code>HUD weather</code> or say <code>HUD</code>, wait for &quot;Yes&quot;, then{' '}
-              <code>weather</code>. Last: {lastHeard || '—'}
+          <div
+            style={{
+              fontSize: labelPx(11),
+              color: '#c5cdc5',
+              lineHeight: 1.55,
+              display: 'grid',
+              gap: touchGapMd,
+            }}
+          >
+            <div style={{ padding: '6px 8px', borderRadius: 8, background: 'rgba(10,12,13,0.55)' }}>
+              Wake word: <strong style={{ color: '#e2eae2' }}>HUD</strong> (say the word, not spelled out).
+              If SR hears &quot;hi&quot;, it is treated as HUD. Example:{' '}
+              <span style={{ fontFamily: 'var(--font-mono, monospace)', color: '#e2eae2' }}>HUD weather</span>{' '}
+              or say <span style={{ fontFamily: 'var(--font-mono, monospace)', color: '#e2eae2' }}>HUD</span>, wait
+              for &quot;Yes&quot;, then <span style={{ fontFamily: 'var(--font-mono, monospace)', color: '#e2eae2' }}>weather</span>.
+              <div style={{ marginTop: 6, fontSize: labelPx(10), color: 'var(--cockpit-panel-subtle)' }}>
+                Last heard: {lastHeard || '—'}
+              </div>
             </div>
-            <div style={{ fontSize: labelPx(10), letterSpacing: '0.08em', color: 'var(--cockpit-panel-subtle)' }}>
-              ONE-TAP COMMANDS (MOBILE READY)
+            <div
+              style={{
+                fontSize: labelPx(11),
+                letterSpacing: '0.08em',
+                fontWeight: 700,
+                color: '#aeb8ae',
+              }}
+            >
+              ONE-TAP COMMANDS
             </div>
             <div
               data-no-drag
               style={{
-                maxHeight: 180,
+                maxHeight: isMobileHud ? 240 : 220,
                 overflowY: 'auto',
-                border: '1px solid rgba(199,206,198,0.2)',
+                border: '1px solid rgba(199,206,198,0.28)',
                 borderRadius: 8,
-                background: 'rgba(10,12,13,0.65)',
-                padding: touchGapSm,
+                background: 'rgba(10,12,13,0.72)',
+                padding: touchGapMd,
                 display: 'grid',
-                gap: touchGapSm,
+                gap: touchGapMd,
               }}
             >
               {QUICK_COMMAND_GROUPS.map((group) => (
                 <div key={group.group} style={{ display: 'grid', gap: touchGapSm }}>
                   <div
                     style={{
-                      fontSize: labelPx(9),
-                      letterSpacing: '0.1em',
-                      color: group.priority ? '#ffb8c6' : 'var(--cockpit-panel-subtle)',
+                      fontSize: labelPx(11),
+                      letterSpacing: '0.08em',
+                      color: group.priority ? '#ffb8c6' : '#aeb8ae',
                       fontWeight: 700,
                     }}
                   >
@@ -1010,56 +1072,101 @@ export default function VoicePanel() {
                       onClick={() => void dispatchAndReport(item.cmd, 'ui')}
                       style={{
                         width: '100%',
-                        minHeight: btnMin(34),
+                        minHeight: btnMin(40),
                         textAlign: 'left',
                         borderRadius: 6,
-                        border: group.priority ? '1px solid rgba(255,127,151,0.35)' : '1px solid rgba(199,206,198,0.26)',
-                        background: group.priority ? 'rgba(255,75,112,0.18)' : 'rgba(199,206,198,0.12)',
-                        color: '#d3dad3',
-                        padding: '0 10px',
+                        border: group.priority ? '1px solid rgba(255,127,151,0.35)' : '1px solid rgba(199,206,198,0.3)',
+                        background: group.priority ? 'rgba(255,75,112,0.18)' : 'rgba(199,206,198,0.14)',
+                        color: '#e2eae2',
+                        padding: '8px 12px',
                         cursor: 'pointer',
-                        fontSize: labelPx(11),
-                        letterSpacing: '0.04em',
+                        fontSize: bodyPx,
+                        lineHeight: 1.35,
+                        letterSpacing: '0.02em',
                       }}
                     >
-                      {item.label}
+                      <span style={{ display: 'block', fontWeight: 600 }}>{item.label}</span>
+                      <span
+                        style={{
+                          display: 'block',
+                          marginTop: 2,
+                          fontSize: labelPx(10),
+                          fontFamily: 'var(--font-mono, monospace)',
+                          color: '#9aa89a',
+                        }}
+                      >
+                        HUD {item.cmd}
+                      </span>
                     </button>
                   ))}
                 </div>
               ))}
             </div>
-            <div>
-              <strong>TIER 1</strong> Navigation: center, zoom in/out, north/south/east/west.
+            <div
+              style={{
+                fontSize: labelPx(11),
+                letterSpacing: '0.08em',
+                fontWeight: 700,
+                color: '#aeb8ae',
+              }}
+            >
+              FULL VOICE COMMAND LIST (prefix with HUD)
             </div>
-            <div>
-              <strong>TIER 1</strong> GPS pin: attach, detach, recenter, distance.
+            <div
+              data-no-drag
+              style={{
+                maxHeight: isMobileHud ? 300 : 280,
+                overflowY: 'auto',
+                border: '1px solid rgba(199,206,198,0.24)',
+                borderRadius: 8,
+                background: 'rgba(10,12,13,0.62)',
+                padding: touchGapMd,
+                display: 'grid',
+                gap: touchGapMd,
+                fontSize: bodyPx,
+                lineHeight: 1.5,
+                color: '#d0dad0',
+              }}
+            >
+              {voiceCommandCatalog.map(([group, cmds]) => (
+                <div key={group} style={{ display: 'grid', gap: 6 }}>
+                  <div
+                    style={{
+                      fontWeight: 700,
+                      fontSize: labelPx(11),
+                      letterSpacing: '0.08em',
+                      color: '#aeb8ae',
+                      borderBottom: '1px solid rgba(199,206,198,0.16)',
+                      paddingBottom: 4,
+                    }}
+                  >
+                    {group}
+                  </div>
+                  {cmds.map((c) => (
+                    <div key={c.id} style={{ display: 'grid', gap: 2 }}>
+                      <div style={{ color: '#e8efe8', fontWeight: 600 }}>{c.label}</div>
+                      <div
+                        style={{
+                          fontFamily: 'var(--font-mono, monospace)',
+                          fontSize: labelPx(10),
+                          color: '#c5cdc5',
+                        }}
+                      >
+                        HUD {c.id}
+                      </div>
+                      {c.aliases && c.aliases.length > 0 ? (
+                        <div style={{ fontSize: labelPx(10), color: '#8f9b8f', lineHeight: 1.4 }}>
+                          Also: {c.aliases.slice(0, 8).join(', ')}
+                          {c.aliases.length > 8 ? ', …' : ''}
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ))}
             </div>
-            <div>
-              <strong>TIER 1</strong> Compass: bearing, direction, calibrate.
-            </div>
-            <div>
-              <strong>TIER 1</strong> Route: add pin, delete last, clear route, save route, reverse route, route stats.
-            </div>
-            <div>
-              <strong>TIER 1</strong> Status: status, time, battery, signal, elevation.
-            </div>
-            <div>
-              <strong>TIER 1</strong> SOS: sos, emergency, rescue, morse yes/no/toggle, flashlight on/off.
-            </div>
-            <div>
-              <strong>TIER 1</strong> Corridor: corridor, corridor status.
-            </div>
-            <div>
-              <strong>TIER 1</strong> Display: night, low light, bright, reset.
-            </div>
-            <div>
-              <strong>TIER 2</strong>: weather (live when configured).
-            </div>
-            <div>
-              <strong>TIER 2 (stub)</strong>: fire, water, deadman.
-            </div>
-            <div>
-              <strong>TIER 3 (stub)</strong>: ai route, biometric, forage, lidar, ar, voice continuous.
+            <div style={{ fontSize: labelPx(10), color: 'var(--cockpit-panel-subtle)', lineHeight: 1.45 }}>
+              Stubs (not live): fire, water, deadman, ai route, biometric, forage, lidar, ar.
             </div>
           </div>
         )}
