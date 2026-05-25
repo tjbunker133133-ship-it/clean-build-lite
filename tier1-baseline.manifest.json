@@ -10,7 +10,7 @@
     "src/hooks/useGPS.ts": "bdd7b8ec309335ab05c6a819b27d962b516228ef5e37bf37ffbf8efff1b663a0",
     "src/components/MapCanvas.tsx": "c08fd1284ba448ef4fde30ad30f552fbbd4521f82cc842fda7e27a324f722ea1",
     "src/lib/mapStyles.ts": "6c097cf2db74aa291d62cea63e31ee35f0d893ac90b968a2a268d4362da27bf0",
-    "src/hud/SOSPanel.tsx": "d6fc0a9b6c4ea7f1528b6eb06288aa5e4f12b5d443a4a01793fdcac3c2c6715e",
+    "src/hud/SOSPanel.tsx": "92129ab53233170ce08b2f2e0b113619a7c33491d6941858632a721f9ba0d179",
     "src/hud/DeadManPanel.tsx": "9cacdc1d2bf78ce42ffd9c7af367cbf7ddc12561c97d1adda597d573976f0be7",
     "src/hud/CockpitHudShell.tsx": "816d311cd774fec03c14b26972b78cf0ac5a7bd207810b555e5b9ac041732540",
     "src/controllers/resolveDockIntent.ts": "a824b236092ce85e7b230380d3a0904546d299920e3714b28e6faee387e08549",

@@ -10,8 +10,8 @@ import React, {
 } from 'react'
 import { tier1Debug } from '../lib/tier1DebugLog'
 import { useGPS } from '../hooks/useGPS'
-import { fetchElevationOpenElevation } from '../lib/openElevation'
-import { fetchWeather, type WeatherResult } from '../lib/weather'
+import { fetchElevationMeters } from '../lib/elevation'
+import { fetchWeather, readCachedWeather, type WeatherResult } from '../lib/weather'
 
 // ⚠️ LOCKED SYSTEM — Behavior Freeze Active
 // Any change to interaction, layout, display modes, or layers requires explicit approval.
@@ -43,7 +43,7 @@ export function PanelDataProvider({ children }: { children: ReactNode }) {
   const [elevationLoading, setElevationLoading] = useState(false)
   const [elevationError, setElevationError] = useState<string | null>(null)
 
-  const [weather, setWeather] = useState<WeatherResult | null>(null)
+  const [weather, setWeather] = useState<WeatherResult | null>(() => readCachedWeather())
   const [weatherLoading, setWeatherLoading] = useState(false)
   const [locationTimeZone, setLocationTimeZone] = useState<string | null>(null)
 
@@ -112,12 +112,11 @@ export function PanelDataProvider({ children }: { children: ReactNode }) {
 
     try {
       const [elM, wx] = await Promise.all([
-        fetchElevationOpenElevation(lat, lng, ac.signal),
+        fetchElevationMeters(lat, lng, ac.signal),
         includeWeather ? fetchWeather(lat, lng, { signal: ac.signal }) : Promise.resolve(null),
       ])
       if (gen !== refreshGenRef.current) return
-
-      // Open-Elevation is flaky (timeouts, 503, empty results). A null response
+      // A null response
       // during a combined weather refresh must NOT clear last-known-good
       // elevation — that caused the UI to jump from valid ft to "— ft"
       // whenever weather updated while the elevation lookup failed transiently.
@@ -163,16 +162,16 @@ export function PanelDataProvider({ children }: { children: ReactNode }) {
   }, [userLocation?.lat, userLocation?.lng])
 
   useEffect(() => {
-    void runDataFetch(false)
+    void runDataFetch(userLocation != null)
     return () => {
       abortRef.current?.abort()
     }
-  }, [runDataFetch])
+  }, [runDataFetch, userLocation])
 
   useEffect(() => {
     if (userLocation == null) return
     let id: number | undefined
-    const tick = () => void runDataFetch(false)
+    const tick = () => void runDataFetch(true)
     const arm = () => {
       id = window.setInterval(tick, REFRESH_INTERVAL_MS)
     }
@@ -184,7 +183,7 @@ export function PanelDataProvider({ children }: { children: ReactNode }) {
         }
         return
       }
-      void runDataFetch(false)
+      void runDataFetch(true)
       if (id != null) window.clearInterval(id)
       arm()
     }

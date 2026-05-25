@@ -180,13 +180,32 @@ export default function SOSPanel() {
       window.clearInterval(alarmTimerRef.current)
       alarmTimerRef.current = null
     }
+    const ctx = audioCtxRef.current
+    const t = ctx?.currentTime ?? 0
     try {
-      gainRef.current?.gain.setValueAtTime(0.0001, audioCtxRef.current?.currentTime ?? 0)
-      oscRef.current?.stop()
-      oscHiRef.current?.stop()
-      oscRef.current?.disconnect()
-      oscHiRef.current?.disconnect()
+      gainRef.current?.gain.cancelScheduledValues(t)
+      gainRef.current?.gain.setValueAtTime(0, t)
+    } catch {
+      // noop
+    }
+    for (const node of [oscRef.current, oscHiRef.current]) {
+      try {
+        node?.stop(t + 0.02)
+      } catch {
+        // already stopped
+      }
+      try {
+        node?.disconnect()
+      } catch {
+        // noop
+      }
+    }
+    try {
       gainRef.current?.disconnect()
+    } catch {
+      // noop
+    }
+    try {
       compRef.current?.disconnect()
     } catch {
       // noop
@@ -195,6 +214,11 @@ export default function SOSPanel() {
     oscHiRef.current = null
     gainRef.current = null
     compRef.current = null
+    try {
+      if (ctx && ctx.state === 'running') void ctx.suspend()
+    } catch {
+      // noop
+    }
     setAlarmActive(false)
     setStatus('ALARM OFF')
   }
@@ -318,23 +342,12 @@ export default function SOSPanel() {
     for (const step of seq) {
       if (morseStopRef.current) return
       setFlashInvert(step.on)
-      if (flashlightEnabled) {
-        if (step.on) {
-          const on = await setDeviceFlashlight(true)
-          setFlashlightActive(on)
-        } else {
-          await setDeviceFlashlight(false)
-          setFlashlightActive(false)
-        }
-      }
       await sleep(step.units * MORSE_UNIT_MS)
     }
   }
 
   // SOS-side cleanup on disarm. Releases the camera/flashlight track when off.
-  // The audible alarm is intentionally NOT touched here — alarm lifecycle
-  // is owned by the operator (TEST AUDIBLE ALARM button + unmount cleanup).
-  // Morse cleanup is driven by disarmAll() setting morsePattern='off'.
+  // Audible alarm + morse are cleared in disarmAll() (STOP ALL / voice disarm).
   useEffect(() => {
     if (isArmed) return
     if (!flashlightEnabled) void stopFlashlight()
@@ -355,11 +368,10 @@ export default function SOSPanel() {
       }
       return
     }
-    if (flashScreen !== 'yes' && !flashlightEnabled) {
-      // pattern selected but no output channel — sit idle, don't loop
+    if (flashScreen !== 'yes') {
+      // Morse is screen-only; flashlight on/off is independent (solid hold, not Morse).
       morseStopRef.current = true
       setFlashInvert(false)
-      void stopFlashlight()
       return
     }
     morseStopRef.current = false
@@ -374,7 +386,7 @@ export default function SOSPanel() {
       setFlashInvert(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [morsePattern, flashScreen, flashlightEnabled])
+  }, [morsePattern, flashScreen])
 
   // When flashlight is on without an active Morse pattern, hold the device LED on.
   useEffect(() => {
@@ -553,15 +565,15 @@ export default function SOSPanel() {
     setHolding(false)
     setMode('off')
     setHoldProgress(0)
-    setStatus('READY')
-    // Audible alarm is operator-owned and intentionally NOT stopped here —
-    // the rescue-dispatch path no longer starts it, so disarm has nothing
-    // to stop. Morse pattern is still cleared for the "STOP ALL" UX.
+    stopAlarm()
     setMorsePattern('off')
     morseStopRef.current = true
     setFlashInvert(false)
+    setFlashScreen('no')
     setFlashlightEnabled(false)
     await stopFlashlight()
+    setStatus('READY')
+    traceAction('sos_disarm', 'state_result', { alarm: false, morse: 'off' })
   }
 
   const launchRescuePacket = async () => {
@@ -994,11 +1006,9 @@ export default function SOSPanel() {
             </div>
             <button
               type="button"
+              data-no-drag
               onClick={(e) => {
                 e.stopPropagation()
-                // Operator-owned alarm toggle. Reads alarmActive (the
-                // alarm subsystem's own state), not isArmed (rescue
-                // dispatch state) — the two are now decoupled.
                 if (alarmActive) {
                   stopAlarm()
                 } else {
@@ -1020,7 +1030,7 @@ export default function SOSPanel() {
                 cursor: 'pointer',
               }}
             >
-              TEST AUDIBLE ALARM
+              {alarmActive ? 'STOP AUDIBLE ALARM' : 'TEST AUDIBLE ALARM'}
             </button>
             <button
               type="button"
@@ -1049,6 +1059,7 @@ export default function SOSPanel() {
             </button>
             <button
               type="button"
+              data-no-drag
               onClick={(e) => {
                 e.stopPropagation()
                 void disarmAll()

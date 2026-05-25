@@ -15,6 +15,36 @@ export type WeatherResult =
   | { error: string }
 
 const WEATHER_CACHE_KEY = 'titanium_weather_cache_v2'
+const WEATHER_CACHE_KEY_LEGACY = 'titanium_weather_cache_v1'
+
+/** Last-known-good weather for instant panel render (no API key required). */
+export function readCachedWeather(maxAgeMs = 3_600_000): WeatherResult | null {
+  for (const key of [WEATHER_CACHE_KEY, WEATHER_CACHE_KEY_LEGACY]) {
+    try {
+      const raw = localStorage.getItem(key)
+      if (!raw) continue
+      const c = JSON.parse(raw) as Record<string, unknown>
+      if (typeof c.temperature !== 'number') continue
+      const updatedAt = typeof c.updatedAt === 'number' ? c.updatedAt : 0
+      if (maxAgeMs > 0 && Date.now() - updatedAt > maxAgeMs) continue
+      return {
+        temperature: Math.round(c.temperature),
+        humidity: typeof c.humidity === 'number' ? Math.round(c.humidity) : 0,
+        windSpeed: Number(c.windSpeed ?? 0),
+        condition: String(c.condition ?? 'Unknown conditions'),
+        unit: String(c.unit ?? '°F'),
+        windUnit: 'mph',
+        location: String(c.location ?? ''),
+        weatherCode: Number(c.weatherCode ?? -1),
+        updatedAt,
+        timeZone: typeof c.timeZone === 'string' ? c.timeZone : undefined,
+      }
+    } catch {
+      // try next key
+    }
+  }
+  return null
+}
 
 export function weatherDescription(code: number): string {
   const codes: Record<number, string> = {
