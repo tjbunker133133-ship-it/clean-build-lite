@@ -21,6 +21,17 @@ export type CorridorCacheRegion = {
 }
 
 const STORAGE_KEY = 'hud_corridor_cache_v1'
+const RECENT_AREAS_KEY = 'hud_recent_operational_areas_v1'
+const MAP_VIEWPORT_KEY = 'hud_map_viewport_v1'
+const RECENT_AREAS_MAX = 6
+const AREA_DEDUP_MILES = 0.75
+
+export type OperationalAreaSeed = {
+  centerLat: number
+  centerLng: number
+  updatedAt: number
+  source: 'corridor' | 'viewport'
+}
 
 function padBounds(
   route: Array<{ lat: number; lng: number }>,
@@ -73,8 +84,86 @@ export function saveCorridorCacheRegion(region: CorridorCacheRegion): void {
   if (typeof localStorage === 'undefined') return
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(region))
+    saveOperationalAreaSeed({
+      centerLat: region.centerLat,
+      centerLng: region.centerLng,
+      updatedAt: region.updatedAt,
+      source: 'corridor',
+    })
   } catch {
     /* quota / private mode */
+  }
+}
+
+export function loadOperationalAreaSeeds(): OperationalAreaSeed[] {
+  if (typeof localStorage === 'undefined') return []
+  try {
+    const raw = localStorage.getItem(RECENT_AREAS_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .filter((item): item is OperationalAreaSeed => {
+        if (!item || typeof item !== 'object') return false
+        const p = item as Partial<OperationalAreaSeed>
+        return (
+          typeof p.centerLat === 'number' &&
+          Number.isFinite(p.centerLat) &&
+          typeof p.centerLng === 'number' &&
+          Number.isFinite(p.centerLng) &&
+          typeof p.updatedAt === 'number' &&
+          Number.isFinite(p.updatedAt) &&
+          (p.source === 'corridor' || p.source === 'viewport')
+        )
+      })
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, RECENT_AREAS_MAX)
+  } catch {
+    return []
+  }
+}
+
+export function saveOperationalAreaSeed(seed: OperationalAreaSeed): void {
+  if (typeof localStorage === 'undefined') return
+  try {
+    const existing = loadOperationalAreaSeeds()
+    const deduped = existing.filter((item) => {
+      const { miles } = haversineDistance(item.centerLat, item.centerLng, seed.centerLat, seed.centerLng)
+      return miles >= AREA_DEDUP_MILES
+    })
+    const next = [seed, ...deduped].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, RECENT_AREAS_MAX)
+    localStorage.setItem(RECENT_AREAS_KEY, JSON.stringify(next))
+  } catch {
+    /* quota / private mode */
+  }
+}
+
+export function saveOperationalAreaSeedFromViewport(): void {
+  if (typeof localStorage === 'undefined') return
+  try {
+    const raw = localStorage.getItem(MAP_VIEWPORT_KEY)
+    if (!raw) return
+    const p = JSON.parse(raw) as Partial<{
+      lat: number
+      lng: number
+      ts: number
+    }>
+    if (
+      typeof p.lat !== 'number' ||
+      !Number.isFinite(p.lat) ||
+      typeof p.lng !== 'number' ||
+      !Number.isFinite(p.lng)
+    ) {
+      return
+    }
+    saveOperationalAreaSeed({
+      centerLat: p.lat,
+      centerLng: p.lng,
+      updatedAt: typeof p.ts === 'number' && Number.isFinite(p.ts) ? p.ts : Date.now(),
+      source: 'viewport',
+    })
+  } catch {
+    /* ignore parse/storage errors */
   }
 }
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import HudPanel from './HudPanel'
 import { requestMicrophonePermission } from '../lib/devicePermissions'
 import { useHudCommands, type CommandSource } from '../hooks/useHudCommands'
@@ -33,6 +33,19 @@ import {
   stripRepeatedWakePrefix,
   stripWakeAckEchoFromContinuation,
 } from '../lib/voice/normalizeVoiceTranscript'
+import {
+  getVoiceListenProfile,
+  type VoiceListenMode,
+} from '../lib/voice/voiceListenProfile'
+import { useLongPressVoiceArm, useVolumeUpVoiceArm } from '../hooks/useVolumeUpVoiceArm'
+import {
+  armRecognitionIgnoreUntil,
+  isRecognitionOutputHeld,
+  setRecognitionOutputHold,
+  shouldBlockSpeechRecognition,
+  speakHudPhrase,
+  stopVoiceOutputOnly,
+} from '../runtime/voiceAudioArbitration'
 
 type VoiceState = 'sleeping' | 'listening' | 'processing' | 'success' | 'failure'
 
@@ -59,28 +72,6 @@ const WAKE_ACK_SPOKEN = 'Yes.'
 const SANITY_MIN_FINAL_LEN = 2
 const SANITY_MAX_CONTINUATION_WORDS = 6
 const SANITY_MAX_CONTINUATION_CHARS = 60
-
-function speak(text: string): Promise<void> {
-  return new Promise((resolve) => {
-    if (!('speechSynthesis' in window)) {
-      resolve()
-      return
-    }
-    const trimmed = text.trim()
-    if (!trimmed) {
-      resolve()
-      return
-    }
-    const u = new SpeechSynthesisUtterance(trimmed)
-    u.rate = 1
-    const finish = () => resolve()
-    u.onend = finish
-    u.onerror = finish
-    window.speechSynthesis.cancel()
-    window.speechSynthesis.speak(u)
-    window.setTimeout(finish, Math.min(20_000, trimmed.length * 90 + 1500))
-  })
-}
 
 function playChime() {
   try {
@@ -218,11 +209,9 @@ export default function VoicePanel() {
 
   const [voiceState, setVoiceState] = useState<VoiceState>('sleeping')
   const [expanded, setExpanded] = useState(false)
-  // SYSTEM RULE: `armed` IS the SR lifecycle master.
-  // - true  → SpeechRecognition is constructed, started, and listens for "HUD"
-  // - false → SR is fully torn down (rec.stop + listener removal). No background streams.
-  // The "CONTINUOUS ON/OFF" UI button mirrors this single flag.
-  const [armed, setArmed] = useState(false)
+  // SR lifecycle: `off` = mic fully torn down; powerSave / hardListen = armed profiles.
+  const [listenMode, setListenMode] = useState<VoiceListenMode>('off')
+  const armed = listenMode !== 'off'
   const [typed, setTyped] = useState('')
   const [lastHeard, setLastHeard] = useState('')
   // Single SR ownership: the mic button is the ONE control for the SR
@@ -230,7 +219,7 @@ export default function VoicePanel() {
   // so it does not imply a second tap-to-wake mode that competes with
   // continuous mode. The button toggles the same `armed` flag whether
   // continuous mode is on or off.
-  const [statusText, setStatusText] = useState('🎤 HUD (tap to start)')
+  const [statusText, setStatusText] = useState('🔇 Voice OFF — choose a listen mode')
   const [recoveryNonce, setRecoveryNonce] = useState(0)
   const recognitionRef = useRef<any>(null)
   const armedRef = useRef(false)
@@ -249,10 +238,17 @@ export default function VoicePanel() {
    *  when no bare-wake-word ack is pending. Single-shot: cleared on
    *  consume, timeout, disarm, or SR teardown. */
   const pendingWakeUntilRef = useRef<number | null>(null)
-  const ttsBusyRef = useRef(false)
   /** Drop SR finals briefly after command TTS so speaker echo cannot re-trigger parse. */
   const ignoreSrUntilRef = useRef(0)
+  const lastMicStartAtRef = useRef(0)
+  const lastWakePulseAtRef = useRef(0)
+  const scheduleMicRestartRef = useRef<(delayMs?: number) => void>(() => {})
+  const listenModeRef = useRef<VoiceListenMode>('off')
+  const lastParsedFinalRef = useRef({ key: '', at: 0 })
+  const lastBareHudAtRef = useRef(0)
   armedRef.current = armed
+  listenModeRef.current = listenMode
+  const listenProfile = useMemo(() => getVoiceListenProfile(listenMode), [listenMode])
   const parseAndRunRef = useRef<(text: string) => Promise<void>>(async () => {})
   const supportsRec =
     typeof window !== 'undefined' &&
@@ -293,15 +289,95 @@ export default function VoicePanel() {
       armed ? 'disable' : 'disable',
       'VoicePanel.armed-effect',
     )
-  }, [armed])
+  }, [armed, listenMode])
+
+  const hardDisarm = useCallback(() => {
+    stopVoiceOutputOnly('hard-disarm')
+    listenModeRef.current = 'off'
+    setListenMode('off')
+    setVoiceState('sleeping')
+    setStatusText('🔇 Voice OFF')
+    pendingWakeUntilRef.current = null
+    ignoreSrUntilRef.current = 0
+    setRecognitionOutputHold(false)
+    if (restartTimerRef.current != null) {
+      window.clearTimeout(restartTimerRef.current)
+      restartTimerRef.current = null
+    }
+    if (uiResetTimerRef.current != null) {
+      window.clearTimeout(uiResetTimerRef.current)
+      uiResetTimerRef.current = null
+    }
+    const rec = recognitionRef.current
+    if (rec) {
+      try {
+        rec.onstart = null
+        rec.onresult = null
+        rec.onerror = null
+        rec.onend = null
+        rec.stop?.()
+      } catch {
+        // ignore
+      }
+      recognitionRef.current = null
+    }
+    updateVoiceState('inactive_clean')
+    logInfo('VOICE', 'hard-disarm')
+  }, [])
+
+  const requestMicGranted = useCallback(async (): Promise<boolean> => {
+    updateVoiceState('arming')
+    const mic = await requestMicrophonePermission()
+    const permState =
+      mic === 'granted'
+        ? 'granted'
+        : mic === 'denied'
+          ? 'denied'
+          : mic === 'unsupported'
+            ? 'unsupported'
+            : 'prompt'
+    updatePermission('microphone', permState)
+    updateVoiceMeta({ permission: permState })
+    if (mic !== 'granted') {
+      setVoiceState('failure')
+      setStatusText('🎤 Microphone permission needed')
+      updateVoiceState(mic === 'unsupported' ? 'unavailable' : 'blocked', {
+        lastError: `mic permission: ${mic}`,
+      })
+      return false
+    }
+    return true
+  }, [])
+
+  const armListenMode = useCallback(
+    async (mode: 'powerSave' | 'hardListen') => {
+      if (listenMode === mode) return
+      const ok = await requestMicGranted()
+      if (!ok) return
+      listenModeRef.current = mode
+      setListenMode(mode)
+      setRecoveryNonce((n) => n + 1)
+      setVoiceState('listening')
+      setStatusText(
+        mode === 'powerSave'
+          ? '🎤 Power save — say HUD, then command'
+          : '🎤 Hard listen — say HUD weather (one phrase OK)',
+      )
+      logInfo('VOICE', `arm mode=${mode}`)
+    },
+    [listenMode, requestMicGranted],
+  )
 
   /** Transient acknowledgement: centralized snapshot signal → CockpitHudShell CSS pulse.
    * Haptic is dispatched by `recordWakeWordGatePassed` via the centralized
    * runtime broker (capability-checked, throttled, mobile-only). SR/parser/
    * dispatch unchanged. */
   const pulseWake = () => {
+    const now = Date.now()
+    if (now - lastWakePulseAtRef.current < 1500) return
+    lastWakePulseAtRef.current = now
     recordWakeWordGatePassed()
-    playChime()
+    if (listenProfile.chimeOnWake) playChime()
   }
 
   const speakHandsFree = async (
@@ -310,22 +386,33 @@ export default function VoicePanel() {
   ) => {
     const trimmed = text.trim()
     if (!trimmed) return
-    const pauseRecognition = opts?.pauseRecognition !== false
-    ttsBusyRef.current = true
+    const pauseRecognition =
+      opts?.pauseRecognition !== undefined
+        ? opts.pauseRecognition
+        : listenProfile.pauseSrDuringTts
     const rec = recognitionRef.current
     if (pauseRecognition && rec && armedRef.current) {
+      setRecognitionOutputHold(true)
+      if (restartTimerRef.current != null) {
+        window.clearTimeout(restartTimerRef.current)
+        restartTimerRef.current = null
+      }
       try {
         rec.stop()
       } catch {
-        // onend restarts when still armed
+        // onend may fire; output hold blocks immediate mic restart
       }
     }
+    const rate = getDeviceProfile().isIOS ? 0.92 : 0.95
     try {
-      await speak(trimmed)
+      await speakHudPhrase(trimmed, rate)
     } finally {
-      ttsBusyRef.current = false
       if (pauseRecognition) {
-        ignoreSrUntilRef.current = performance.now() + 900
+        setRecognitionOutputHold(false)
+        const cooldownUntil = performance.now() + listenProfile.outputCooldownMs
+        ignoreSrUntilRef.current = cooldownUntil
+        armRecognitionIgnoreUntil(cooldownUntil)
+        if (armedRef.current) scheduleMicRestartRef.current(listenProfile.minRestartGapMs)
       }
     }
   }
@@ -371,10 +458,8 @@ export default function VoicePanel() {
       return
     }
     if (cmd === 'sleep' || cmd === 'voice sleep') {
-      // HARD STOP: tearing down SR is gated on armed===false; the effect
-      // cleanup runs rec.stop() and removes pagehide/visibility listeners.
-      setArmed(false)
-      report('Continuous listening disabled.')
+      hardDisarm()
+      report('Voice off.', true)
       return
     }
     report(res.message, res.ok)
@@ -384,13 +469,18 @@ export default function VoicePanel() {
     const normWake = normalizeForWakeGate(text)
     const norm = normalizeVoiceTranscript(text)
     if (!normWake) return
+    if (shouldBlockSpeechRecognition()) {
+      return
+    }
     if (performance.now() < ignoreSrUntilRef.current) {
       return
     }
-    // Allow follow-up commands while wake ack TTS plays (mic stays open).
-    if (ttsBusyRef.current && pendingWakeUntilRef.current == null && !hasWakeWordPrefix(normWake)) {
+    const nowMs = Date.now()
+    if (normWake === lastParsedFinalRef.current.key && nowMs - lastParsedFinalRef.current.at < 2000) {
       return
     }
+    lastParsedFinalRef.current = { key: normWake, at: nowMs }
+    const activeProfile = getVoiceListenProfile(listenModeRef.current)
 
     // Utterance continuity window: a recent bare "HUD" finalization left
     // a one-shot 2500ms continuation window open. A short, simple
@@ -462,36 +552,34 @@ export default function VoicePanel() {
     )
     logInfo('VOICE', `wake-word.detected phrase="${effective.slice(0, 80)}"`)
     traceAction('wake_word_activation', 'state_result', { detected: true, viaContinuation: consumedContinuation })
-    pulseWake()
-    setVoiceState('listening')
-    updateVoiceState('processing')
     const commandsPart = stripRepeatedWakePrefix(
       effective === WAKE_WORD ? '' : effective.slice(WAKE_WORD.length + 1).trim(),
     )
     const parts = commandsPart.split(/\bthen\b/).map((s) => s.trim()).filter(Boolean)
+
     if (parts.length === 0) {
-      setStatusText('🎤 Listening — say your command')
+      if (nowMs - lastBareHudAtRef.current < 1500) return
+      if (pendingWakeUntilRef.current != null && performance.now() <= pendingWakeUntilRef.current) {
+        return
+      }
+      lastBareHudAtRef.current = nowMs
+      if (!consumedContinuation) pulseWake()
+      setStatusText('🎤 Yes? — say your command')
       setVoiceState('success')
       logInfo('VOICE', 'wake-word.only-detected')
-      void (async () => {
-        await speakHandsFree(WAKE_ACK_SPOKEN, { pauseRecognition: false })
-        pendingWakeUntilRef.current = performance.now() + WAKE_CONTINUATION_MS
-        logInfo('VOICE', `wake-window.open ms=${WAKE_CONTINUATION_MS}`)
-      })()
-      if (uiResetTimerRef.current != null) {
-        window.clearTimeout(uiResetTimerRef.current)
-      }
-      uiResetTimerRef.current = window.setTimeout(() => {
-        uiResetTimerRef.current = null
-        setVoiceState(armedRef.current ? 'listening' : 'sleeping')
-      }, 650)
+      await speakHandsFree(WAKE_ACK_SPOKEN)
+      pendingWakeUntilRef.current = performance.now() + activeProfile.wakeContinuationMs
+      logInfo('VOICE', `wake-window.open ms=${activeProfile.wakeContinuationMs}`)
       updateVoiceState('listening')
       return
     }
+
+    if (!consumedContinuation) pulseWake()
+    if (!consumedContinuation) {
+      await speakHandsFree(WAKE_ACK_SPOKEN)
+    }
+    pendingWakeUntilRef.current = performance.now() + activeProfile.wakeContinuationMs
     for (const p of parts) {
-      // Compose a stable `heard` value per part: "HUD <part>" — preserves
-      // the wake word in the structured log even when multiple commands
-      // are chained via "then".
       await dispatchAndReport(p, 'voice', `${WAKE_WORD} ${p}`)
     }
     if (armedRef.current) updateVoiceState('listening')
@@ -513,21 +601,54 @@ export default function VoicePanel() {
     const rec = new SR()
     recognitionRef.current = rec
     rec.lang = 'en-US'
-    rec.continuous = true
-    // Android Chrome reliability win: interim results allow SR to surface
-    // partial transcripts in ~200-500ms instead of the ~1500ms end-of-
-    // utterance pause. Dispatch is still strictly gated on `isFinal`
-    // below so partial commands cannot misfire.
-    rec.interimResults = true
+    const listen = getVoiceListenProfile(listenModeRef.current)
+    rec.continuous = listen.continuous
+    rec.interimResults = listen.interimResults
 
     let startedOnce = false
-    const MAX_RESTART_ATTEMPTS = 6
-    // Faster first-restart: Android Chrome auto-ends SR after ~5s of silence
-    // even when continuous=true. Treat this as benign rotation, not error,
-    // so the recovery gap is barely noticeable.
-    const BASE_BACKOFF_MS = 250
-    const MAX_BACKOFF_MS = 8000
+    const MAX_RESTART_ATTEMPTS = listen.maxRestartAttempts
+    const BASE_BACKOFF_MS = listen.powerSave ? listen.minRestartGapMs : 400
+    const MAX_BACKOFF_MS = listen.powerSave ? listen.minRestartGapMs : 8000
     let watchdog: number | null = null
+
+    const tryStartRecognition = () => {
+      if (!armedRef.current || shouldBlockSpeechRecognition()) return
+      try {
+        startedOnce = false
+        rec.start()
+        lastMicStartAtRef.current = Date.now()
+        armWatchdog()
+        logInfo('VOICE', 'sr.start')
+      } catch (err) {
+        updateVoiceMeta({
+          lastInterruptionReason: `restart-throw:${(err as Error)?.message ?? 'unknown'}`,
+        })
+        updateVoiceState('degraded', { lastError: 'restart threw' })
+        setVoiceState('failure')
+        setStatusText('🎤 Voice degraded — tap to re-arm')
+        hardDisarm()
+        updateVoiceRecoveryState('failed')
+        logWarn('VOICE', `sr.start threw error=${(err as Error)?.message ?? 'unknown'}`)
+      }
+    }
+
+    const scheduleMicRestart = (requestedDelay = listen.minRestartGapMs) => {
+      if (!armedRef.current) return
+      if (shouldBlockSpeechRecognition()) return
+      if (performance.now() < ignoreSrUntilRef.current) {
+        const wait = ignoreSrUntilRef.current - performance.now() + 200
+        requestedDelay = Math.max(requestedDelay, wait)
+      }
+      const elapsed = Date.now() - lastMicStartAtRef.current
+      const delay = Math.max(0, requestedDelay - elapsed)
+      if (restartTimerRef.current != null) return
+      restartTimerRef.current = window.setTimeout(() => {
+        restartTimerRef.current = null
+        if (!armedRef.current || shouldBlockSpeechRecognition()) return
+        tryStartRecognition()
+      }, delay)
+    }
+    scheduleMicRestartRef.current = scheduleMicRestart
 
     /** Detach all handlers from a recognizer instance so any deferred
      *  events the browser has queued cannot mutate component state after
@@ -556,7 +677,7 @@ export default function VoicePanel() {
           logWarn('VOICE', 'watchdog dead-state timeout=1500ms onstart never fired')
           setVoiceState('failure')
           setStatusText('🎤 Voice unresponsive — tap to retry')
-          setArmed(false)
+          hardDisarm()
         }
       }, 1500)
     }
@@ -571,7 +692,11 @@ export default function VoicePanel() {
         watchdog = null
       }
       setVoiceState('listening')
-      setStatusText('🎤 HUD listening')
+      setStatusText(
+        listen.mode === 'powerSave'
+          ? '🎤 Power save — say HUD, then command'
+          : '🎤 Hard listen — say HUD + command',
+      )
       updateVoiceState('listening')
       logInfo('VOICE', 'sr.onstart listening')
       if (suspendedByLifecycleRef.current) {
@@ -600,8 +725,10 @@ export default function VoicePanel() {
       const anyProgress = finalText.length > 0 || interimText.length > 0
       if (anyProgress) {
         lastRecognitionAtRef.current = Date.now()
-        const heard = formatVoicePhraseForDisplay(finalText || interimText)
-        if (heard) setLastHeard(heard)
+        if (finalText.length > 0) {
+          const heard = formatVoicePhraseForDisplay(finalText)
+          if (heard) setLastHeard(heard)
+        }
         // Treat progress as health: clear the restart-attempt counter so a
         // subsequent natural onend (silence rotation) starts fresh on the
         // backoff curve instead of escalating.
@@ -630,7 +757,7 @@ export default function VoicePanel() {
       setVoiceState('failure')
       setStatusText(denied ? '🎤 Microphone permission denied' : '🎤 Voice recognition error')
       updateVoiceMeta({ lastInterruptionReason: `error:${code}` })
-      setArmed(false)
+      hardDisarm()
       updateVoiceState(denied ? 'blocked' : 'degraded', { lastError: code })
       if (denied) updatePermission('microphone', 'denied')
       updateVoiceRecoveryState('failed')
@@ -655,22 +782,12 @@ export default function VoicePanel() {
         logInfo('VOICE', 'sr.onend hidden-suspend')
         return
       }
-      // Bounded recovery strategy: exponential backoff, capped attempts.
-      restartAttemptsRef.current += 1
-      if (import.meta.env.DEV) {
-        const now = Date.now()
-        const storm = restartStormRef.current
-        if (storm.windowStart === 0 || now - storm.windowStart > 30_000) {
-          storm.windowStart = now
-          storm.count = 1
-        } else {
-          storm.count += 1
-          if (storm.count >= 5 && now - storm.lastLogAt > 15_000) {
-            storm.lastLogAt = now
-            logWarn('VOICE', `restart-storm suspected attemptsIn30s=${storm.count}`)
-          }
-        }
+      if (isRecognitionOutputHeld() || shouldBlockSpeechRecognition()) {
+        logInfo('VOICE', 'sr.onend deferred-output-hold')
+        scheduleMicRestart(listen.outputCooldownMs)
+        return
       }
+      restartAttemptsRef.current += 1
       updateVoiceMeta({ restartAttempts: restartAttemptsRef.current, lastInterruptionReason: 'onend' })
       updateVoiceRecoveryState('recovering')
       updateVoiceState('recovering')
@@ -679,44 +796,22 @@ export default function VoicePanel() {
         updateVoiceState('degraded', { lastError: 'recovery attempts exceeded' })
         setVoiceState('failure')
         setStatusText('🎤 Voice degraded — tap to re-arm')
-        setArmed(false)
+        hardDisarm()
         updateVoiceRecoveryState('failed')
         logWarn('VOICE', `sr.onend recovery-exhausted attempts=${restartAttemptsRef.current}`)
         return
       }
 
-      const backoff = Math.min(MAX_BACKOFF_MS, BASE_BACKOFF_MS * Math.pow(2, restartAttemptsRef.current - 1))
-      if (restartTimerRef.current != null) {
-        window.clearTimeout(restartTimerRef.current)
-        restartTimerRef.current = null
-      }
+      const backoff = listen.powerSave
+        ? listen.minRestartGapMs
+        : Math.min(MAX_BACKOFF_MS, BASE_BACKOFF_MS * Math.pow(2, restartAttemptsRef.current - 1))
       logInfo('VOICE', `sr.onend restart attempt=${restartAttemptsRef.current} backoff=${backoff}ms`)
-      restartTimerRef.current = window.setTimeout(() => {
-        restartTimerRef.current = null
-        if (!armedRef.current) return
-        try {
-          startedOnce = false
-          rec.start()
-          armWatchdog()
-          logInfo('VOICE', `sr.start restart attempt=${restartAttemptsRef.current}`)
-        } catch (err) {
-          updateVoiceMeta({
-            lastInterruptionReason: `restart-throw:${(err as Error)?.message ?? 'unknown'}`,
-          })
-          updateVoiceState('degraded', { lastError: 'restart threw' })
-          setVoiceState('failure')
-          setStatusText('🎤 Voice degraded — tap to re-arm')
-          setArmed(false)
-          updateVoiceRecoveryState('failed')
-          logWarn('VOICE', `sr.start restart-threw error=${(err as Error)?.message ?? 'unknown'}`)
-        }
-      }, backoff)
+      scheduleMicRestart(backoff)
     }
 
     try {
       updateVoiceState('recovering', { lastSrStartAt: Date.now() })
-      rec.start()
-      armWatchdog()
+      tryStartRecognition()
       logInfo('VOICE', 'sr.start initial-arm')
     } catch (err) {
       updateVoiceState('degraded', {
@@ -724,7 +819,7 @@ export default function VoicePanel() {
       })
       setVoiceState('failure')
       setStatusText('🎤 Voice unresponsive — tap to retry')
-      setArmed(false)
+      hardDisarm()
       updateVoiceRecoveryState('failed')
       logWarn('VOICE', `sr.start initial-threw error=${(err as Error)?.message ?? 'unknown'}`)
       return
@@ -826,12 +921,15 @@ export default function VoicePanel() {
         // ignore
       }
       recognitionRef.current = null
+      scheduleMicRestartRef.current = () => {}
+      setRecognitionOutputHold(false)
+      stopVoiceOutputOnly('sr-cleanup')
       logInfo('VOICE', 'sr.cleanup effect-teardown')
       // Reflect the user's intent: arm=false → clean inactive; otherwise we
       // were torn down externally and do not change state here.
       if (!armedRef.current) updateVoiceState('inactive_clean')
     }
-  }, [armed, supportsRec, recoveryNonce])
+  }, [armed, listenMode, supportsRec, recoveryNonce, hardDisarm])
 
   useEffect(() => {
     if (armed) return
@@ -864,42 +962,28 @@ export default function VoicePanel() {
   // Pre-condition for ON: mic permission must be granted.
   // Post-condition for OFF: SR effect cleanup runs (rec.stop + listener
   // removal) — no background listener remains.
-  const toggleVoiceLifecycle = async () => {
-    traceAction('voice_continuous_toggle', 'handler_enter', { armed })
-    if (!armed) {
-      updateVoiceState('arming')
-      traceAction('voice_continuous_toggle', 'async_start', { step: 'request_microphone_permission' })
-      const mic = await requestMicrophonePermission()
-      const permState =
-        mic === 'granted'
-          ? 'granted'
-          : mic === 'denied'
-            ? 'denied'
-            : mic === 'unsupported'
-              ? 'unsupported'
-              : 'prompt'
-      updatePermission('microphone', permState)
-      updateVoiceMeta({ permission: permState })
-      if (mic !== 'granted') {
-        setVoiceState('failure')
-        setStatusText('🎤 Microphone permission needed')
-        updateVoiceState(mic === 'unsupported' ? 'unavailable' : 'blocked', {
-          lastError: `mic permission: ${mic}`,
-        })
-        traceAction('voice_continuous_toggle', 'guard_reject', {
-          reason: 'mic_not_granted',
-          permission: mic,
-        })
-        return
-      }
-    } else {
-      updateVoiceState('inactive_clean')
-    }
-    traceAction('voice_continuous_toggle', 'state_result', { nextArmed: !armed })
-    setArmed((v) => !v)
-    setVoiceState((s) => (s === 'sleeping' ? 'listening' : 'sleeping'))
-    setStatusText((t) => (t.includes('listening') ? '🎤 HUD (tap to start)' : '🎤 HUD listening'))
-  }
+  const armFromHardwareShortcut = useCallback(async () => {
+    traceAction('voice_hardware_hold', 'handler_enter', { mode: listenModeRef.current })
+    if (!supportsRec) return
+    const ok = await requestMicGranted()
+    if (!ok) return
+    listenModeRef.current = 'hardListen'
+    setListenMode('hardListen')
+    setRecoveryNonce((n) => n + 1)
+    await speakHandsFree(WAKE_ACK_SPOKEN)
+    pendingWakeUntilRef.current =
+      performance.now() + getVoiceListenProfile('hardListen').wakeContinuationMs
+    setStatusText('🎤 Yes? — say your command')
+    logInfo('VOICE', 'hardware-hold.armed-hardListen')
+  }, [supportsRec, requestMicGranted])
+
+  useVolumeUpVoiceArm(() => {
+    void armFromHardwareShortcut()
+  }, { enabled: isMobileHud && supportsRec })
+
+  const longPressArm = useLongPressVoiceArm(() => {
+    void armFromHardwareShortcut()
+  })
 
   return (
     <HudPanel
@@ -911,24 +995,110 @@ export default function VoicePanel() {
       accent={voiceState === 'failure' ? '#ff3b4d' : undefined}
     >
       <div style={{ display: 'grid', gap: touchGapMd }}>
-        <button
-          type="button"
-          data-no-drag
-          onClick={toggleVoiceLifecycle}
+        <div
           style={{
-            minHeight: btnMin(40),
+            minHeight: btnMin(36),
+            padding: '10px 12px',
             borderRadius: 8,
-            border: '1px solid rgba(125,255,138,0.5)',
-            background: armed ? 'rgba(125,255,138,0.18)' : 'rgba(10,12,13,0.8)',
+            border: `1px solid ${armed ? 'rgba(125,255,138,0.45)' : 'rgba(199,206,198,0.22)'}`,
+            background: 'rgba(10,12,13,0.8)',
             color: armed ? '#7dff8a' : 'var(--cockpit-panel-subtle)',
-            boxShadow: armed ? '0 0 10px rgba(125,255,138,0.35)' : 'none',
-            cursor: 'pointer',
             fontSize: labelPx(11),
-            letterSpacing: '0.1em',
+            letterSpacing: '0.06em',
+            lineHeight: 1.45,
           }}
         >
-          {expanded ? '🎤 HUD (tap to start)' : statusText}
-        </button>
+          {statusText}
+        </div>
+
+        <div style={{ display: 'flex', gap: touchGapSm, flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            data-no-drag
+            onClick={hardDisarm}
+            style={{
+              flex: '1 1 30%',
+              minHeight: btnMin(40),
+              borderRadius: 8,
+              border: '1px solid rgba(255,80,90,0.55)',
+              background: listenMode === 'off' ? 'rgba(255,80,90,0.2)' : 'rgba(10,12,13,0.85)',
+              color: '#ff8a92',
+              cursor: 'pointer',
+              fontSize: labelPx(10),
+              fontWeight: 700,
+              letterSpacing: '0.08em',
+            }}
+          >
+            HARD OFF
+          </button>
+          <button
+            type="button"
+            data-no-drag
+            onClick={() => void armListenMode('powerSave')}
+            style={{
+              flex: '1 1 30%',
+              minHeight: btnMin(40),
+              borderRadius: 8,
+              border:
+                listenMode === 'powerSave'
+                  ? '1px solid rgba(125,255,138,0.65)'
+                  : '1px solid rgba(199,206,198,0.28)',
+              background:
+                listenMode === 'powerSave' ? 'rgba(125,255,138,0.16)' : 'rgba(10,12,13,0.8)',
+              color: listenMode === 'powerSave' ? '#7dff8a' : 'var(--cockpit-panel-subtle)',
+              cursor: 'pointer',
+              fontSize: labelPx(10),
+              fontWeight: 700,
+              letterSpacing: '0.08em',
+            }}
+          >
+            POWER SAVE
+          </button>
+          <button
+            type="button"
+            data-no-drag
+            onClick={() => void armListenMode('hardListen')}
+            style={{
+              flex: '1 1 30%',
+              minHeight: btnMin(40),
+              borderRadius: 8,
+              border:
+                listenMode === 'hardListen'
+                  ? '1px solid rgba(125,255,138,0.65)'
+                  : '1px solid rgba(199,206,198,0.28)',
+              background:
+                listenMode === 'hardListen' ? 'rgba(125,255,138,0.16)' : 'rgba(10,12,13,0.8)',
+              color: listenMode === 'hardListen' ? '#7dff8a' : 'var(--cockpit-panel-subtle)',
+              cursor: 'pointer',
+              fontSize: labelPx(10),
+              fontWeight: 700,
+              letterSpacing: '0.08em',
+            }}
+          >
+            HARD LISTEN
+          </button>
+        </div>
+
+        {isMobileHud && supportsRec ? (
+          <button
+            type="button"
+            data-no-drag
+            {...longPressArm}
+            style={{
+              minHeight: btnMin(40),
+              borderRadius: 8,
+              border: '1px solid rgba(199,206,198,0.35)',
+              background: 'rgba(10,12,13,0.85)',
+              color: '#c5cdc5',
+              cursor: 'pointer',
+              fontSize: labelPx(10),
+              letterSpacing: '0.08em',
+              touchAction: 'none',
+            }}
+          >
+            Hold 3s here → Hard listen + &quot;Yes?&quot;
+          </button>
+        ) : null}
 
         <div style={{ display: 'flex', gap: touchGapMd }}>
           <button
@@ -948,26 +1118,6 @@ export default function VoicePanel() {
             }}
           >
             {expanded ? 'HIDE COMMANDS' : 'SHOW COMMAND LIST'}
-          </button>
-          <button
-            type="button"
-            data-no-drag
-            onClick={toggleVoiceLifecycle}
-            aria-label={armed ? 'Voice lifecycle on, tap to turn off' : 'Voice lifecycle off, tap to turn on'}
-            style={{
-              minHeight: btnMin(34),
-              borderRadius: 8,
-              border: armed
-                ? '1px solid rgba(125,255,138,0.6)'
-                : '1px solid rgba(199,206,198,0.28)',
-              background: armed ? 'rgba(125,255,138,0.16)' : 'rgba(10,12,13,0.8)',
-              color: armed ? '#7dff8a' : 'var(--cockpit-panel-subtle)',
-              cursor: 'pointer',
-              fontSize: labelPx(10),
-              letterSpacing: '0.08em',
-            }}
-          >
-            {armed ? 'CONTINUOUS ON' : 'CONTINUOUS OFF'}
           </button>
         </div>
 
@@ -1020,11 +1170,17 @@ export default function VoicePanel() {
             }}
           >
             <div style={{ padding: '6px 8px', borderRadius: 8, background: 'rgba(10,12,13,0.55)' }}>
-              Wake word: <strong style={{ color: '#e2eae2' }}>HUD</strong> (say the word, not spelled out).
-              If SR hears &quot;hi&quot;, it is treated as HUD. Example:{' '}
-              <span style={{ fontFamily: 'var(--font-mono, monospace)', color: '#e2eae2' }}>HUD weather</span>{' '}
-              or say <span style={{ fontFamily: 'var(--font-mono, monospace)', color: '#e2eae2' }}>HUD</span>, wait
-              for &quot;Yes&quot;, then <span style={{ fontFamily: 'var(--font-mono, monospace)', color: '#e2eae2' }}>weather</span>.
+              <div style={{ marginBottom: 6, color: '#aeb8ae' }}>
+                <strong style={{ color: '#e2eae2' }}>HARD OFF</strong> stops the mic completely.{' '}
+                <strong style={{ color: '#e2eae2' }}>POWER SAVE</strong> rests the mic between phrases.{' '}
+                <strong style={{ color: '#e2eae2' }}>HARD LISTEN</strong> keeps the mic ready for hands-free
+                (&quot;HUD weather&quot; in one phrase is OK).
+              </div>
+              Wake word: <strong style={{ color: '#e2eae2' }}>HUD</strong>. Example one breath:{' '}
+              <span style={{ fontFamily: 'var(--font-mono, monospace)', color: '#e2eae2' }}>HUD weather</span>
+              — or <span style={{ fontFamily: 'var(--font-mono, monospace)', color: '#e2eae2' }}>HUD</span> → Yes? →{' '}
+              <span style={{ fontFamily: 'var(--font-mono, monospace)', color: '#e2eae2' }}>weather</span>.
+              Volume-up 3s rarely works in mobile browsers — use the hold button above.
               <div style={{ marginTop: 6, fontSize: labelPx(10), color: 'var(--cockpit-panel-subtle)' }}>
                 Last heard: {lastHeard || '—'}
               </div>

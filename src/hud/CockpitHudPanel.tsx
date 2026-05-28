@@ -92,6 +92,11 @@ const IOS_RO_DIM_EPS_PX = 4
 // reject the very first move event.
 const MOBILE_PREDRAG_TOLERANCE_PX = 14
 const MOBILE_DOUBLE_TAP_MS = 250
+/** iOS field HUD: wider peek + forgiving double-tap undock on docked strip/header. */
+const IOS_DOCK_REVEAL_MIN_PX = 102
+const IOS_DOCK_UNDOCK_SWIPE_PX = 8
+const IOS_DOCK_DOUBLE_TAP_MS = 380
+const IOS_DOCK_DOUBLE_TAP_SLOP_PX = 40
 
 function dockBadge(panelId: string, title: string): { icon: string; abbr: string } {
   const id = panelId.toLowerCase()
@@ -270,11 +275,73 @@ export default function CockpitHudPanel({
   const showMobileHeaderExtras = false
   const showCompactFieldHeaderExtras = isMobile
   const isCoarsePointer = profile.isCoarsePointer
-  const mobileTopInset = useMemo(() => cockpitMobileTopInset(), [])
-  const mobileSideInsets = useMemo(() => {
-    const s = cockpitSafeAreaInsets()
-    return { left: s.left, right: s.right }
-  }, [])
+  const [mobileViewportInsets, setMobileViewportInsets] = useState(() => {
+    const safe = cockpitSafeAreaInsets()
+    return {
+      topInset: cockpitMobileTopInset(safe),
+      leftInset: safe.left,
+      rightInset: safe.right,
+    }
+  })
+  const mobileTopInset = mobileViewportInsets.topInset
+  const mobileSideInsets = useMemo(
+    () => ({ left: mobileViewportInsets.leftInset, right: mobileViewportInsets.rightInset }),
+    [mobileViewportInsets.leftInset, mobileViewportInsets.rightInset],
+  )
+  useEffect(() => {
+    if (!isMobile) return
+    let rafId: number | null = null
+    const recalcInsets = () => {
+      const safe = cockpitSafeAreaInsets()
+      const next = {
+        topInset: cockpitMobileTopInset(safe),
+        leftInset: safe.left,
+        rightInset: safe.right,
+      }
+      setMobileViewportInsets((prev) => {
+        if (
+          prev.topInset === next.topInset &&
+          prev.leftInset === next.leftInset &&
+          prev.rightInset === next.rightInset
+        ) {
+          return prev
+        }
+        return next
+      })
+    }
+    const scheduleRecalc = () => {
+      if (rafId != null) return
+      rafId = window.requestAnimationFrame(() => {
+        rafId = null
+        recalcInsets()
+      })
+    }
+    const onVisibility = () => {
+      if (document.visibilityState !== 'visible') return
+      scheduleRecalc()
+    }
+    const vv = window.visualViewport
+    vv?.addEventListener('resize', scheduleRecalc)
+    vv?.addEventListener('scroll', scheduleRecalc)
+    window.addEventListener('resize', scheduleRecalc)
+    window.addEventListener('orientationchange', scheduleRecalc)
+    window.addEventListener('pageshow', scheduleRecalc)
+    window.addEventListener('fullscreenchange', scheduleRecalc)
+    document.addEventListener('visibilitychange', onVisibility)
+    recalcInsets()
+    return () => {
+      vv?.removeEventListener('resize', scheduleRecalc)
+      vv?.removeEventListener('scroll', scheduleRecalc)
+      window.removeEventListener('resize', scheduleRecalc)
+      window.removeEventListener('orientationchange', scheduleRecalc)
+      window.removeEventListener('pageshow', scheduleRecalc)
+      window.removeEventListener('fullscreenchange', scheduleRecalc)
+      document.removeEventListener('visibilitychange', onVisibility)
+      if (rafId != null) {
+        window.cancelAnimationFrame(rafId)
+      }
+    }
+  }, [isMobile])
   const mobileTapMin = touchMinTarget(isMobile)
   const mobileDragHoldMs = mobileFieldHud ? 20 : MOBILE_DRAG_HOLD_MS
   const mobilePredragTolerancePx = mobileFieldHud ? 24 : MOBILE_PREDRAG_TOLERANCE_PX
@@ -288,7 +355,9 @@ export default function CockpitHudPanel({
         : EDGE_DOCK_ZONE_PX
   const panelSnapThreshold = isIOSWebKit ? 14 : isCoarsePointer ? 12 : PANEL_SNAP_THRESHOLD_PX
   const dockRelockGuard = isIOSWebKit ? 96 : isCoarsePointer ? 64 : DOCK_RELOCK_GUARD_PX
-  const dockUndockSwipe = isIOSWebKit ? 12 : DOCK_UNDOCK_SWIPE_PX
+  const dockUndockSwipe = isIOSWebKit ? IOS_DOCK_UNDOCK_SWIPE_PX : DOCK_UNDOCK_SWIPE_PX
+  const iosDockDoubleTapMs = IOS_DOCK_DOUBLE_TAP_MS
+  const iosDockDoubleTapSlopPx = IOS_DOCK_DOUBLE_TAP_SLOP_PX
   const minWidthEffective = isMobile ? Math.max(120, minWidth - 20) : minWidth
   const minHeightEffective = isMobile ? Math.max(96, minHeight - 16) : minHeight
   const mobileFocusBoost = isMobile && dragMode !== 'none' ? 1000 : 0
@@ -1234,8 +1303,45 @@ export default function CockpitHudPanel({
     }
 
     if (docked) {
-      // Mobile/iOS: undock only via the dock strip (tap/swipe) — header tap caused accidental pull-out.
-      if (isMobile) {
+      // iOS field HUD: single header tap only raises z-order; double-tap undocks (forgiving window/slop).
+      if (iosFieldHud) {
+        const now = Date.now()
+        const lastTap = mobileLastTapRef.current
+        const isDoubleTap =
+          lastTap != null &&
+          now - lastTap.ts <= iosDockDoubleTapMs &&
+          Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) <= iosDockDoubleTapSlopPx
+        mobileLastTapRef.current = { ts: now, x: e.clientX, y: e.clientY }
+        if (isDoubleTap) {
+          pendingFloatingDefaultSizeRef.current = true
+          const nw = DEFAULT_FLOATING_PANEL_SIZE.w
+          const { vw, vh } = viewportSize()
+          const mobileTargetW = Math.round(vw * MOBILE_UNDOCK_WIDTH_FRACTION)
+          const nwFinal = Math.max(minWidth, Math.min(mobileTargetW, Math.max(minWidth, vw - 20)))
+          const spawnInset = 12
+          const baseXRaw =
+            dockSide === 'right'
+              ? Math.max(0, vw - nwFinal - DOCK_EDGE_INSET_PX - spawnInset)
+              : DOCK_EDGE_INSET_PX + spawnInset
+          const baseX = Math.max(0, Math.min(baseXRaw, vw - nwFinal))
+          const baseY = Math.max(36, Math.min(posRef.current.y, vh - Math.max(minHeight, sizeRef.current.h ?? minHeight)))
+          setDockedGuarded(false, 'controller')
+          setMinimized(false)
+          setDockPreview(null)
+          undockedAt.current = { x: baseX, y: baseY }
+          safeUpdatePanel(panelId, {
+            docked: false,
+            minimized: false,
+            dockSide,
+            x: baseX,
+            y: baseY,
+          })
+          const next = { x: baseX, y: baseY }
+          posRef.current = next
+          setPos(next)
+          e.preventDefault()
+          return
+        }
         raisePanel(panelId)
         return
       }
@@ -1554,7 +1660,7 @@ export default function CockpitHudPanel({
       ? Math.max(DOCK_VISIBLE_STRIP_PX, 104)
       : DOCK_VISIBLE_STRIP_PX
   const dockReveal =
-    isMobile && isIOSWebKit ? Math.max(dockRevealBase, 88) : dockRevealBase
+    isMobile && isIOSWebKit ? Math.max(dockRevealBase, IOS_DOCK_REVEAL_MIN_PX) : dockRevealBase
   // Keep dock strip metrics aligned with committed context layout to avoid
   // per-panel height divergence that can visually overlap docked lanes.
   const committedSelf = panels[panelId]
@@ -2090,7 +2196,15 @@ export default function CockpitHudPanel({
         <button
           type="button"
           aria-label={`Undock ${title}`}
-          title={dockSide === 'left' ? 'Tap/click or swipe right to undock' : 'Tap/click or swipe left to undock'}
+          title={
+            isIOSWebKit
+              ? dockSide === 'left'
+                ? 'Tap strip, double-tap badge, or swipe right to undock'
+                : 'Tap strip, double-tap badge, or swipe left to undock'
+              : dockSide === 'left'
+                ? 'Tap/click or swipe right to undock'
+                : 'Tap/click or swipe left to undock'
+          }
           onPointerDown={onDockPointerDown}
           onPointerMove={onDockPointerMove}
           onPointerUp={onDockPointerUp}

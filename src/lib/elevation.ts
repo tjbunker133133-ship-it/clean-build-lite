@@ -7,10 +7,14 @@ type Cached = {
   at: number
 }
 
-export async function fetchElevationMeters(lat: number, lng: number): Promise<number | null> {
+export async function fetchElevationMeters(
+  lat: number,
+  lng: number,
+  signal?: AbortSignal,
+): Promise<number | null> {
   try {
     const url = `https://api.open-meteo.com/v1/elevation?latitude=${lat.toFixed(6)}&longitude=${lng.toFixed(6)}`
-    const res = await fetch(url, { cache: 'no-store' })
+    const res = await fetch(url, { cache: 'no-store', signal })
     if (!res.ok) return null
     const data = await res.json()
     const m = Number(data?.elevation?.[0])
@@ -22,7 +26,10 @@ export async function fetchElevationMeters(lat: number, lng: number): Promise<nu
       // ignore cache write errors
     }
     return m
-  } catch {
+  } catch (err) {
+    if (signal?.aborted || (err instanceof DOMException && err.name === 'AbortError')) {
+      throw err
+    }
     try {
       const raw = localStorage.getItem(CACHE_KEY)
       if (!raw) return null

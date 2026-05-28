@@ -10,16 +10,23 @@ const VOICE_DIRECTORY_CMDS = [
   'zoom in',
   'zoom out',
   'status',
+  'situation',
   'add pin',
+  'next waypoint',
   'route stats',
   'reset',
+  'streets map',
+  'topo map',
+  'outdoor map',
+  'satellite map',
   'weather',
+  'weather refresh',
   'night',
   'low light',
   'bright',
 ] as const
 
-const STUB_COMMANDS = VOICE_DIRECTORY_CMDS.map((cmd) => ({
+const STUB_COMMANDS = [...VOICE_DIRECTORY_CMDS].map((cmd) => ({
   id: cmd,
   label: cmd,
   aliases: [] as string[],

@@ -58,7 +58,56 @@ describe('deviceProfile iOS detection', () => {
     const p = refreshDeviceProfile()
     expect(p.isIOS).toBe(false)
     expect(p.isAndroid).toBe(true)
+    expect(p.type).toBe('mobile')
     expect(isIosFieldHud()).toBe(false)
     expect(isMobileFieldHud()).toBe(true)
+  })
+
+  it('does not classify typical Android phone viewport as tablet', () => {
+    installViewport(
+      'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36',
+      412,
+      915,
+    )
+    const p = refreshDeviceProfile()
+    expect(p.type).toBe('mobile')
+    expect(p.interactionMode).toBe('mobile')
+  })
+
+  it('classifies large Android tablet viewport as tablet when UA lacks Mobile', () => {
+    installViewport(
+      'Mozilla/5.0 (Linux; Android 13; SM-X900) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+      800,
+      1280,
+    )
+    const p = refreshDeviceProfile()
+    expect(p.type).toBe('tablet')
+    expect(p.interactionMode).toBe('mobile')
+  })
+
+  it('classifies Android tablet with Mobile token when screen is tablet-sized', () => {
+    installViewport(
+      'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36',
+      800,
+      1280,
+    )
+    const p = refreshDeviceProfile()
+    expect(p.type).toBe('tablet')
+    expect(p.interactionMode).toBe('mobile')
+  })
+
+  it('updates orientation when viewport dimensions swap (landscape)', () => {
+    installViewport(
+      'Mozilla/5.0 (Linux; Android 13; SM-X900) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+      800,
+      1280,
+    )
+    expect(refreshDeviceProfile().orientation).toBe('portrait')
+    installViewport(
+      'Mozilla/5.0 (Linux; Android 13; SM-X900) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+      1280,
+      800,
+    )
+    expect(refreshDeviceProfile().orientation).toBe('landscape')
   })
 })

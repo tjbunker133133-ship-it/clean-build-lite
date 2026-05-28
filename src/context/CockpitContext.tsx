@@ -322,9 +322,10 @@ function loadState(): StoredState | null {
 
 function detectDevicePreset(): DevicePreset {
   const profile = getDeviceProfile()
-  if (profile.type === 'tablet') return 'tablet'
   if (profile.isIOS && profile.type === 'mobile') return 'iphone'
   if (profile.isAndroid && profile.type === 'mobile') return 'android'
+  if (profile.type === 'tablet') return 'tablet'
+  if (profile.isAndroid) return 'android'
   return 'desktop'
 }
 
@@ -666,6 +667,8 @@ interface CockpitContextValue {
   mapInteractionBlocked: boolean
   setMapInteractionBlocked: (v: boolean) => void
   applyDeviceOptimization: () => void
+  /** Apply full device tuning (prefs + mobile dock layout) and persist explicit choice. */
+  applyDevicePreset: (device: DevicePreset) => void
 }
 
 const CockpitContext = createContext<CockpitContextValue | null>(null)
@@ -733,14 +736,7 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
     mq.addEventListener?.('change', apply)
     return () => mq.removeEventListener?.('change', apply)
   }, [])
-  const applyDeviceOptimization = useCallback(() => {
-    const device = detectDevicePreset()
-    const patch = deviceOptimizationPrefs(device)
-    setPrefs((prev) => {
-      const next = { ...prev, ...patch }
-      saveState(panels, next)
-      return next
-    })
+  const persistDeviceTuneChoice = useCallback((device: DevicePreset) => {
     try {
       localStorage.setItem(
         getDeviceTuneStorageKey(),
@@ -749,7 +745,39 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
     } catch {
       /* ignore */
     }
-  }, [panels])
+  }, [])
+
+  const applyDevicePreset = useCallback(
+    (device: DevicePreset) => {
+      const opt = deviceOptimizationPrefs(device)
+      const run = firstRunPreset(device)
+      const isMobileScope = getDeviceProfile().interactionMode === 'mobile'
+      const panelPatches = isMobileScope ? run.panelPatches : {}
+
+      setPrefs((prev) => {
+        const nextPrefs = { ...prev, ...opt, ...run.prefs }
+        if (Object.keys(panelPatches).length > 0) {
+          setPanels((prevPanels) => {
+            const nextPanels = normalizeNoOverlapLayout(
+              { ...prevPanels, ...panelPatches },
+              panelGapPx(nextPrefs),
+            )
+            saveState(nextPanels, nextPrefs)
+            return nextPanels
+          })
+        } else {
+          saveState(panels, nextPrefs)
+        }
+        return nextPrefs
+      })
+      persistDeviceTuneChoice(device)
+    },
+    [panels, persistDeviceTuneChoice],
+  )
+
+  const applyDeviceOptimization = useCallback(() => {
+    applyDevicePreset(detectDevicePreset())
+  }, [applyDevicePreset])
 
   useEffect(() => {
     let alreadyApplied = false
@@ -1240,6 +1268,7 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
       mapInteractionBlocked,
       setMapInteractionBlocked,
       applyDeviceOptimization,
+      applyDevicePreset,
     }),
     [
       panels,
@@ -1266,6 +1295,7 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
       mapInteractionBlocked,
       setMapInteractionBlocked,
       applyDeviceOptimization,
+      applyDevicePreset,
     ],
   )
 

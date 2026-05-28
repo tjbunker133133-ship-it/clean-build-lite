@@ -111,13 +111,25 @@ function computeProfile(): DeviceProfile {
     (navigator as Navigator & { standalone?: boolean }).standalone === true
   const isPWA = isStandalone
 
-  // Tablet = touch + intermediate short-edge (700–1100). Otherwise mobile if
-  // touch+compact, else desktop.
-  const isTabletLike = isTouch && shortEdge >= 700 && shortEdge <= 1100
+  // Field-first: Android phones must not classify as tablet. Many tablets ship
+  // a phone-style "Mobile" token — large touch screens override that UA hint.
+  const isLargeTouchAndroid =
+    isAndroid && isTouch && shortEdge >= 600 && longEdge >= 900
+  const isAndroidPhone =
+    isAndroid &&
+    !isLargeTouchAndroid &&
+    (/Mobile\b/i.test(ua) || shortEdge < 600)
+  const isTabletLike =
+    !isAndroidPhone &&
+    isTouch &&
+    shortEdge >= 600 &&
+    longEdge >= 900 &&
+    (isLargeTouchAndroid || shortEdge >= 768)
   const isCompact = width < 900
 
   let type: DeviceType
   if (isTabletLike) type = 'tablet'
+  else if (isAndroid && isTouch) type = 'mobile'
   else if (isTouch && isCompact) type = 'mobile'
   else type = 'desktop'
 

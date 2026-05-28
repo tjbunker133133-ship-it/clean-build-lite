@@ -5,7 +5,8 @@ import { getDeviceProfile } from '../runtime/deviceProfile'
 import { touchFontSm, touchGapMd, touchGapSm, touchMinTarget } from './tokens'
 
 export default function PresetPanel() {
-  const { setScreenHue, setDisplayTuning, updatePanel, applyDeviceOptimization, devicePreset } = useCockpit()
+  const { setScreenHue, setDisplayTuning, updatePanel, applyDeviceOptimization, applyDevicePreset, devicePreset } =
+    useCockpit()
   const isMobile = getDeviceProfile().interactionMode === 'mobile'
   const fontSm = touchFontSm(isMobile)
   const gapMd = touchGapMd(isMobile)
@@ -38,76 +39,6 @@ export default function PresetPanel() {
     setDisplayTuning({ red_hue_rotate: -64, red_saturation: 0.52, red_brightness: 0.64, panel_gap_px: 0 })
     updatePanel('voice', { x: 1240, y: 280, docked: false })
     updatePanel('situation', { x: 1240, y: 60, docked: false })
-  }
-
-  const applyIPhonePreset = () => {
-    setScreenHue('low_light')
-    setDisplayTuning({
-      glass_intensity: 0.34,
-      panel_opacity: 0.48,
-      panel_gap_px: 0,
-      low_hud_brightness: 0.92,
-      low_map_brightness: 0.16,
-      red_hue_rotate: -60,
-      red_saturation: 0.5,
-      red_brightness: 0.66,
-    })
-    updatePanel('situation', { x: 940, y: 60, docked: false, minimized: false })
-    updatePanel('voice', { x: 940, y: 260, docked: false, minimized: false })
-    updatePanel('sos', { x: 940, y: 470, docked: false, minimized: false })
-  }
-
-  const applyAndroidPreset = () => {
-    setScreenHue('low_light')
-    setDisplayTuning({
-      glass_intensity: 0.42,
-      panel_opacity: 0.52,
-      panel_gap_px: 0,
-      low_hud_brightness: 0.96,
-      low_map_brightness: 0.14,
-      red_hue_rotate: -62,
-      red_saturation: 0.54,
-      red_brightness: 0.68,
-    })
-    updatePanel('situation', { x: 980, y: 60, docked: false, minimized: false })
-    updatePanel('voice', { x: 980, y: 280, docked: false, minimized: false })
-    updatePanel('sos', { x: 980, y: 500, docked: false, minimized: false })
-  }
-
-  const applyTabletPreset = () => {
-    setScreenHue('bright_day')
-    setDisplayTuning({
-      glass_intensity: 0.5,
-      panel_opacity: 0.5,
-      panel_gap_px: 0,
-      low_hud_brightness: 0.9,
-      low_map_brightness: 0.16,
-      red_hue_rotate: -62,
-      red_saturation: 0.52,
-      red_brightness: 0.66,
-    })
-    updatePanel('layers', { x: 16, y: 60, w: 280, docked: false, minimized: false })
-    updatePanel('waypoints', { x: 20, y: 420, docked: false, minimized: false })
-    updatePanel('voice', { x: 1180, y: 280, docked: false, minimized: false })
-    updatePanel('sos', { x: 1180, y: 520, docked: false, minimized: false })
-  }
-
-  const applyWindowsPreset = () => {
-    setScreenHue('bright_day')
-    setDisplayTuning({
-      glass_intensity: 0.46,
-      panel_opacity: 0.5,
-      panel_gap_px: 0,
-      low_hud_brightness: 0.92,
-      low_map_brightness: 0.15,
-      red_hue_rotate: -62,
-      red_saturation: 0.52,
-      red_brightness: 0.66,
-    })
-    updatePanel('layers', { x: 16, y: 60, w: 300, docked: false, minimized: false })
-    updatePanel('waypoints', { x: 20, y: 420, w: 340, docked: false, minimized: false })
-    updatePanel('situation', { x: 980, y: 260, w: 320, docked: false, minimized: false })
-    updatePanel('voice', { x: 980, y: 500, w: 340, docked: false, minimized: false })
   }
 
   const setEdgeConnectSpacing = () => {
@@ -160,16 +91,16 @@ export default function PresetPanel() {
         <div style={{ fontSize: fontSm, letterSpacing: '0.1em', color: '#a8b2aa' }}>
           DEVICE TUNING
         </div>
-        <button type="button" data-no-drag onClick={applyIPhonePreset} style={btn}>
+        <button type="button" data-no-drag onClick={() => applyDevicePreset('iphone')} style={btn}>
           IPHONE
         </button>
-        <button type="button" data-no-drag onClick={applyAndroidPreset} style={btn}>
+        <button type="button" data-no-drag onClick={() => applyDevicePreset('android')} style={btn}>
           ANDROID
         </button>
-        <button type="button" data-no-drag onClick={applyTabletPreset} style={btn}>
+        <button type="button" data-no-drag onClick={() => applyDevicePreset('tablet')} style={btn}>
           TABLET
         </button>
-        <button type="button" data-no-drag onClick={applyWindowsPreset} style={btn}>
+        <button type="button" data-no-drag onClick={() => applyDevicePreset('desktop')} style={btn}>
           WINDOWS
         </button>
         <button type="button" data-no-drag onClick={applyDeviceOptimization} style={btn}>

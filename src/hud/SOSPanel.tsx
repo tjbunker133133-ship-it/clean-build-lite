@@ -4,6 +4,7 @@ import { useGPS } from '../hooks/useGPS'
 import { useAppContext } from '../context/AppContext'
 import { useCockpit } from '../context/CockpitContext'
 import { emitHaptic } from '../runtime/haptics'
+import { registerHudAudioStopListener, stopAllHudAudio } from '../runtime/voiceAudioArbitration'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 import { buildRescuePacket, rescuePacketDevLogSummary } from '../lib/rescue/buildRescuePacket'
 import {
@@ -215,10 +216,13 @@ export default function SOSPanel() {
     gainRef.current = null
     compRef.current = null
     try {
-      if (ctx && ctx.state === 'running') void ctx.suspend()
+      if (ctx && ctx.state !== 'closed') {
+        void ctx.close()
+      }
     } catch {
       // noop
     }
+    audioCtxRef.current = null
     setAlarmActive(false)
     setStatus('ALARM OFF')
   }
@@ -551,7 +555,17 @@ export default function SOSPanel() {
     setHoldProgress((v) => (v >= 1 ? 1 : 0))
   }
 
+  const stopAlarmRef = useRef(stopAlarm)
+  stopAlarmRef.current = stopAlarm
+
+  useEffect(() => {
+    return registerHudAudioStopListener(() => {
+      stopAlarmRef.current()
+    })
+  }, [])
+
   const disarmAll = async () => {
+    stopAllHudAudio('sos-disarm')
     if (launchTimerRef.current) {
       window.clearInterval(launchTimerRef.current)
       launchTimerRef.current = null
@@ -565,7 +579,6 @@ export default function SOSPanel() {
     setHolding(false)
     setMode('off')
     setHoldProgress(0)
-    stopAlarm()
     setMorsePattern('off')
     morseStopRef.current = true
     setFlashInvert(false)

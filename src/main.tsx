@@ -69,8 +69,16 @@ logInfo('RUNTIME', 'boot', {
 })
 
 if (typeof document !== 'undefined') {
-  document.title = `HUD [${import.meta.env.VITE_GIT_COMMIT || 'dev'}]`
-  document.title = document.title + ' [' + __BUILD_ID__.slice(11, 19) + ']'
+  const inStandalone =
+    window.matchMedia?.('(display-mode: standalone)').matches ||
+    (navigator as Navigator & { standalone?: boolean }).standalone === true
+  if (inStandalone) {
+    // Keep Android task switcher labeling product-like in installed mode.
+    document.title = 'Signal One HUD'
+  } else {
+    document.title = `HUD [${import.meta.env.VITE_GIT_COMMIT || 'dev'}]`
+    document.title = document.title + ' [' + __BUILD_ID__.slice(11, 19) + ']'
+  }
 }
 
 if (import.meta.env.PROD) {

@@ -8,10 +8,14 @@ export function collapseSpelledWakeWord(text: string): string {
   return text.replace(/\bh\s+u\s+d\b/gi, 'hud')
 }
 
-/** Web Speech often hears "hood" / "hut" instead of "hud" — wake gate only. */
+/** SR homophones for the wake token — wake gate only (not general command text). */
+const WAKE_HOMOPHONE_RE = /\b(hud|hi|hood|hut|had|hot)\b/
+
+/** Web Speech often hears "hi" / "hood" / "hut" instead of "hud" — wake gate only. */
 export function normalizeWakeHomophones(text: string): string {
   let s = text.trim()
   if (!s) return s
+  s = s.replace(/^hi\b/, 'hud')
   s = s.replace(/^hood\b/, 'hud')
   s = s.replace(/^hut\b/, 'hud')
   s = s.replace(/^had\b/, 'hud')
@@ -39,10 +43,10 @@ export function hasWakeWordPrefix(norm: string, wakeWord = 'hud'): boolean {
 
 /** SR often prefixes unrelated words before/after "HUD"; gate from first wake token. */
 export function sliceFromFirstWakeToken(norm: string, wakeWord = 'hud'): string | null {
-  const re = new RegExp(`\\b${wakeWord}\\b`)
-  const m = re.exec(norm)
+  const m = WAKE_HOMOPHONE_RE.exec(norm)
   if (!m || m.index === undefined) return null
-  return norm.slice(m.index)
+  const tail = norm.slice(m.index + m[0].length)
+  return tail ? `${wakeWord}${tail}` : wakeWord
 }
 
 /** UI / status line — never show letter-spelled wake word to the operator. */

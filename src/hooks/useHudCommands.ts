@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAppContext } from '../context/AppContext'
 import { useCockpit } from '../context/CockpitContext'
 import { useMapContext } from '../context/MapContext'
+import { usePanelData } from '../context/PanelDataContext'
+import type { LayerType } from '../types'
 import { useGPS } from './useGPS'
 import { formatDistance, haversineDistance, totalRouteDistance } from '../lib/haversine'
 import {
@@ -89,8 +91,9 @@ export function useHudCommands(): {
 } {
   const { map } = useMapContext()
   const gps = useGPS()
-  const { state, addWaypoint, removeWaypoint, setWaypoints } = useAppContext()
+  const { state, addWaypoint, removeWaypoint, setWaypoints, setLayer } = useAppContext()
   const { setScreenHue, resetLayout, raisePanel, updatePanel } = useCockpit()
+  const panelData = usePanelData()
 
   const [attachedPinId, setAttachedPinId] = useState<string | null>(null)
   const [morseEnabled, setMorseEnabled] = useState(false)
@@ -231,6 +234,30 @@ export function useHudCommands(): {
             essential: true,
           })
           return ok(`Recentered to ${attachedPin.label}.`)
+        },
+      },
+      {
+        id: 'next waypoint',
+        label: 'Center on first route pin',
+        aliases: [
+          'move to next waypoint',
+          'go to next waypoint',
+          'center next waypoint',
+          'first waypoint',
+          'first pin',
+        ],
+        group: 'Route',
+        run: () => {
+          const first = state.waypoints[0]
+          if (!first) return fail('No route pins. Add pins first.')
+          if (!map) return fail('Map unavailable.')
+          map.easeTo({
+            center: [first.lng, first.lat],
+            zoom: Math.max(14, map.getZoom()),
+            duration: 520,
+            essential: true,
+          })
+          return ok(`Centered on ${first.label}, first pin in route.`)
         },
       },
       {
@@ -542,6 +569,25 @@ export function useHudCommands(): {
         },
       },
 
+      // Map baselayers (streets, topo, outdoor, satellite)
+      ...(['streets', 'topo', 'outdoor', 'satellite'] as const).map((layer) => ({
+        id: `${layer} map`,
+        label: `Basemap: ${layer}`,
+        aliases: [
+          `${layer} layer`,
+          `${layer} basemap`,
+          `map ${layer}`,
+          ...(layer === 'topo' ? (['topographic map', 'topo map'] as const) : []),
+          ...(layer === 'satellite' ? (['satellite layer', 'sat map'] as const) : []),
+        ],
+        group: 'Map',
+        run: () => {
+          setLayer(layer as LayerType)
+          const label = layer.charAt(0).toUpperCase() + layer.slice(1)
+          return ok(`${label} basemap selected.`)
+        },
+      })),
+
       // Display
       {
         id: 'night',
@@ -599,6 +645,63 @@ export function useHudCommands(): {
           updatePanel('weather', { docked: false, minimized: false })
           raisePanel('weather')
           return ok('Weather panel opened.')
+        },
+      },
+      {
+        id: 'situation',
+        label: 'Read situation panel',
+        aliases: ['read situation', 'situation report', 'situation status'],
+        group: 'Status',
+        run: () => {
+          const parts: string[] = []
+          const tz =
+            panelData.locationTimeZone ??
+            (typeof Intl !== 'undefined'
+              ? Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC'
+              : 'UTC')
+          parts.push(
+            `Time ${new Intl.DateTimeFormat('en-US', {
+              hour: 'numeric',
+              minute: '2-digit',
+              hour12: true,
+              timeZone: tz,
+            }).format(new Date())}`,
+          )
+          if (panelData.elevationMeters != null) {
+            parts.push(
+              `Elevation ${Math.round(panelData.elevationMeters * 3.28084).toLocaleString('en-US')} feet`,
+            )
+          } else if (panelData.elevationLoading) {
+            parts.push('Elevation loading')
+          }
+          const wx = panelData.weather
+          if (wx && !('error' in wx)) {
+            const humidityPhrase = wx.humidity > 0 ? `, humidity ${wx.humidity} percent` : ''
+            parts.push(
+              `Weather ${wx.condition}, ${wx.temperature} ${wx.unit.replace('°', 'degrees ')}, wind ${Math.round(wx.windSpeed)} miles per hour${humidityPhrase}`,
+            )
+          } else if (panelData.weatherLoading) {
+            parts.push('Weather loading')
+          } else if (wx && 'error' in wx) {
+            parts.push('Weather unavailable')
+          }
+          const lat = panelData.userLocation?.lat ?? gps.lat
+          const lng = panelData.userLocation?.lng ?? gps.lng
+          if (gps.locationState === 'granted' && lat != null && lng != null) {
+            parts.push(
+              `GPS on, latitude ${lat.toFixed(4)}, longitude ${lng.toFixed(4)}, accuracy ${gps.accuracy != null ? `${Math.round(gps.accuracy)} meters` : 'unknown'}`,
+            )
+            if (gps.elevation != null && Number.isFinite(gps.elevation)) {
+              parts.push(`GPS altitude ${Math.round(gps.elevation * 3.28084)} feet`)
+            }
+          } else if (gps.locationState === 'idle') {
+            parts.push('Location off')
+          } else if (gps.locationState === 'denied') {
+            parts.push('Location denied')
+          } else {
+            parts.push('GPS unavailable')
+          }
+          return ok(parts.join('. ') + '.')
         },
       },
       {
@@ -672,8 +775,10 @@ export function useHudCommands(): {
           // "mp/h" abbreviations and produce "meters per hour" — the
           // explicit phrase is unambiguous across all engines and
           // matches US imperial field defaults.
+          const humidityPhrase =
+            w.humidity > 0 ? `, humidity ${w.humidity} percent` : ''
           return ok(
-            `Current weather for ${w.location}: ${w.condition}, ${w.temperature} ${w.unit.replace('°', 'degrees ')}, wind ${Math.round(w.windSpeed)} miles per hour.`,
+            `Current weather for ${w.location}: ${w.condition}, ${w.temperature} ${w.unit.replace('°', 'degrees ')}, wind ${Math.round(w.windSpeed)} miles per hour${humidityPhrase}.`,
           )
         },
       },
@@ -697,13 +802,22 @@ export function useHudCommands(): {
   }, [
     addWaypoint,
     attachedPin,
+    gps.accuracy,
+    gps.elevation,
     gps.lat,
     gps.lng,
     gps.locationState,
     map,
+    panelData.elevationLoading,
+    panelData.elevationMeters,
+    panelData.locationTimeZone,
+    panelData.userLocation,
+    panelData.weather,
+    panelData.weatherLoading,
     raisePanel,
     removeWaypoint,
     resetLayout,
+    setLayer,
     setScreenHue,
     setWaypoints,
     state.waypoints,

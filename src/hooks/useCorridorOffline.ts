@@ -7,6 +7,7 @@ import {
   extractOutdoorTileUrls,
   loadCorridorCacheRegion,
   prefetchCorridorTiles,
+  saveOperationalAreaSeedFromViewport,
   saveCorridorCacheRegion,
   shouldRefreshCorridorPrefetch,
   distanceToCorridorEdgeFeet,
@@ -31,6 +32,8 @@ export function useCorridorOffline(): CorridorOfflineState {
   const [edgeDistanceFeet, setEdgeDistanceFeet] = useState<number | null>(null)
   const regionRef = useRef<CorridorCacheRegion | null>(loadCorridorCacheRegion())
   const prefetchLockRef = useRef(false)
+  const failureStreakRef = useRef(0)
+  const cooldownUntilRef = useRef(0)
 
   useEffect(() => {
     if (gps.lat == null || gps.lng == null) return
@@ -41,6 +44,11 @@ export function useCorridorOffline(): CorridorOfflineState {
     }
     const edgeFt = distanceToCorridorEdgeFeet(gps.lat, gps.lng, region.bounds)
     setEdgeDistanceFeet(edgeFt)
+  }, [gps.lat, gps.lng])
+
+  useEffect(() => {
+    // Preserve recently viewed operational areas for offline revisit hints.
+    saveOperationalAreaSeedFromViewport()
   }, [gps.lat, gps.lng])
 
   useEffect(() => {
@@ -55,6 +63,7 @@ export function useCorridorOffline(): CorridorOfflineState {
 
     if (!shouldRefreshCorridorPrefetch(gps.lat, gps.lng, regionRef.current)) return
     if (prefetchLockRef.current) return
+    if (Date.now() < cooldownUntilRef.current) return
 
     prefetchLockRef.current = true
     setPrefetching(true)
@@ -69,8 +78,13 @@ export function useCorridorOffline(): CorridorOfflineState {
         saveCorridorCacheRegion(region)
         regionRef.current = region
         setLastPrefetchAt(region.updatedAt)
+        failureStreakRef.current = 0
+        cooldownUntilRef.current = 0
       } catch {
-        /* graceful degradation */
+        // Back off when connectivity is unstable to avoid repeated failed network bursts.
+        failureStreakRef.current = Math.min(6, failureStreakRef.current + 1)
+        const backoffMs = Math.min(15 * 60_000, 20_000 * 2 ** (failureStreakRef.current - 1))
+        cooldownUntilRef.current = Date.now() + backoffMs
       } finally {
         prefetchLockRef.current = false
         setPrefetching(false)

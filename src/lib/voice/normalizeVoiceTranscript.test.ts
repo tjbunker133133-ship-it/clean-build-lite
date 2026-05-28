@@ -37,11 +37,19 @@ describe('normalizeVoiceTranscript', () => {
 
   it('maps common SR homophones at utterance start to hud', () => {
     expect(normalizeForWakeGate('hood weather')).toBe('hud weather')
+    expect(normalizeForWakeGate('hi weather')).toBe('hud weather')
     expect(hasWakeWordPrefix(normalizeForWakeGate('hood'))).toBe(true)
+    expect(hasWakeWordPrefix(normalizeForWakeGate('hi'))).toBe(true)
+  })
+
+  it('does not treat "high" as wake homophone', () => {
+    expect(normalizeForWakeGate('high terrain')).toBe('high terrain')
+    expect(sliceFromFirstWakeToken('high terrain')).toBeNull()
   })
 
   it('slices wake gate from first hud token when SR adds leading junk', () => {
     expect(sliceFromFirstWakeToken('what they were on the corner hud')).toBe('hud')
+    expect(sliceFromFirstWakeToken('what hi weather')).toBe('hud weather')
     expect(sliceFromFirstWakeToken('hud weather')).toBe('hud weather')
     expect(sliceFromFirstWakeToken('weather')).toBeNull()
   })

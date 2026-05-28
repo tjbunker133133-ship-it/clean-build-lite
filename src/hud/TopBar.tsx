@@ -1,12 +1,20 @@
-import React from 'react'
-import { useCockpit } from '../context/CockpitContext'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useMapContext } from '../context/MapContext'
 import { useGPS } from '../hooks/useGPS'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 import { touchFontSm, touchFontMd, touchGapMd, touchMinTarget } from './tokens'
 
+function normalizeHeading(value: number): number {
+  const n = value % 360
+  return n < 0 ? n + 360 : n
+}
+
+function headingToCardinal(heading: number): string {
+  const idx = Math.round(heading / 45) % 8
+  return ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][idx]
+}
+
 export default function TopBar() {
-  const { prefs } = useCockpit()
   const { map } = useMapContext()
   const gps = useGPS()
   const profile = getDeviceProfile()
@@ -17,6 +25,65 @@ export default function TopBar() {
   const tapMin = touchMinTarget(isMobile)
   const isCompact = profile.width < 720 || profile.isCoarsePointer
   const hasFix = gps.lat != null && gps.lng != null
+  const [heading, setHeading] = useState<number | null>(null)
+  const [compassAvailable, setCompassAvailable] = useState(false)
+  const lastHeadingRef = useRef<number | null>(null)
+  const lastPublishRef = useRef(0)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    let mounted = true
+    let fallbackTimer: number | null = null
+
+    const publishHeading = (rawHeading: number | null) => {
+      if (!mounted) return
+      if (rawHeading == null || !Number.isFinite(rawHeading)) return
+      const normalized = normalizeHeading(rawHeading)
+      const last = lastHeadingRef.current
+      const now = performance.now()
+      // Throttle micro-jitter to avoid noisy rerenders on mobile sensors.
+      if (last != null && Math.abs(last - normalized) < 2 && now - lastPublishRef.current < 250) return
+      lastHeadingRef.current = normalized
+      lastPublishRef.current = now
+      setHeading(normalized)
+      setCompassAvailable(true)
+    }
+
+    const onOrientation = (event: DeviceOrientationEvent) => {
+      // iOS Safari uses webkitCompassHeading; other browsers typically provide alpha.
+      const webkitHeading = (event as DeviceOrientationEvent & { webkitCompassHeading?: number })
+        .webkitCompassHeading
+      if (typeof webkitHeading === 'number' && Number.isFinite(webkitHeading)) {
+        publishHeading(webkitHeading)
+        return
+      }
+      if (typeof event.alpha === 'number' && Number.isFinite(event.alpha)) {
+        publishHeading(360 - event.alpha)
+      }
+    }
+
+    window.addEventListener('deviceorientationabsolute', onOrientation as EventListener, { passive: true })
+    window.addEventListener('deviceorientation', onOrientation as EventListener, { passive: true })
+    fallbackTimer = window.setTimeout(() => {
+      if (!mounted || lastHeadingRef.current != null) return
+      setCompassAvailable(false)
+      setHeading(null)
+    }, 1500)
+
+    return () => {
+      mounted = false
+      window.removeEventListener('deviceorientationabsolute', onOrientation as EventListener)
+      window.removeEventListener('deviceorientation', onOrientation as EventListener)
+      if (fallbackTimer != null) window.clearTimeout(fallbackTimer)
+    }
+  }, [])
+
+  const headingLabel = useMemo(() => {
+    if (!compassAvailable || heading == null) return 'HDG --'
+    return `HDG ${Math.round(heading)
+      .toString()
+      .padStart(3, '0')} ${headingToCardinal(heading)}`
+  }, [compassAvailable, heading])
 
   const locateMe = () => {
     if (!map || !hasFix) return
@@ -38,9 +105,9 @@ export default function TopBar() {
         height: isCompact ? 52 : 48,
         zIndex: 200,
         pointerEvents: 'auto',
-        display: 'flex',
+        display: 'grid',
+        gridTemplateColumns: '1fr auto 1fr',
         alignItems: 'center',
-        justifyContent: 'space-between',
         padding: `calc(env(safe-area-inset-top, 0px) + 2px) ${isCompact ? 12 : 16}px 0 ${isCompact ? 12 : 16}px`,
         background: isMobile ? 'rgba(10, 12, 13, 0.96)' : 'rgba(10, 12, 13, 0.9)',
         borderBottom: '1px solid rgba(199, 206, 198, 0.22)',
@@ -58,19 +125,10 @@ export default function TopBar() {
           fontSize: isCompact ? fontSm : fontMd,
           letterSpacing: '0.18em',
           color: '#c7cec6',
-          textShadow: '0 0 10px rgba(199,206,198,0.25)',
+          textShadow: '0 0 8px rgba(199,206,198,0.18)',
         }}
       >
-        <div
-          style={{
-            width: 8,
-            height: 8,
-            borderRadius: '50%',
-            background: '#c7cec6',
-            boxShadow: '0 0 8px rgba(199,206,198,0.65)',
-          }}
-        />
-        NIGHTFORCE
+        SIGNAL ONE HUD
         {!isCompact && profile.interactionMode === 'desktop' && !profile.isIOS && (
           <span
             style={{
@@ -87,6 +145,22 @@ export default function TopBar() {
       </div>
 
       <div
+        aria-live="polite"
+        style={{
+          justifySelf: 'center',
+          fontFamily: 'var(--font-mono, monospace)',
+          fontSize: isCompact ? fontSm : fontMd,
+          color: compassAvailable ? '#b8c1b9' : '#8f9891',
+          letterSpacing: '0.1em',
+          textTransform: 'uppercase',
+          whiteSpace: 'nowrap',
+        }}
+        title={compassAvailable ? 'Device heading' : 'Compass unavailable on this device/browser'}
+      >
+        {headingLabel}
+      </div>
+
+      <div
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -96,6 +170,7 @@ export default function TopBar() {
           color: '#9ea7a0',
           letterSpacing: '0.12em',
           textTransform: 'uppercase',
+          justifySelf: 'end',
         }}
       >
         <button
@@ -118,7 +193,6 @@ export default function TopBar() {
         >
           LOCATE ME
         </button>
-        <span>{prefs.screen_hue.replace('_', ' ')}</span>
       </div>
     </div>
   )
