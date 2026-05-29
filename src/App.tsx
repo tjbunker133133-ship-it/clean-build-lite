@@ -4,6 +4,7 @@ import { CockpitProvider } from './context/CockpitContext'
 import { MapProvider } from './context/MapContext'
 import { PanelDataProvider } from './context/PanelDataContext'
 import { TrailRouteProvider } from './context/TrailRouteContext'
+import { MissionSyncProvider } from './context/MissionSyncContext'
 import TopBar from './hud/TopBar'
 import ScanlineOverlay from './hud/ScanlineOverlay'
 import CockpitKeyboard from './hud/CockpitKeyboard'
@@ -18,6 +19,7 @@ import TacticalSetupBanner from './hud/TacticalSetupBanner'
 const MapCanvas = lazy(() => import('./components/MapCanvas'))
 const WaypointLayer = lazy(() => import('./layers/WaypointLayer'))
 const RouteLayer = lazy(() => import('./layers/RouteLayer'))
+const TeamPresenceLayer = lazy(() => import('./layers/TeamPresenceLayer'))
 const LayerPanel = lazy(() => import('./hud/LayerPanel'))
 const WaypointTypePanel = lazy(() => import('./hud/WaypointTypePanel'))
 const DeadManPanel = lazy(() => import('./hud/DeadManPanel'))
@@ -31,10 +33,12 @@ const SOSPanel = lazy(() => import('./hud/SOSPanel'))
 const PreflightPanel = lazy(() => import('./hud/PreflightPanel'))
 const InstallHelperBanner = lazy(() => import('./hud/InstallHelperBanner'))
 const NavigationHud = lazy(() => import('./hud/NavigationHud'))
+const MissionLinkPanel = lazy(() => import('./hud/MissionLinkPanel'))
 
 export default function App() {
   return (
     <AppProvider>
+      <MissionSyncProvider>
       <CockpitProvider>
       <PanelDataProvider>
       <MapProvider>
@@ -64,6 +68,7 @@ export default function App() {
             {/* ── Map Feature Layers (render-only, no DOM) ── */}
             <WaypointLayer />
             <RouteLayer />
+            <TeamPresenceLayer />
           </Suspense>
 
           {/* ── Atmospheric overlays (z-index: 1-2) ── */}
@@ -88,6 +93,7 @@ export default function App() {
               <WeatherPanel />
               <PresetPanel />
               <PreflightPanel />
+              <MissionLinkPanel />
             </Suspense>
             <div
               style={{
@@ -115,6 +121,7 @@ export default function App() {
       </MapProvider>
       </PanelDataProvider>
       </CockpitProvider>
+      </MissionSyncProvider>
     </AppProvider>
   )
 }

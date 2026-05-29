@@ -2,13 +2,18 @@ import React from 'react'
 import { useAppContext } from '../context/AppContext'
 import { useCorridorOffline } from '../hooks/useCorridorOffline'
 import { useNavigationMonitor } from '../hooks/useNavigationMonitor'
+import { useTrailInspect } from '../hooks/useTrailInspect'
 import { getDeviceProfile } from '../runtime/deviceProfile'
+import TrailInspectCard from './TrailInspectCard'
+import MissionSyncStatusChip from './MissionSyncStatusChip'
 import { touchFontSm, touchMinTarget } from './tokens'
 
 export default function NavigationHud() {
-  const { confirmWaypointArrival } = useAppContext()
+  const { confirmWaypointArrival, state } = useAppContext()
+  const { activeLayer } = state
   const nav = useNavigationMonitor()
   const corridor = useCorridorOffline()
+  const trailInspect = useTrailInspect()
   const isMobile = getDeviceProfile().interactionMode === 'mobile'
   const fontSm = touchFontSm(isMobile)
   const tapMin = touchMinTarget(isMobile)
@@ -22,6 +27,7 @@ export default function NavigationHud() {
 
   return (
     <>
+      <MissionSyncStatusChip />
       {hasNext && (
         <div
           style={{
@@ -130,7 +136,58 @@ export default function NavigationHud() {
         </div>
       )}
 
-      {advisory && !nav.arrivalCandidate && (
+      {trailInspect.selection && (
+        <TrailInspectCard result={trailInspect.selection} onDismiss={trailInspect.dismiss} />
+      )}
+
+      {!trailInspect.maptilerConfigured && activeLayer === 'outdoor' && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 'calc(env(safe-area-inset-top, 0px) + 56px)',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 216,
+            pointerEvents: 'none',
+            padding: '8px 14px',
+            borderRadius: 8,
+            background: 'rgba(40, 24, 8, 0.92)',
+            border: '1px solid rgba(251, 191, 36, 0.5)',
+            color: '#fde68a',
+            fontSize: fontSm,
+            maxWidth: 'min(92vw, 420px)',
+            textAlign: 'center',
+          }}
+        >
+          MapTiler key missing — trails unavailable. Add VITE_MAPTILER_KEY to .env.local and restart dev.
+        </div>
+      )}
+
+      {trailInspect.missHint && !trailInspect.selection && (
+        <div
+          style={{
+            position: 'absolute',
+            bottom: 'calc(env(safe-area-inset-bottom, 0px) + 72px)',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 217,
+            pointerEvents: 'none',
+            padding: '8px 14px',
+            borderRadius: 8,
+            background: 'rgba(24, 20, 12, 0.92)',
+            border: '1px solid rgba(251, 191, 36, 0.45)',
+            color: '#fde68a',
+            fontSize: fontSm,
+            letterSpacing: '0.04em',
+            maxWidth: 'min(92vw, 400px)',
+            textAlign: 'center',
+          }}
+        >
+          {trailInspect.missHint}
+        </div>
+      )}
+
+      {advisory && !nav.arrivalCandidate && !trailInspect.selection && !trailInspect.missHint && (
         <div
           style={{
             position: 'absolute',

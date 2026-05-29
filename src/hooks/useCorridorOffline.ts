@@ -1,16 +1,18 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMapContext } from '../context/MapContext'
 import { useAppContext } from '../context/AppContext'
 import { useGPS } from './useGPS'
 import {
   buildCorridorCacheRegion,
-  extractOutdoorTileUrls,
+  computeRouteFingerprint,
+  getOutdoorCorridorTileTemplates,
   loadCorridorCacheRegion,
   prefetchCorridorTiles,
   saveOperationalAreaSeedFromViewport,
   saveCorridorCacheRegion,
   shouldRefreshCorridorPrefetch,
   distanceToCorridorEdgeFeet,
+  PREFETCH_MAX_TILES_PER_RUN,
   type CorridorCacheRegion,
 } from '../lib/corridorPrefetch'
 
@@ -35,6 +37,16 @@ export function useCorridorOffline(): CorridorOfflineState {
   const failureStreakRef = useRef(0)
   const cooldownUntilRef = useRef(0)
 
+  const route = useMemo(
+    () =>
+      waypoints
+        .filter((w) => w.status !== 'archived')
+        .map((w) => ({ lat: w.lat, lng: w.lng })),
+    [waypoints],
+  )
+
+  const routeFingerprint = useMemo(() => computeRouteFingerprint(route), [route])
+
   useEffect(() => {
     if (gps.lat == null || gps.lng == null) return
     const region = regionRef.current
@@ -47,21 +59,28 @@ export function useCorridorOffline(): CorridorOfflineState {
   }, [gps.lat, gps.lng])
 
   useEffect(() => {
-    // Preserve recently viewed operational areas for offline revisit hints.
     saveOperationalAreaSeedFromViewport()
   }, [gps.lat, gps.lng])
 
   useEffect(() => {
-    if (!map || typeof navigator !== 'undefined' && !navigator.onLine) return
+    if (!map || (typeof navigator !== 'undefined' && !navigator.onLine)) return
     if (activeLayer !== 'outdoor') return
     if (gps.lat == null || gps.lng == null) return
-
-    const route = waypoints
-      .filter((w) => w.status !== 'archived')
-      .map((w) => ({ lat: w.lat, lng: w.lng }))
     if (route.length < 2) return
 
-    if (!shouldRefreshCorridorPrefetch(gps.lat, gps.lng, regionRef.current)) return
+    const templates = getOutdoorCorridorTileTemplates()
+    if (templates.length === 0) return
+
+    if (
+      !shouldRefreshCorridorPrefetch(
+        gps.lat,
+        gps.lng,
+        regionRef.current,
+        routeFingerprint,
+      )
+    ) {
+      return
+    }
     if (prefetchLockRef.current) return
     if (Date.now() < cooldownUntilRef.current) return
 
@@ -70,18 +89,22 @@ export function useCorridorOffline(): CorridorOfflineState {
 
     const run = async () => {
       try {
-        const region = buildCorridorCacheRegion(route, gps.lat!, gps.lng!)
-        if (!region) return
-        const style = map.getStyle()
-        const templates = extractOutdoorTileUrls(style)
-        await prefetchCorridorTiles(templates, region.bounds, { maxTiles: 40 })
+        const regionDraft = buildCorridorCacheRegion(route, gps.lat!, gps.lng!, 0)
+        if (!regionDraft) return
+        const loaded = await prefetchCorridorTiles(templates, regionDraft.bounds, {
+          maxTiles: PREFETCH_MAX_TILES_PER_RUN,
+        })
+        const priorTiles = regionRef.current?.tilesLoaded ?? 0
+        const region: CorridorCacheRegion = {
+          ...regionDraft,
+          tilesLoaded: priorTiles + loaded,
+        }
         saveCorridorCacheRegion(region)
         regionRef.current = region
         setLastPrefetchAt(region.updatedAt)
         failureStreakRef.current = 0
         cooldownUntilRef.current = 0
       } catch {
-        // Back off when connectivity is unstable to avoid repeated failed network bursts.
         failureStreakRef.current = Math.min(6, failureStreakRef.current + 1)
         const backoffMs = Math.min(15 * 60_000, 20_000 * 2 ** (failureStreakRef.current - 1))
         cooldownUntilRef.current = Date.now() + backoffMs
@@ -92,7 +115,7 @@ export function useCorridorOffline(): CorridorOfflineState {
     }
 
     void run()
-  }, [map, gps.lat, gps.lng, waypoints, activeLayer])
+  }, [map, gps.lat, gps.lng, route, routeFingerprint, activeLayer])
 
   const approachingEdge =
     edgeDistanceFeet != null && edgeDistanceFeet > 0 && edgeDistanceFeet < 1500

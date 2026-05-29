@@ -1,0 +1,27 @@
+{
+  "name": "@signal-one/capacitor-hud-mission-link",
+  "version": "0.1.0",
+  "description": "LAN mission bundle discovery for Signal One HUD (Android Play)",
+  "main": "dist/plugin.cjs.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/esm/index.d.ts",
+  "files": ["dist/", "android/"],
+  "scripts": {
+    "build": "npm run clean && tsc",
+    "clean": "rimraf dist",
+    "watch": "tsc --watch"
+  },
+  "peerDependencies": {
+    "@capacitor/core": "^6.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/core": "^6.2.0",
+    "rimraf": "^6.0.1",
+    "typescript": "^5.2.2"
+  },
+  "capacitor": {
+    "android": {
+      "src": "android"
+    }
+  }
+}

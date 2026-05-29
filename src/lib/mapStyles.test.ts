@@ -3,10 +3,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   FALLBACK_MAP_STYLE,
   MAP_STYLES,
+  getMapTilerRasterDirectTilesStyle,
   getMapTilerRasterFallbackStyle,
   getStyleUrl,
   mapStyleFingerprint,
   mapTilerRasterFallbackFingerprint,
+  maptilerRasterTileTemplates,
   maptilerTerrainRgbTileJson,
   maptilerBasemapsConfigured,
   isAppleWebKitMapSwitch,
@@ -53,6 +55,16 @@ describe('MAP_STYLES (hard-locked registry)', () => {
     expect(fb).not.toBeNull()
     expect(fb!.version).toBe(8)
     expect(fb).toEqual(FALLBACK_MAP_STYLE)
+  })
+
+  it('direct raster style uses inlined tiles (offline boot safe)', () => {
+    const templates = maptilerRasterTileTemplates('outdoor')
+    if (templates.length === 0) return
+    const style = getMapTilerRasterDirectTilesStyle('outdoor')
+    expect(style).not.toBeNull()
+    const src = Object.values(style!.sources)[0] as { tiles?: string[]; url?: string }
+    expect(src.tiles?.[0]).toContain('outdoor-v4/256/{z}/{x}/{y}.png')
+    expect(src.url).toBeUndefined()
   })
 
   it('MapTiler raster fallback differs per layer and from vector URLs', () => {

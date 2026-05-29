@@ -12,6 +12,13 @@ Thumbs.db
 netlify-dist-deploy.zip
 .vercel
 
+# Capacitor / Android local build outputs
+android/.gradle/
+android/app/build/
+android/build/
+local.properties
+
 scripts/rescue-smoke.cjs
 
 node_modules
+.env*.local

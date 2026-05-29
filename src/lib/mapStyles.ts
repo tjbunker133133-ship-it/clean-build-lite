@@ -140,6 +140,30 @@ const MAPTILER_RASTER_MAP_ID: Record<MapStyleKey, string> = {
  * Per-layer MapTiler raster fallback via TileJSON (same presets as vector URLs).
  * Used when vector style.json stalls on WebKit or errors at runtime.
  */
+/** Direct XYZ templates for corridor prefetch and offline boot (no TileJSON fetch). */
+export function maptilerRasterTileTemplates(layer: MapStyleKey): string[] {
+  const key = maptilerKey()
+  if (!key) return []
+  const mapId = MAPTILER_RASTER_MAP_ID[layer]
+  return [`https://api.maptiler.com/maps/${mapId}/256/{z}/{x}/{y}.png?key=${key}`]
+}
+
+/**
+ * Offline-safe MapTiler raster basemap: inlined `tiles` array (no `tiles.json` network hop).
+ * Used for cold-start offline boot when a mission corridor has been prefetched.
+ */
+export function getMapTilerRasterDirectTilesStyle(layer: MapStyleKey): StyleSpecification | null {
+  const tiles = maptilerRasterTileTemplates(layer)
+  if (tiles.length === 0) return null
+  const sourceId = `maptiler-raster-direct-${layer}`
+  return rasterStyle(
+    sourceId,
+    tiles,
+    '© MapTiler © OpenStreetMap contributors',
+    22,
+  )
+}
+
 export function getMapTilerRasterFallbackStyle(layer: MapStyleKey): StyleSpecification | null {
   const key = maptilerKey()
   if (!key) return null

@@ -8,20 +8,20 @@
   },
   "production": {
     "src/hooks/useGPS.ts": "bdd7b8ec309335ab05c6a819b27d962b516228ef5e37bf37ffbf8efff1b663a0",
-    "src/components/MapCanvas.tsx": "c08fd1284ba448ef4fde30ad30f552fbbd4521f82cc842fda7e27a324f722ea1",
-    "src/lib/mapStyles.ts": "6c097cf2db74aa291d62cea63e31ee35f0d893ac90b968a2a268d4362da27bf0",
+    "src/components/MapCanvas.tsx": "f14af04cec463382adfabdb92cce36c45fb2437b251bf22472a08ec908c72740",
+    "src/lib/mapStyles.ts": "345c6a8dc4286dd1f2deaba8f4738e1c8a9b8f096b62d358b3c1fa5cc943153c",
     "src/hud/SOSPanel.tsx": "e036960f5110457917d7cde72c6bdead108c7615e0b9fedb54404b9789ffcccd",
     "src/hud/DeadManPanel.tsx": "9cacdc1d2bf78ce42ffd9c7af367cbf7ddc12561c97d1adda597d573976f0be7",
     "src/hud/CockpitHudShell.tsx": "816d311cd774fec03c14b26972b78cf0ac5a7bd207810b555e5b9ac041732540",
     "src/controllers/resolveDockIntent.ts": "a824b236092ce85e7b230380d3a0904546d299920e3714b28e6faee387e08549",
     "src/context/AppContext.tsx": "e5e40a9f63ccd3b2911c251c0cd15b36ac8f0261673a4282b5a1c413ff38680c",
-    "src/App.tsx": "4b4edabbc46a2e8f4252988c627abf540a0f534cd89168e887f8fabeabbc8afa",
+    "src/App.tsx": "f852932f53a528fb7fdaa396ddabd3a6493830a8d1272e1e03e1bed2105c304e",
     "src/main.tsx": "440b20cc4ab289496952bb1101f632aa1dd349aaa9c785cb8261b728c32b9937",
-    "vite.config.ts": "e252fe47c6468df66d20b6506dc9dd49faf2ff508febd8804d6fe280b9211baf",
+    "vite.config.ts": "d9f341d6b014b430246b5f2894ef901190a62f6d9ffc20290b171416ff27781b",
     "index.html": "05d4c5091478975d6c67b5859302f97c8a222088a6f5052343884906344eda2e",
-    "src/lib/rescue/buildRescuePacket.ts": "1e9a7930c6765276009540281d6468386d40bef963250c1760834db042ac30cc",
+    "src/lib/rescue/buildRescuePacket.ts": "fbb54f0e59f602b66350488ce3cbd96ec8d4829088e800819d51d92b9743469c",
     "src/lib/rescue/postRescuePacket.ts": "f2398e3498dd1cddcdfd05798eaf4ee69296062a775ecfaf47d976c3afcbc9d0",
-    "src/lib/rescue/rescueDispatch.ts": "2700a58ea6047f0e088aa3072b5a1ca64ab02a29444a8fb2cda540f56a0bbda9",
+    "src/lib/rescue/rescueDispatch.ts": "b5a0dca4dba1f1db52057deb242f519f200ace2833d7145e0d5f5e673a6893fe",
     "supabase/functions/send-rescue-email/index.ts": "9eb49b731c35767b56a6750c26caa1c1a666cf400616b1cb84aa88a46504cdff"
   }
 }

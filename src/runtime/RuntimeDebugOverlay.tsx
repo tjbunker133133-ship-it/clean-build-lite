@@ -5,6 +5,7 @@ import {
   subscribeRuntimeSnapshot,
   type RuntimeSnapshot,
 } from './runtimeSnapshot'
+import { buildEnvAudit, logEnvAuditOnce } from './envAudit'
 
 /**
  * Toggleable in-app runtime overlay.
@@ -152,6 +153,26 @@ function Body({ snap, onClose }: { snap: RuntimeSnapshot; onClose: () => void })
       <Section title="build">
         <Row k="id" v={snap.buildId.slice(0, 19)} />
         <Row k="age" v={`${ageSec}s`} />
+      </Section>
+
+      <Section title="env (build-time)">
+        {(() => {
+          const e = buildEnvAudit()
+          return (
+            <>
+              <Row k="supabase-url" v={String(e.supabase.urlPresent)} color={e.supabase.urlPresent ? '#7dff8a' : '#ff6464'} />
+              <Row k="anon-key" v={String(e.supabase.anonKeyPresent)} color={e.supabase.anonKeyPresent ? '#7dff8a' : '#ff6464'} />
+              <Row k="rescue-sign" v={String(e.rescue.signingKeyPresent)} color={e.rescue.signingKeyPresent ? '#7dff8a' : '#ff6464'} />
+              <Row k="rescue-url" v={String(e.rescue.rescueEmailUrlPresent)} color={e.rescue.rescueEmailUrlPresent ? '#7dff8a' : '#ffd76b'} />
+              <Row
+                k="endpoint"
+                v={e.rescue.endpointResolved ? e.rescue.endpointSource : 'none'}
+                color={e.rescue.endpointResolved ? '#7dff8a' : '#ff6464'}
+              />
+              <Row k="maptiler" v={String(e.maps.maptilerPresent)} color={e.maps.maptilerPresent ? '#7dff8a' : '#ffd76b'} />
+            </>
+          )
+        })()}
       </Section>
 
       <Section title="device">
@@ -586,6 +607,7 @@ export function mountRuntimeDebugOverlay(): void {
   if (!import.meta.env.DEV) return
   if (mounted || typeof document === 'undefined') return
   mounted = true
+  logEnvAuditOnce()
   const host = document.createElement('div')
   host.id = 'hud-runtime-overlay-host'
   host.setAttribute('aria-hidden', 'true')

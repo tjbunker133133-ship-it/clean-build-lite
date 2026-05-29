@@ -2,8 +2,9 @@
  * Trail snap assist — pure geometry + MapLibre `queryRenderedFeatures` only.
  *
  * CONTRACT-SENSITIVE (Phase 1):
- * - Preview-only by design: callers must not persist coordinates until the operator
- *   confirms (see MapCanvas). This module never writes app state.
+ * - MapCanvas commits snapped coordinates when the Snap To Trail toggle is ON and a
+ *   candidate exists within MAX_SNAP_RADIUS_M; otherwise raw GPS drop.
+ * - This module never writes app state directly.
  * - Rendered trail geometry only for actual snaps: `queryRenderedFeatures` reads pixels
  *   already drawn from locked MapTiler styles — no `querySourceFeatures`, no routing APIs,
  *   no network. Capability probes the style spec; candidates query the viewport.
@@ -22,6 +23,9 @@ import { haversineMeters } from './haversine'
 
 /** Hard clamp — cannot be raised without revisiting iOS perf + UX audits. */
 export const MAX_SNAP_RADIUS_M = 30
+
+/** Wider search for trail-route tracing only (never used for waypoint placement). */
+export const ROUTE_TRACE_SNAP_M = 72
 
 /** Below this zoom, MVT trails are typically unusable for snap assist. */
 export const MIN_SNAP_ZOOM = 12
@@ -77,6 +81,13 @@ const REJECTED_ROAD_CLASSES = new Set([
 
 /** Bounding box padding in screen px around the tap for feature queries. */
 const QUERY_PAD_PX = 120
+
+function queryPadPxForZoom(zoom: number): number {
+  if (!Number.isFinite(zoom)) return QUERY_PAD_PX
+  if (zoom < 13) return 160
+  if (zoom < 15) return 140
+  return QUERY_PAD_PX
+}
 
 /** Safety cap — worst-case segment evaluations per drop (bounded O(N)). */
 const MAX_SEGMENT_EVALUATIONS = 500
@@ -579,11 +590,48 @@ export function findNearestTrailCandidate(
   if (maxM <= 0) return null
 
   const p: LatLng = { lat: rawLat, lng: rawLng }
+  const hit = queryNearestTrailHit(map, p, maxM)
+  if (!hit) return null
+  return trailHitToCandidate(hit)
+}
 
+function trailHitToCandidate(hit: TrailFeatureHit): TrailSnapCandidate {
+  return {
+    snappedLat: hit.lat,
+    snappedLng: hit.lng,
+    distanceMeters: hit.distanceMeters,
+    sourceClass: hit.sourceClass,
+  }
+}
+
+/**
+ * Trail-route tracing only — wider radius than placement snap; does not change
+ * MAX_SNAP_RADIUS_M placement contract.
+ */
+export function findNearestTrailForRouting(
+  map: Map,
+  opts: FindNearestTrailOptions,
+): TrailSnapCandidate | null {
+  const rawLat = opts.lat
+  const rawLng = opts.lng
+  if (!Number.isFinite(rawLat) || !Number.isFinite(rawLng)) return null
+  const maxM = Math.min(opts.radiusMeters, ROUTE_TRACE_SNAP_M)
+  if (maxM <= 0) return null
+  const hit = queryNearestTrailHit(map, { lat: rawLat, lng: rawLng }, maxM)
+  if (!hit) return null
+  return trailHitToCandidate(hit)
+}
+
+function queryNearestTrailHit(map: Map, p: LatLng, maxM: number): TrailFeatureHit | null {
   let features: ReturnType<Map['queryRenderedFeatures']> = []
   try {
-    const pt = map.project([rawLng, rawLat])
-    const pad = QUERY_PAD_PX
+    const pt = map.project([p.lng, p.lat])
+    let pad = QUERY_PAD_PX
+    try {
+      pad = queryPadPxForZoom(map.getZoom())
+    } catch {
+      /* use default pad */
+    }
     const box: [[number, number], [number, number]] = [
       [pt.x - pad, pt.y - pad],
       [pt.x + pad, pt.y + pad],
@@ -609,13 +657,14 @@ export function findNearestTrailCandidate(
     (a, b) => trailFeaturePriority(a) - trailFeaturePriority(b),
   )
 
-  const acc: { best: TrailSnapCandidate | null } = { best: null }
+  const acc: { best: TrailFeatureHit | null } = { best: null }
   const segBudget = { left: MAX_SEGMENT_EVALUATIONS }
 
   for (const f of ordered) {
     if (segBudget.left <= 0) break
     const snapClass = resolveTrailSnapClass(f)
     if (!snapClass) continue
+    const props = (f.properties ?? {}) as Record<string, unknown>
     const geom = f.geometry as { type?: string; coordinates?: unknown }
     forEachLineStringSegmentBudgeted(geom, segBudget, (c1, c2) => {
       const a: LatLng = { lat: c1[1], lng: c1[0] }
@@ -625,10 +674,11 @@ export function findNearestTrailCandidate(
       const dist = proj.distanceMeters
       if (acc.best === null || dist < acc.best.distanceMeters) {
         acc.best = {
-          snappedLat: proj.lat,
-          snappedLng: proj.lng,
+          lat: proj.lat,
+          lng: proj.lng,
           distanceMeters: dist,
           sourceClass: snapClass,
+          properties: props,
         }
       }
     })
@@ -636,6 +686,33 @@ export function findNearestTrailCandidate(
 
   if (acc.best === null || acc.best.distanceMeters > maxM) return null
   return acc.best
+}
+
+/** Max query radius for trail inspect (tap-for-info) — wider than snap assist. */
+export const TRAIL_INSPECT_MAX_RADIUS_M = 28
+
+export type TrailFeatureHit = {
+  lat: number
+  lng: number
+  distanceMeters: number
+  sourceClass: string
+  properties: Record<string, unknown>
+}
+
+/**
+ * Read-only trail feature at a map point (Outdoor vector). No network.
+ * Used by Tier 2 trail inspect — does not mutate placement state.
+ */
+export function findTrailFeatureAtPoint(
+  map: Map,
+  opts: FindNearestTrailOptions,
+): TrailFeatureHit | null {
+  const rawLat = opts.lat
+  const rawLng = opts.lng
+  if (!Number.isFinite(rawLat) || !Number.isFinite(rawLng)) return null
+  const maxM = Math.min(opts.radiusMeters, TRAIL_INSPECT_MAX_RADIUS_M)
+  if (maxM <= 0) return null
+  return queryNearestTrailHit(map, { lat: rawLat, lng: rawLng }, maxM)
 }
 
 /**

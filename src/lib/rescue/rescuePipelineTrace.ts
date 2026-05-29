@@ -1,12 +1,10 @@
 /**
- * Non-PII rescue pipeline trace (sessionStorage + optional debug ingest).
+ * Non-PII rescue pipeline trace (sessionStorage).
  * Survives production PWA sessions where localhost ingest is unreachable.
  */
 
 const TRACE_KEY = 'rescue_pipeline_trace_a49f65'
 const TRACE_MAX = 24
-const INGEST_URL = 'http://127.0.0.1:7617/ingest/9454c0bb-b23c-490e-8bfb-46ee1e916bc0'
-const SESSION_ID = 'a49f65'
 
 export type RescuePipelineTraceEntry = {
   runId: string
@@ -29,21 +27,6 @@ export function appendRescuePipelineTrace(entry: Omit<RescuePipelineTraceEntry, 
     }
   } catch {
     /* quota / private mode */
-  }
-  if (import.meta.env.DEV) {
-    fetch(INGEST_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': SESSION_ID },
-      body: JSON.stringify({
-        sessionId: SESSION_ID,
-        runId: row.runId,
-        hypothesisId: row.hypothesisId,
-        location: row.location,
-        message: row.message,
-        data: row.data,
-        timestamp: row.timestamp,
-      }),
-    }).catch(() => {})
   }
 }
 

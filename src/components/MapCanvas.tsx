@@ -7,6 +7,7 @@ import { useCockpit } from '../context/CockpitContext'
 import { useGPS } from '../hooks/useGPS'
 import type { LayerType, Waypoint } from '../types'
 import {
+  getMapTilerRasterDirectTilesStyle,
   getMapTilerRasterFallbackStyle,
   getStyleUrl,
   type BasemapDelivery,
@@ -18,6 +19,8 @@ import {
   resolveBasemapStyle,
   validatedEmergencyFallbackStyle,
 } from '../lib/mapStyles'
+import { hasCorridorOutdoorCache } from '../lib/corridorPrefetch'
+import { dispatchTrailInspectTap } from '../lib/trailInspectBridge'
 import {
   installMapLayerDiagHook,
   logLayerActivation,
@@ -40,6 +43,43 @@ import {
 import { computeTrailRoute, diagnoseTrailLeg } from '../lib/trailRoute'
 import { hudObsMark, hudObsMeasure } from '../diag/hudObs'
 import { getDeviceProfile, isIosFieldHud } from '../runtime/deviceProfile'
+
+/**
+ * MapTiler `topo-v4` / `outdoor-v4` style.json embed terrain; MapLibre applies them during
+ * `setStyle` `_load` before shaders are ready (terrainDepth / shaderPreludeCode). Use per-layer
+ * MapTiler raster TileJSON instead (distinct visuals, no embedded terrain). Topo still gets
+ * HUD-owned raster-dem via `syncTopoTerrain` after load.
+ */
+function vectorStyleEmbedsTerrain(url: string): boolean {
+  return /topo-v4|outdoor-v4/i.test(url)
+}
+
+/**
+ * MapTiler outdoor/topo style.json embeds terrain that can crash WebKit during setStyle.
+ * Use raster TileJSON there only; Android + desktop keep vector so trail snap/inspect work.
+ */
+function shouldUseTerrainSafeRasterBasemap(layer: MapStyleKey): boolean {
+  if (layer !== 'topo' && layer !== 'outdoor') return false
+  if (isIosFieldHud()) return true
+  if (isAppleWebKitMapSwitch() && !getDeviceProfile().isAndroid) return true
+  return false
+}
+
+function resolveHudBasemapStyle(layer: MapStyleKey): ReturnType<typeof resolveBasemapStyle> {
+  const resolved = resolveBasemapStyle(layer)
+  if (
+    resolved.delivery === 'vector' &&
+    typeof resolved.style === 'string' &&
+    vectorStyleEmbedsTerrain(resolved.style) &&
+    shouldUseTerrainSafeRasterBasemap(layer)
+  ) {
+    const raster = getMapTilerRasterFallbackStyle(layer)
+    if (raster) {
+      return { style: raster, delivery: 'maptiler-raster' }
+    }
+  }
+  return resolved
+}
 
 const HUD_DEBUG_CLICK_SRC = 'hud-debug-click'
 const HUD_DEBUG_CLICK_LAYER = 'hud-debug-click-circle'
@@ -148,33 +188,75 @@ function createUserMarkerEl() {
   return el
 }
 
+/** MapLibre may request junk sprite keys from bad icon-image in vector tiles ("null", " ", ""). */
+function resolveSpriteMissingKey(raw: unknown): string | null {
+  if (raw == null) return 'null'
+  if (typeof raw !== 'string') return null
+  if (raw === 'null' || raw === 'undefined') return raw
+  const trimmed = raw.trim()
+  if (!trimmed) {
+    // Must register under the exact id MapLibre requested (e.g. literal " ").
+    return raw.length > 0 ? raw : 'null'
+  }
+  return trimmed
+}
+
+function isJunkSpriteKey(key: string): boolean {
+  if (key === 'null' || key === 'undefined') return true
+  return key.trim().length === 0
+}
+
+function addSpritePlaceholder(map: maplibregl.Map, key: string, junk: boolean): void {
+  const size = junk ? 1 : 32
+  const canvas = document.createElement('canvas')
+  canvas.width = size
+  canvas.height = size
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+  ctx.clearRect(0, 0, size, size)
+  if (!junk) {
+    ctx.fillStyle = 'rgba(210, 72, 72, 0.9)'
+    ctx.beginPath()
+    ctx.arc(size / 2, size / 2, size / 4, 0, Math.PI * 2)
+    ctx.fill()
+  }
+  map.addImage(key, ctx.getImageData(0, 0, size, size), { pixelRatio: 1 })
+}
+
 /** Placeholder icons when sprite entries fail (network / CORS / ad block). */
 function onStyleImageMissingFactory(map: maplibregl.Map) {
   return (e: { id: string }) => {
-    if (map.hasImage(e.id)) return
-    console.warn('[MAP] Missing sprite image:', e.id)
+    const key = resolveSpriteMissingKey(e?.id)
+    if (!key) return
+    if (map.hasImage(key)) return
+    const junk = isJunkSpriteKey(key)
     try {
-      const size = 32
-      const canvas = document.createElement('canvas')
-      canvas.width = size
-      canvas.height = size
-      const ctx = canvas.getContext('2d')
-      if (!ctx) return
-      ctx.clearRect(0, 0, size, size)
-      ctx.fillStyle = 'rgba(210, 72, 72, 0.9)'
-      ctx.beginPath()
-      ctx.arc(size / 2, size / 2, size / 4, 0, Math.PI * 2)
-      ctx.fill()
-      map.addImage(e.id, ctx.getImageData(0, 0, size, size))
+      addSpritePlaceholder(map, key, junk)
     } catch {
       /* ignore */
     }
   }
 }
 
+function mapRepaintSafe(map: maplibregl.Map): boolean {
+  try {
+    return map.isStyleLoaded() === true
+  } catch {
+    return false
+  }
+}
+
 function syncTopoTerrain(map: maplibregl.Map, layer: LayerType) {
+  if (!mapRepaintSafe(map)) {
+    return
+  }
   if (layer === 'topo') {
     try {
+      try {
+        map.setTerrain(null)
+      } catch {
+        /* clear style-embedded terrain before HUD DEM */
+      }
       if (!map.getSource(TERRAIN_SOURCE_ID)) {
         map.addSource(TERRAIN_SOURCE_ID, {
           type: 'raster-dem',
@@ -182,7 +264,21 @@ function syncTopoTerrain(map: maplibregl.Map, layer: LayerType) {
           tileSize: 256,
         })
       }
-      map.setTerrain({ source: TERRAIN_SOURCE_ID, exaggeration: 1.5 })
+      const applyHudTerrain = () => {
+        if (!mapRepaintSafe(map)) return
+        try {
+          map.setTerrain({ source: TERRAIN_SOURCE_ID, exaggeration: 1.5 })
+        } catch (e) {
+          console.warn('[MapCanvas] topo terrain sync failed', e)
+        }
+      }
+      if (map.isSourceLoaded(TERRAIN_SOURCE_ID)) {
+        applyHudTerrain()
+      } else {
+        map.once('sourcedata', (ev) => {
+          if (ev.sourceId === TERRAIN_SOURCE_ID && ev.isSourceLoaded) applyHudTerrain()
+        })
+      }
     } catch (e) {
       console.warn('[MapCanvas] topo terrain sync failed', e)
     }
@@ -209,13 +305,16 @@ function prepareBasemapSwitch(
       /* style churn */
     }
   }
-  const resolved = resolveBasemapStyle(styleKey)
+  const resolved = resolveHudBasemapStyle(styleKey)
   return { skip: false, style: resolved.style, delivery: resolved.delivery }
 }
 
 /** Safari/WebKit often needs an explicit resize/repaint after `setStyle`. */
 function nudgeMapRenderAfterStyleChange(map: maplibregl.Map): void {
   const repaint = () => {
+    if (!mapRepaintSafe(map)) {
+      return
+    }
     try {
       map.resize()
     } catch {
@@ -574,14 +673,21 @@ export default function MapCanvas() {
         typeof navigator !== 'undefined' && navigator.onLine === false
       const bootBasemap = offlineBoot
         ? (() => {
+            if (hasCorridorOutdoorCache()) {
+              const corridorRaster = getMapTilerRasterDirectTilesStyle('outdoor')
+              if (corridorRaster) {
+                mapLayerDiag('boot-offline-corridor-raster', { layer: initLayer })
+                return { style: corridorRaster, delivery: 'maptiler-raster' as BasemapDelivery }
+              }
+            }
             const emerg = validatedEmergencyFallbackStyle()
             if (emerg) {
               mapLayerDiag('boot-offline-emergency', { layer: initLayer })
               return { style: emerg, delivery: 'maptiler-raster' as BasemapDelivery }
             }
-            return resolveBasemapStyle(initLayer)
+            return resolveHudBasemapStyle(initLayer)
           })()
-        : resolveBasemapStyle(initLayer)
+        : resolveHudBasemapStyle(initLayer)
       const initialStyle = bootBasemap.style
       currentStyleRef.current =
         bootBasemap.delivery === 'vector' && typeof initialStyle === 'string' ? initialStyle : null
@@ -889,12 +995,14 @@ export default function MapCanvas() {
           return true
         }
 
-        // CONTRACT-SENSITIVE (trail snap): preview-only path. When OFF or
-        // unavailable, this block is skipped — behavior matches pre-snap
-        // byte-for-byte. Failure to find a candidate must fall through to raw.
-        // Snap failure / gate failure never blocks placement; only explicit
-        // preview confirmation writes snapped coordinates.
-        if (snapToTrailEnabledRef.current && isSnapAvailable(map)) {
+        // CONTRACT-SENSITIVE (trail snap): when enabled on Outdoor, snap pin to
+        // nearest rendered trail within MAX_SNAP_RADIUS_M. No candidate → raw drop
+        // (same as snap OFF). Checkbox OFF skips this block entirely.
+        if (
+          snapToTrailEnabledRef.current &&
+          activeLayerRef.current === 'outdoor' &&
+          isSnapAvailable(map)
+        ) {
           const cand = findNearestTrailCandidate(map, {
             lat,
             lng,
@@ -902,94 +1010,19 @@ export default function MapCanvas() {
           })
           if (cand) {
             clearTrailSnapPreview()
-            if (!snapPreviewGateRef.current.tryLock()) return false
-
-            const rawEl = document.createElement('div')
-            rawEl.style.cssText =
-              'width:14px;height:14px;border-radius:50%;background:#fb923c;border:2px solid #fff;box-shadow:0 0 6px rgba(0,0,0,0.5)'
-            const snapEl = document.createElement('div')
-            snapEl.style.cssText =
-              'width:14px;height:14px;border-radius:50%;background:#5eead4;border:2px solid #fff;box-shadow:0 0 6px rgba(0,0,0,0.5)'
-
-            const rawMarker = new maplibregl.Marker({ element: rawEl })
-              .setLngLat([lng, lat])
-              .addTo(map)
-            const snapMarker = new maplibregl.Marker({ element: snapEl })
-              .setLngLat([cand.snappedLng, cand.snappedLat])
-              .addTo(map)
-
-            const bar = document.createElement('div')
-            bar.setAttribute('data-trail-snap-preview', '1')
-            bar.style.cssText =
-              'position:absolute;bottom:28px;left:50%;transform:translateX(-50%);z-index:10000;display:flex;gap:10px;align-items:center;padding:10px 12px;border-radius:10px;background:rgba(8,12,18,0.92);border:1px solid rgba(94,234,212,0.45);pointer-events:auto'
-            const mkBtn = (text: string, primary: boolean) => {
-              const b = document.createElement('button')
-              b.type = 'button'
-              b.setAttribute('data-no-drag', '1')
-              b.textContent = text
-              b.style.cssText = [
-                'cursor:pointer',
-                'font-weight:800',
-                'letter-spacing:0.06em',
-                'font-size:11px',
-                'padding:10px 14px',
-                'border-radius:8px',
-                primary
-                  ? 'border:1px solid rgba(94,234,212,0.7);background:rgba(94,234,212,0.15);color:#ccfbf1'
-                  : 'border:1px solid rgba(148,163,184,0.5);background:rgba(30,41,59,0.6);color:#e2e8f0',
-              ].join(';')
-              return b
-            }
-            const btnSnap = mkBtn('Use Snapped', true)
-            const btnRaw = mkBtn('Use Raw', false)
-            bar.appendChild(btnSnap)
-            bar.appendChild(btnRaw)
-            map.getContainer().appendChild(bar)
-
-            const finish = (mode: 'snapped' | 'raw') => {
-              clearTrailSnapPreview()
-              lastDropAtRef.current = Date.now()
-              if (mode === 'snapped') {
-                commitWaypoint({
-                  id: makeId(),
-                  lng: cand.snappedLng,
-                  lat: cand.snappedLat,
-                  rawLat: lat,
-                  rawLng: lng,
-                  source: 'snapped',
-                  snapDistanceMeters: cand.distanceMeters,
-                  label,
-                  type,
-                  createdAt: Date.now(),
-                })
-              } else {
-                commitWaypoint({
-                  id: makeId(),
-                  lng,
-                  lat,
-                  label,
-                  type,
-                  createdAt: Date.now(),
-                })
-              }
-            }
-            btnSnap.addEventListener('click', (ev) => {
-              ev.preventDefault()
-              ev.stopPropagation()
-              finish('snapped')
+            lastDropAtRef.current = Date.now()
+            return commitWaypoint({
+              id: makeId(),
+              lng: cand.snappedLng,
+              lat: cand.snappedLat,
+              rawLat: lat,
+              rawLng: lng,
+              source: 'snapped',
+              snapDistanceMeters: cand.distanceMeters,
+              label,
+              type,
+              createdAt: Date.now(),
             })
-            btnRaw.addEventListener('click', (ev) => {
-              ev.preventDefault()
-              ev.stopPropagation()
-              finish('raw')
-            })
-
-            snapPreviewCleanupRef.current = () => {
-              rawMarker.remove()
-              snapMarker.remove()
-              bar.remove()
-            }
-            return true
           }
         }
 
@@ -1012,11 +1045,27 @@ export default function MapCanvas() {
         return true
       }
 
+      const maybeDispatchTrailInspect = (e: { lngLat?: { lat: number; lng: number } }) => {
+        if (activeLayerRef.current !== 'outdoor') return
+        if (
+          isWaypointPlacementAllowed(
+            waypointDropBlockedRef.current,
+            pendingTypeRef.current,
+          )
+        ) {
+          return
+        }
+        const ll = e?.lngLat
+        if (!ll || typeof ll.lat !== 'number' || typeof ll.lng !== 'number') return
+        dispatchTrailInspectTap(ll.lat, ll.lng)
+      }
+
       map.on('click', (e: any) => {
         lastUserInteractionAt = Date.now()
         markUserViewportControl()
         // iOS emits synthetic click shortly after a successful touch drop.
         if (Date.now() - lastTouchDropAt < 550) return
+        maybeDispatchTrailInspect(e)
         selectWaypoint(null)
         tapDiag('click placement attempt')
         placeWaypoint(e, 'click')
@@ -1051,6 +1100,7 @@ export default function MapCanvas() {
           return
         }
         if (touchMoved) return
+        maybeDispatchTrailInspect(e)
         selectWaypoint(null)
         const dropped = placeWaypoint(e, 'touch')
         if (dropped) lastTouchDropAt = Date.now()
@@ -1121,6 +1171,26 @@ export default function MapCanvas() {
       if (cancelled) return
       if (!map) return
       scheduleResize()
+      if (
+        typeof navigator !== 'undefined' &&
+        !navigator.onLine &&
+        activeLayerRef.current === 'outdoor' &&
+        hasCorridorOutdoorCache()
+      ) {
+        const direct = getMapTilerRasterDirectTilesStyle('outdoor')
+        if (direct) {
+          try {
+            const fp = mapStyleFingerprint(direct)
+            if (mapStyleFingerprint(map.getStyle()) !== fp) {
+              map.setStyle(direct, { diff: false })
+              currentStyleRef.current = fp
+              mapLayerDiag('visibility-offline-corridor-raster', { layer: 'outdoor' })
+            }
+          } catch {
+            /* ignore */
+          }
+        }
+      }
       nudgeMapRenderAfterStyleChange(map)
       mapLayerDiag('visibility-resume', { layer: activeLayerRef.current })
       const fn = snapAssistSyncRef.current
@@ -1314,12 +1384,22 @@ export default function MapCanvas() {
       if (cancelled || gen !== styleSwitchGenRef.current) return
       if (activeLayerRef.current !== layerKey) return
       styleLoadSeen = true
-      try {
-        syncTopoTerrain(mapCtl, layerKey)
-      } catch {
-        /* ignore */
+      const afterStylePaint = () => {
+        if (cancelled || gen !== styleSwitchGenRef.current) return
+        if (activeLayerRef.current !== layerKey) return
+        try {
+          mapCtl.setTerrain(null)
+        } catch {
+          /* drop MapTiler embedded terrain before HUD DEM */
+        }
+        try {
+          syncTopoTerrain(mapCtl, layerKey)
+        } catch {
+          /* ignore */
+        }
+        nudgeMapRenderAfterStyleChange(mapCtl)
       }
-      nudgeMapRenderAfterStyleChange(mapCtl)
+      mapCtl.once('idle', afterStylePaint)
     }
 
     function bindStyleReadyHandlers() {
@@ -1355,9 +1435,14 @@ export default function MapCanvas() {
       appliedFpForThisGen = mapStyleFingerprint(target)
       urlForThisGen = typeof target === 'string' ? target : appliedFpForThisGen
       unbindStyleReadyHandlers()
+      try {
+        mapCtl.setTerrain(null)
+      } catch {
+        /* drop embedded terrain before style swap */
+      }
       mapCtl.setStyle(target, { diff: false })
       bindStyleReadyHandlers()
-      nudgeMapRenderAfterStyleChange(mapCtl)
+      // Repaint only after style.load/idle — immediate nudge races terrainDepth (shaderPreludeCode).
     }
 
     function applyMapTilerRasterFallback(reason: string): boolean {
@@ -1479,7 +1564,7 @@ export default function MapCanvas() {
       if (!ev.persisted || cancelled || gen !== styleSwitchGenRef.current) return
       currentAppliedLayerRef.current = null
       try {
-        const resolved = resolveBasemapStyle(layerKey)
+        const resolved = resolveHudBasemapStyle(layerKey)
         applyStyleTarget(
           resolved.style,
           resolved.delivery === 'maptiler-raster' ? 'maptiler-raster' : 'none',
@@ -1556,7 +1641,12 @@ export default function MapCanvas() {
     }
 
     const apply = () => {
-      if (!map.isStyleLoaded()) return
+      try {
+        if (!map.getStyle()) return
+        if (!map.isStyleLoaded()) return
+      } catch {
+        return
+      }
       if (!debugOverlayEnabled() || !debugClick) {
         clear()
         return

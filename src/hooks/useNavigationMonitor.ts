@@ -48,8 +48,12 @@ export function useNavigationMonitor(): NavigationMonitorState {
     return distanceToActiveWaypoint(gps.lat, gps.lng, waypoints)
   }, [gps.lat, gps.lng, waypoints])
 
+  const hasTrailGeometry =
+    snapToTrailEnabled &&
+    trailRoute.legs.some((leg) => leg.mode === 'trail' && leg.points.length >= 3)
+
   const trailDistance = useMemo(() => {
-    if (!snapToTrailEnabled || trailRoute.coordinates.length < 2) return null
+    if (!hasTrailGeometry || trailRoute.coordinates.length < 2) return null
     if (gps.lat == null || gps.lng == null) return null
     const activeIdx = waypoints.findIndex((w) => w.status === 'active')
     if (activeIdx < 0) return null
@@ -75,7 +79,7 @@ export function useNavigationMonitor(): NavigationMonitorState {
       ? haversineDistance(gps.lat, gps.lng, activeNav.waypoint.lat, activeNav.waypoint.lng).miles
       : 0
     return remainM + toActive
-  }, [snapToTrailEnabled, trailRoute.coordinates, gps.lat, gps.lng, waypoints, activeNav])
+  }, [hasTrailGeometry, trailRoute.coordinates, gps.lat, gps.lng, waypoints, activeNav])
 
   useEffect(() => {
     if (gps.lat == null || gps.lng == null) {
@@ -90,7 +94,7 @@ export function useNavigationMonitor(): NavigationMonitorState {
     const pinRoute = waypoints
       .filter((w) => w.status !== 'archived')
       .map((w) => ({ lat: w.lat, lng: w.lng }))
-    const hasTrail = snapToTrailEnabled && trailRoute.coordinates.length >= 2
+    const hasTrail = hasTrailGeometry
     const routeForOffRoute = hasTrail
       ? trailRoute.coordinates.map(([lng, lat]) => ({ lat, lng }))
       : pinRoute
@@ -111,7 +115,7 @@ export function useNavigationMonitor(): NavigationMonitorState {
       timestampMs: Date.now(),
     })
     setGpsConfidence(conf)
-  }, [gps.lat, gps.lng, gps.accuracy, waypoints, snapToTrailEnabled, trailRoute.coordinates])
+  }, [gps.lat, gps.lng, gps.accuracy, waypoints, hasTrailGeometry, trailRoute.coordinates])
 
   return {
     activeDistanceMiles: activeNav?.miles ?? null,

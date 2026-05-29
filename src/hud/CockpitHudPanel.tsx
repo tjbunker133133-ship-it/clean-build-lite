@@ -1463,53 +1463,52 @@ export default function CockpitHudPanel({
 
   const toggleDocked = () => {
     traceAction(`panel_toggle_dock:${panelId}`, 'handler_enter', { docked })
-    setDockedGuarded((prev) => {
-      const next = !prev
-      if (next) {
-        const source: DockIntentSource = 'toggle'
-        if (!mobileDockAllowed(source, isMobile)) {
-          traceAction(`panel_toggle_dock:${panelId}`, 'guard_reject', { reason: 'mobile_toggle_blocked' })
-          dockDevTrace('[DOCK BLOCKED - MOBILE]', { source })
-          dockDevTrace('[DOCK FINAL CHECK]', {
-            isMobile,
-            source,
-            allowed: mobileDockAllowed(source, isMobile),
-          })
-          return prev
-        }
-        const allowed = canDock('toggle')
-        if (!allowed) {
-          traceAction(`panel_toggle_dock:${panelId}`, 'guard_reject', { reason: 'controller_rejected' })
-          return prev
-        }
+    const next = !docked
+    if (next) {
+      const source: DockIntentSource = 'toggle'
+      if (!mobileDockAllowed(source, isMobile)) {
+        traceAction(`panel_toggle_dock:${panelId}`, 'guard_reject', { reason: 'mobile_toggle_blocked' })
+        dockDevTrace('[DOCK BLOCKED - MOBILE]', { source })
         dockDevTrace('[DOCK FINAL CHECK]', {
           isMobile,
           source,
           allowed: mobileDockAllowed(source, isMobile),
         })
-        const dockW = DOCKED_PANEL_WIDTH_PX
-        const x =
-          dockSide === 'right'
-            ? Math.max(0, viewportSize().vw - dockW - DOCK_EDGE_INSET_PX)
-            : DOCK_EDGE_INSET_PX
-        const dockPos = { x, y: getDockedY(dockSide, posRef.current.y) }
-        const nextSize = { w: dockW, h: sizeRef.current.h }
-        posRef.current = dockPos
-        sizeRef.current = nextSize
-        setPos(dockPos)
-        setSize(nextSize)
-        undockedAt.current = null
-        safeUpdatePanel(panelId, { docked: true, dockSide, x: dockPos.x, y: dockPos.y, w: dockW })
-      } else {
-        setMinimized(false)
-        setDockPreview(null)
-        undockedAt.current = { x: posRef.current.x, y: posRef.current.y }
-        pendingFloatingDefaultSizeRef.current = true
-        safeUpdatePanel(panelId, { docked: false, minimized: false })
+        return
       }
-      traceAction(`panel_toggle_dock:${panelId}`, 'state_result', { docked: next })
-      return next
-    }, 'controller')
+      const allowed = canDock('toggle')
+      if (!allowed) {
+        traceAction(`panel_toggle_dock:${panelId}`, 'guard_reject', { reason: 'controller_rejected' })
+        return
+      }
+      dockDevTrace('[DOCK FINAL CHECK]', {
+        isMobile,
+        source,
+        allowed: mobileDockAllowed(source, isMobile),
+      })
+      const dockW = DOCKED_PANEL_WIDTH_PX
+      const x =
+        dockSide === 'right'
+          ? Math.max(0, viewportSize().vw - dockW - DOCK_EDGE_INSET_PX)
+          : DOCK_EDGE_INSET_PX
+      const dockPos = { x, y: getDockedY(dockSide, posRef.current.y) }
+      const nextSize = { w: dockW, h: sizeRef.current.h }
+      posRef.current = dockPos
+      sizeRef.current = nextSize
+      setPos(dockPos)
+      setSize(nextSize)
+      undockedAt.current = null
+      setDockedGuarded(true, 'controller')
+      safeUpdatePanel(panelId, { docked: true, dockSide, x: dockPos.x, y: dockPos.y, w: dockW })
+    } else {
+      setMinimized(false)
+      setDockPreview(null)
+      undockedAt.current = { x: posRef.current.x, y: posRef.current.y }
+      pendingFloatingDefaultSizeRef.current = true
+      setDockedGuarded(false, 'controller')
+      safeUpdatePanel(panelId, { docked: false, minimized: false })
+    }
+    traceAction(`panel_toggle_dock:${panelId}`, 'state_result', { docked: next })
   }
 
   const applyMobileSizePresetCycle = useCallback(

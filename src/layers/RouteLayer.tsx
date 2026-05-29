@@ -86,43 +86,25 @@ export default function RouteLayer() {
 
 
 
-    const buildTrailGeojson = (): GeoJSON.FeatureCollection => {
+    const trailFollowActive =
+      snapToTrailEnabled &&
+      trailRoute.legs.some((leg) => leg.mode === 'trail' && leg.points.length >= 3)
 
-      const showTrail =
-
-        snapToTrailEnabled && trailRoute.coordinates.length >= 2
-
-      return {
-
-        type: 'FeatureCollection',
-
-        features: showTrail
-
-          ? [
-
-              {
-
-                type: 'Feature',
-
-                properties: {},
-
-                geometry: {
-
-                  type: 'LineString',
-
-                  coordinates: trailRoute.coordinates,
-
-                },
-
+    const buildTrailGeojson = (): GeoJSON.FeatureCollection => ({
+      type: 'FeatureCollection',
+      features: trailFollowActive
+        ? [
+            {
+              type: 'Feature',
+              properties: {},
+              geometry: {
+                type: 'LineString',
+                coordinates: trailRoute.coordinates,
               },
-
-            ]
-
-          : [],
-
-      }
-
-    }
+            },
+          ]
+        : [],
+    })
 
 
 
@@ -214,13 +196,11 @@ export default function RouteLayer() {
 
           paint: {
 
-            'line-color': '#5eead4',
+            'line-color': '#00ffb4',
 
-            'line-width': 2,
+            'line-width': 3,
 
-            'line-opacity': 0.85,
-
-            'line-dasharray': [2, 2],
+            'line-opacity': 1,
 
           },
 
@@ -252,7 +232,9 @@ export default function RouteLayer() {
 
       }
 
-      const geojson = buildGeojson()
+      const geojson = trailFollowActive
+        ? { type: 'FeatureCollection' as const, features: [] }
+        : buildGeojson()
 
       const trailGeojson = buildTrailGeojson()
 
@@ -350,7 +332,7 @@ export default function RouteLayer() {
 
     }
 
-  }, [waypoints, map, snapToTrailEnabled, trailRoute.coordinates])
+  }, [waypoints, map, snapToTrailEnabled, trailRoute.coordinates, trailRoute.legs])
 
 
 

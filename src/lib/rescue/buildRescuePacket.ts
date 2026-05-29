@@ -24,7 +24,6 @@ import {
   operatorMetaFromProfile,
   rescueContactsFromProfile,
 } from '../tacticalProfile'
-import { appendRescuePipelineTrace } from './rescuePipelineTrace'
 
 export type RescueTriggerType = 'SOS' | 'DEADMAN' | 'CHECKIN'
 
@@ -296,26 +295,5 @@ export async function buildRescuePacket(
   }
 
   const packet = await signRescuePacketBody(base)
-  // #region agent log
-  appendRescuePipelineTrace({
-    runId: 'post-fix',
-    hypothesisId: 'D',
-    location: 'buildRescuePacket.ts:buildRescuePacket',
-    message: 'rescue packet built',
-    data: {
-      triggerType,
-      timestampIso: packet.timestamp,
-      timestampLooksIso:
-        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(packet.timestamp) ||
-        packet.triggerType === 'CHECKIN',
-      hasCoordinates: packet.coordinates != null,
-      hasOperator: Boolean(packet.operator),
-      operatorHasReplyTo: Boolean(packet.operator?.reply_to_email),
-      operatorHasDisplayName: Boolean(packet.operator?.display_name),
-      contactCount: packet.contacts.length,
-      signed: Boolean(packet.signature),
-    },
-  })
-  // #endregion
   return packet
 }

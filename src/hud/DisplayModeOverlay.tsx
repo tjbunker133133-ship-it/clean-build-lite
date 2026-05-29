@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { useAppContext } from '../context/AppContext'
 import { useCockpit } from '../context/CockpitContext'
 import type { ScreenHueMode } from '../types/cockpit'
 import { mapScreenFilter } from '../lib/cockpitScreenHue'
@@ -22,8 +23,12 @@ function overlayModeClass(hue: ScreenHueMode): string {
  */
 export default function DisplayModeOverlay() {
   const { prefs } = useCockpit()
+  const { state } = useAppContext()
   const modeClass = useMemo(() => overlayModeClass(prefs.screen_hue), [prefs.screen_hue])
-  const overlayStyle = useMemo(() => mapScreenFilter(prefs.screen_hue, prefs), [prefs.screen_hue, prefs])
+  const overlayStyle = useMemo(
+    () => mapScreenFilter(prefs.screen_hue, prefs, state.activeLayer),
+    [prefs, prefs.screen_hue, state.activeLayer],
+  )
 
   return <div id="display-mode-overlay" className={modeClass} style={overlayStyle} aria-hidden />
 }

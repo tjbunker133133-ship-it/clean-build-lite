@@ -185,16 +185,19 @@ export function installPwaWatcher(): void {
     `[PWA] init standalone=${initial.standalone} platform=${initial.platform} eligible=${initial.eligible}`,
   )
 
-  // Android Chrome / Edge / Samsung Internet emit this when the manifest
-  // is installable. We capture and defer it so the user — not the page —
-  // decides when to show the install prompt.
-  window.addEventListener('beforeinstallprompt', (ev: Event) => {
-    ev.preventDefault()
-    deferredPrompt = ev as unknown as BeforeInstallPromptEventLike
-    lastTransitionAt = Date.now()
-    logInfo('PWA', '[PWA] install prompt available (beforeinstallprompt captured)')
-    notify()
-  })
+  // Android Chrome / Edge / Samsung Internet emit this when the manifest is installable.
+  // Capture only on Android — defer prompt for InstallHelperBanner. iOS uses Share →
+  // Add to Home Screen; desktop should not call preventDefault (Chrome logs a warning).
+  const profile = getDeviceProfile()
+  if (profile.isAndroid) {
+    window.addEventListener('beforeinstallprompt', (ev: Event) => {
+      ev.preventDefault()
+      deferredPrompt = ev as unknown as BeforeInstallPromptEventLike
+      lastTransitionAt = Date.now()
+      logInfo('PWA', '[PWA] install prompt available (beforeinstallprompt captured)')
+      notify()
+    })
+  }
 
   // Fired by all major engines on successful install. We clear the
   // deferred prompt to avoid stale state if the user installs via the

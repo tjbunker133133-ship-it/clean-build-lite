@@ -13,6 +13,7 @@ import type { WaypointType } from '../types'
 import { formatDistance, haversineDistance, totalRouteDistance } from '../lib/haversine'
 import { archivedWaypoints } from '../lib/waypointNavigation'
 import { tier1Debug } from '../lib/tier1DebugLog'
+import { maptilerBasemapsConfigured } from '../lib/mapStyles'
 
 /** Route waypoint tiles — CLEAR ROUTE is a separate command button (not a waypoint type). */
 type RouteTypeTile = { id: WaypointType; label: string; icon: string; color: string }
@@ -51,6 +52,7 @@ export default function WaypointTypePanel() {
     showMapDistances,
     snapToTrailEnabled,
     trailSnapAssistCapable,
+    activeLayer,
   } = state
   const selectedType = pendingWaypointType
   const routeDistance = useMemo(
@@ -306,8 +308,8 @@ export default function WaypointTypePanel() {
           <label
             title={
               trailSnapAssistCapable
-                ? 'When placing pins: preview snap to nearest trail (Use Snapped / Use Raw). Route line stays pin-to-pin.'
-                : 'Unavailable until the map loads vector trails at zoom 12+.'
+                ? 'Beta — keep off for field use. When on: pins may snap ~30 m; route line is experimental.'
+                : 'Unavailable until Outdoor vector trails load at zoom 12+.'
             }
             style={{
               fontSize: labelPx(11),
@@ -325,12 +327,36 @@ export default function WaypointTypePanel() {
               data-testid="snap-to-trail-toggle"
               disabled={!trailSnapAssistCapable}
             />
-            Snap To Trail
+            Snap To Trail (beta)
           </label>
         </div>
         {!trailSnapAssistCapable ? (
           <div style={{ fontSize: labelPx(10), color: '#64748b', marginTop: -gapSm, marginBottom: gapSm }}>
             Trail snap needs vector layers at zoom 12+.
+          </div>
+        ) : snapToTrailEnabled ? (
+          <div style={{ fontSize: labelPx(10), color: '#fbbf24', marginTop: -gapSm, marginBottom: gapSm, lineHeight: 1.4 }}>
+            Beta: trail routing is unreliable. For field testing, turn off — straight pin-to-pin lines stay accurate.
+          </div>
+        ) : (
+          <div style={{ fontSize: labelPx(10), color: '#64748b', marginTop: -gapSm, marginBottom: gapSm, lineHeight: 1.4 }}>
+            Recommended off in the field. Straight routes + offline corridor still work.
+          </div>
+        )}
+        {!maptilerBasemapsConfigured() ? (
+          <div style={{ fontSize: labelPx(10), color: '#fbbf24', marginTop: gapSm, lineHeight: 1.4 }}>
+            MapTiler key missing locally — run npm run env:init or vercel env pull .env.local, then restart{' '}
+            <code style={{ fontSize: '0.95em' }}>npm run dev</code>. Trail tap and snap need this.
+          </div>
+        ) : null}
+        {!isArmed && activeLayer === 'outdoor' && trailSnapAssistCapable ? (
+          <div style={{ fontSize: labelPx(10), color: '#5eead4', marginTop: gapSm, lineHeight: 1.4 }}>
+            Disarmed: click a trail line on the map (zoom 12+) for name / links.
+          </div>
+        ) : null}
+        {isArmed && activeLayer === 'outdoor' ? (
+          <div style={{ fontSize: labelPx(10), color: '#94a3b8', marginTop: gapSm, lineHeight: 1.4 }}>
+            Trail inspect: DISARM (no route tile selected), then click a trail.
           </div>
         ) : null}
       </div>

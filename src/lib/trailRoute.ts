@@ -9,10 +9,10 @@ import type { Map as MapLibreMap } from 'maplibre-gl'
 import { haversineMeters, midpointAlongPolyline, polylineDistance } from './haversine'
 import {
   collectTrailSnapLayerIds,
-  findNearestTrailCandidate,
-  MAX_SNAP_RADIUS_M,
+  findNearestTrailForRouting,
   projectPointOnSegment,
   resolveTrailSnapClass,
+  ROUTE_TRACE_SNAP_M,
   type LatLng,
 } from './snapToTrail'
 import { tier1Debug } from './tier1DebugLog'
@@ -48,11 +48,12 @@ type SnapOnSegment = {
 
 const MAX_ROUTE_SEGMENTS = 1200
 const MAX_SEGMENT_GRAPH_NODES = 800
-const MAX_CONNECT_RADIUS_M = 150
-const MIN_BBOX_PAD_M = 150
-const ENDPOINT_MERGE_M = 22
+const ROUTE_CONNECT_RADIUS_M = 200
+const MIN_BBOX_PAD_M = 180
+const ENDPOINT_MERGE_M = 45
+const ROUTE_GAP_BRIDGE_M = 55
 /** Sample interval along each leg when tracing trails via snap queries. */
-const CORRIDOR_SAMPLE_M = 20
+const CORRIDOR_SAMPLE_M = 10
 
 function nodeId(lat: number, lng: number): string {
   return `${Math.round(lat * 1e4)}_${Math.round(lng * 1e4)}`
@@ -64,7 +65,7 @@ function samePoint(a: LatLng, b: LatLng, epsM = 2): boolean {
 
 function padLegBBox(from: LatLng, to: LatLng) {
   const directM = haversineMeters(from.lat, from.lng, to.lat, to.lng)
-  const pad = Math.max(MIN_BBOX_PAD_M, directM * 0.22)
+  const pad = Math.max(MIN_BBOX_PAD_M, directM * 0.55)
   const minLat = Math.min(from.lat, to.lat)
   const maxLat = Math.max(from.lat, to.lat)
   const minLng = Math.min(from.lng, to.lng)
@@ -328,7 +329,8 @@ function queryTrailFeaturesForLeg(map: MapLibreMap, from: LatLng, to: LatLng) {
     layer?: { id?: string }
   }> = []
 
-  const sampleCount = Math.min(8, Math.max(2, Math.ceil(haversineMeters(from.lat, from.lng, to.lat, to.lng) / 80)))
+  const directM = haversineMeters(from.lat, from.lng, to.lat, to.lng)
+  const sampleCount = Math.min(14, Math.max(3, Math.ceil(directM / 35)))
   const samplePoints: LatLng[] = [{ ...from }]
   for (let i = 1; i < sampleCount; i++) {
     const t = i / sampleCount
@@ -343,7 +345,7 @@ function queryTrailFeaturesForLeg(map: MapLibreMap, from: LatLng, to: LatLng) {
     const layerIds = collectTrailSnapLayerIds(map)
     for (const pt of samplePoints) {
       const screen = map.project([pt.lng, pt.lat])
-      const pad = 140
+      const pad = Math.min(220, 120 + directM * 0.12)
       const screenBox: [[number, number], [number, number]] = [
         [screen.x - pad, screen.y - pad],
         [screen.x + pad, screen.y + pad],
@@ -403,13 +405,14 @@ function alongPolylineM(coords: LatLng[], point: LatLng): number {
 function snapToNearestSegment(
   point: LatLng,
   segments: RichSegment[],
+  maxRadiusM = ROUTE_CONNECT_RADIUS_M,
 ): SnapOnSegment | null {
   let best: SnapOnSegment | null = null
   for (let i = 0; i < segments.length; i++) {
     const coords = segments[i].coords
     for (let j = 1; j < coords.length; j++) {
       const proj = projectPointOnSegment(point, coords[j - 1], coords[j])
-      if (!proj || proj.distanceMeters > MAX_CONNECT_RADIUS_M) continue
+      if (!proj || proj.distanceMeters > maxRadiusM) continue
       const alongM = alongPolylineM(coords, proj)
       if (best === null || proj.distanceMeters < haversineMeters(point.lat, point.lng, best.point.lat, best.point.lng)) {
         best = { segIdx: i, point: { lat: proj.lat, lng: proj.lng }, alongM }
@@ -424,7 +427,7 @@ function segmentsShareEndpoint(a: RichSegment, b: RichSegment): boolean {
   const bEnds = [b.coords[0], b.coords[b.coords.length - 1]]
   for (const ae of aEnds) {
     for (const be of bEnds) {
-      if (haversineMeters(ae.lat, ae.lng, be.lat, be.lng) <= ENDPOINT_MERGE_M) return true
+      if (haversineMeters(ae.lat, ae.lng, be.lat, be.lng) <= ROUTE_GAP_BRIDGE_M) return true
     }
   }
   return false
@@ -590,11 +593,41 @@ function directLeg(from: LatLng, to: LatLng): TrailLegResult {
   }
 }
 
+function routeOnSingleTrailSegment(
+  segments: RichSegment[],
+  from: LatLng,
+  to: LatLng,
+): LatLng[] | null {
+  const start = snapToNearestSegment(from, segments)
+  const end = snapToNearestSegment(to, segments)
+  if (!start || !end || start.segIdx !== end.segIdx) return null
+
+  const seg = segments[start.segIdx]
+  const slice = extractSubPolylineByDistance(seg.coords, start.alongM, end.alongM)
+  if (slice.length < 2) return null
+
+  const poly: LatLng[] = [{ ...from }]
+  for (const p of slice) {
+    if (!samePoint(poly[poly.length - 1], p, 1)) poly.push(p)
+  }
+  if (!samePoint(poly[poly.length - 1], to, 1)) poly.push({ ...to })
+
+  const directM = haversineMeters(from.lat, from.lng, to.lat, to.lng)
+  const trailM = polylineDistance(poly).miles * 1609.344
+  if (poly.length < 3) return null
+  if (trailM < directM * 0.97) return null
+
+  return poly
+}
+
 function routeAlongTrailSegments(
   segments: RichSegment[],
   from: LatLng,
   to: LatLng,
 ): LatLng[] | null {
+  const single = routeOnSingleTrailSegment(segments, from, to)
+  if (single) return single
+
   const start = snapToNearestSegment(from, segments)
   const end = snapToNearestSegment(to, segments)
   if (!start || !end) return null
@@ -607,10 +640,28 @@ function routeAlongTrailSegments(
 
   const directM = haversineMeters(from.lat, from.lng, to.lat, to.lng)
   const trailM = polylineDistance(poly).miles * 1609.344
-  if (poly.length <= 3 && trailM < directM * 0.88) return null
-  if (directM > 25 && trailM > directM * 16) return null
+  if (poly.length <= 2) return null
+  if (poly.length <= 3 && trailM < directM * 0.72) return null
+  if (directM > 25 && trailM > directM * 28) return null
 
   return poly
+}
+
+/** Prefer the candidate that follows trail bends (more vertices, not a chord shortcut). */
+function pickBestTrailPolyline(candidates: Array<LatLng[] | null>, directM: number): LatLng[] | null {
+  let best: LatLng[] | null = null
+  let bestScore = -1
+  for (const poly of candidates) {
+    if (!poly || poly.length < 3) continue
+    const trailM = polylineDistance(poly).miles * 1609.344
+    if (trailM < directM * 0.96) continue
+    const score = poly.length * 2000 + trailM
+    if (score > bestScore) {
+      bestScore = score
+      best = poly
+    }
+  }
+  return best
 }
 
 /**
@@ -619,10 +670,10 @@ function routeAlongTrailSegments(
  */
 function routeTrailLegByCorridorSnap(map: MapLibreMap, from: LatLng, to: LatLng): LatLng[] | null {
   const directM = haversineMeters(from.lat, from.lng, to.lat, to.lng)
-  if (directM < 8) return null
+  if (directM < 6) return null
 
-  const stepM = Math.min(CORRIDOR_SAMPLE_M, Math.max(10, directM / 28))
-  const n = Math.max(4, Math.ceil(directM / stepM))
+  const stepM = Math.min(CORRIDOR_SAMPLE_M, Math.max(6, directM / 60))
+  const n = Math.max(12, Math.ceil(directM / stepM))
   const samples: LatLng[] = []
   for (let i = 0; i <= n; i += 1) {
     const t = i / n
@@ -635,14 +686,14 @@ function routeTrailLegByCorridorSnap(map: MapLibreMap, from: LatLng, to: LatLng)
   const path: LatLng[] = []
   let snapHits = 0
   for (const s of samples) {
-    const cand = findNearestTrailCandidate(map, {
+    const cand = findNearestTrailForRouting(map, {
       lat: s.lat,
       lng: s.lng,
-      radiusMeters: MAX_SNAP_RADIUS_M,
+      radiusMeters: ROUTE_TRACE_SNAP_M,
     })
     const p: LatLng = cand ? { lat: cand.snappedLat, lng: cand.snappedLng } : s
     if (cand) snapHits += 1
-    if (path.length === 0 || !samePoint(path[path.length - 1], p, 2.5)) {
+    if (path.length === 0 || !samePoint(path[path.length - 1], p, 2)) {
       path.push(p)
     }
   }
@@ -650,10 +701,11 @@ function routeTrailLegByCorridorSnap(map: MapLibreMap, from: LatLng, to: LatLng)
   path[0] = { ...from }
   path[path.length - 1] = { ...to }
 
-  if (snapHits < 2 || path.length < 3) return null
+  const minHits = Math.max(4, Math.floor(n * 0.28))
+  if (snapHits < minHits || path.length < 4) return null
 
   const trailM = polylineDistance(path).miles * 1609.344
-  if (path.length <= 3 && trailM < directM * 0.97) return null
+  if (path.length <= 3 && trailM < directM * 0.9) return null
 
   return path
 }
@@ -667,32 +719,39 @@ function trailLegFromPolyline(poly: LatLng[], from: LatLng, to: LatLng): TrailLe
   }
 }
 
-/** Route one leg along trail geometry; falls back to straight line. */
+/** Route one leg along trail geometry; falls back to straight line only when trail cannot be resolved. */
 export function routeTrailLeg(map: MapLibreMap | null | undefined, from: LatLng, to: LatLng): TrailLegResult {
   if (map == null) return directLeg(from, to)
   if (samePoint(from, to)) {
     return { points: [from], mode: 'direct', distance: { miles: 0, feet: 0 }, midpoint: from }
   }
 
+  const directM = haversineMeters(from.lat, from.lng, to.lat, to.lng)
+
+  let segmentPoly: LatLng[] | null = null
+  let singleSegmentPoly: LatLng[] | null = null
   let segments: RichSegment[] = []
   try {
     const { box, features } = queryTrailFeaturesForLeg(map, from, to)
     segments = mergeConnectedRichSegments(extractRichSegmentsFromFeatures(features, box))
+    if (segments.length > 0) {
+      singleSegmentPoly = routeOnSingleTrailSegment(segments, from, to)
+      segmentPoly = routeAlongTrailSegments(segments, from, to)
+    }
   } catch {
     segments = []
   }
 
-  if (segments.length > 0) {
-    const poly = routeAlongTrailSegments(segments, from, to)
-    if (poly && poly.length >= 3) {
-      return trailLegFromPolyline(poly, from, to)
-    }
-  }
-
   const corridor = routeTrailLegByCorridorSnap(map, from, to)
-  if (corridor && corridor.length >= 3) {
-    tier1Debug('trail-route', 'leg-corridor-snap', { from, to, points: corridor.length })
-    return trailLegFromPolyline(corridor, from, to)
+  const best = pickBestTrailPolyline([singleSegmentPoly, segmentPoly, corridor], directM)
+  if (best && best.length >= 3) {
+    tier1Debug('trail-route', 'leg-trail', {
+      from,
+      to,
+      points: best.length,
+      via: best === corridor ? 'corridor' : best === segmentPoly ? 'segment-graph' : 'merged',
+    })
+    return trailLegFromPolyline(best, from, to)
   }
 
   tier1Debug('trail-route', 'leg-fallback-direct', {

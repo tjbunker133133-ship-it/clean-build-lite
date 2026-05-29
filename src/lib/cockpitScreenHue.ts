@@ -1,4 +1,5 @@
 import type { CSSProperties } from 'react'
+import type { LayerType } from '../types'
 import type { CockpitPrefs, ScreenHueMode } from '../types/cockpit'
 
 const MIN_BRIGHTNESS = 0.65
@@ -40,7 +41,11 @@ export function screenHueFilter(mode: ScreenHueMode, prefs?: Partial<CockpitPref
  * Map tint presets — avoid applying to the MapLibre container ancestor:
  * CSS `filter` there can desync rendered tiles vs input coordinates.
  */
-export function mapScreenFilter(mode: ScreenHueMode, prefs?: Partial<CockpitPrefs>): CSSProperties {
+export function mapScreenFilter(
+  mode: ScreenHueMode,
+  prefs?: Partial<CockpitPrefs>,
+  activeLayer?: LayerType,
+): CSSProperties {
   switch (mode) {
     case 'low_light': {
       // Keep low-light readable on mobile OLED panels; avoid over-dimming maps.
@@ -48,8 +53,12 @@ export function mapScreenFilter(mode: ScreenHueMode, prefs?: Partial<CockpitPref
       return { filter: `brightness(${b.toFixed(3)}) contrast(0.98) saturate(0.8)` }
     }
     case 'bright_day': {
-      const b = mapSliderBrightness(prefs?.bright_map_brightness ?? 1.18, 1.0, 1.4, 1.4)
-      return { filter: `brightness(${b.toFixed(3)}) contrast(1.08) saturate(1.04)` }
+      const base = mapSliderBrightness(prefs?.bright_map_brightness ?? 1.18, 1.0, 1.4, 1.4)
+      const outdoorScale = activeLayer === 'outdoor' ? 0.9 : 1
+      const b = base * outdoorScale
+      return {
+        filter: `brightness(${b.toFixed(3)}) contrast(1.1) saturate(1.02)`,
+      }
     }
     case 'red_tactical':
       // Stronger red monochrome for map layer with guarded tuning.

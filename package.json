@@ -14,6 +14,10 @@
     "test": "vitest run",
     "verify:tier1": "node scripts/verify-tier1-contract.mjs && node scripts/verify-tier1-freeze.mjs && vitest run src/lib/tier1Contract.test.ts src/lib/tier1Freeze.test.ts",
     "verify": "tsc --noEmit && vitest run && node scripts/verify-tier1-contract.mjs && vite build",
+    "verify:runtime": "npm run verify && node scripts/runtime-audit.mjs",
+    "build:plugin": "npm run build --prefix plugins/capacitor-hud-mission-link",
+    "cap:sync": "npm run build && npm run build:plugin && npx cap sync android",
+    "cap:open:android": "npx cap open android",
     "env:init": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/init-env.ps1",
     "env:setup": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/set-env-interactive.ps1",
     "env:open": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/open-env.ps1",
@@ -25,25 +29,35 @@
     "env:verify-contract": "node scripts/verify-rescue-contract.mjs",
     "smoke": "npm run verify"
   },
+  "overrides": {
+    "esbuild": "^0.25.0",
+    "tar": "^7.5.15"
+  },
   "dependencies": {
+    "@signal-one/capacitor-hud-mission-link": "file:plugins/capacitor-hud-mission-link",
     "@supabase/supabase-js": "^2.105.3",
     "maplibre-gl": "^5.0.0",
+    "qrcode": "^1.5.4",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "resend": "^6.12.3",
     "vite-plugin-pwa": "^1.2.0"
   },
   "devDependencies": {
+    "@capacitor/android": "^6.2.0",
+    "@capacitor/cli": "^6.2.0",
+    "@capacitor/core": "^6.2.0",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^18.2.43",
     "@types/react-dom": "^18.2.17",
     "@typescript-eslint/eslint-plugin": "^8.59.1",
     "@typescript-eslint/parser": "^8.59.1",
-    "@vitejs/plugin-react": "^4.2.1",
+    "@vitejs/plugin-react": "^4.3.4",
     "eslint": "^10.3.0",
     "playwright": "^1.59.1",
     "prettier": "^3.8.3",
     "typescript": "^5.2.2",
-    "vite": "^5.0.0",
+    "vite": "^6.4.2",
     "vitest": "^3.0.0"
   }
 }

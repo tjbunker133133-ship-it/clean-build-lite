@@ -53,7 +53,6 @@ export function logRescueDispatchTrace(input: {
   hasOperator: boolean
   signed: boolean
 }): void {
-  // #region agent log
   let endpointHost = ''
   let endpointPath = ''
   try {
@@ -64,7 +63,7 @@ export function logRescueDispatchTrace(input: {
     endpointPath = '(invalid-url)'
   }
   appendRescuePipelineTrace({
-    runId: 'post-fix',
+    runId: 'dispatch',
     hypothesisId: 'B',
     location: 'rescueDispatch.ts:logRescueDispatchTrace',
     message: 'rescue POST dispatch',
@@ -78,7 +77,6 @@ export function logRescueDispatchTrace(input: {
       signed: input.signed,
     },
   })
-  // #endregion
 }
 
 export type RescueDispatchFailure = {

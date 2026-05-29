@@ -68,6 +68,24 @@ export default defineConfig({
         skipWaiting: true,
         clientsClaim: true,
         importScripts: ['/sw-message-handler.js'],
+        runtimeCaching: [
+          {
+            urlPattern: ({ url }) =>
+              url.origin === 'https://api.maptiler.com' &&
+              (url.pathname.includes('/maps/') || url.pathname.includes('/tiles/')),
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'maptiler-outdoor-tiles-v1',
+              expiration: {
+                maxEntries: 800,
+                maxAgeSeconds: 60 * 60 * 24 * 30,
+              },
+              cacheableResponse: {
+                statuses: [0, 200],
+              },
+            },
+          },
+        ],
       },
     }),
   ],

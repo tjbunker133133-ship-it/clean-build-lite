@@ -5,8 +5,6 @@
  * Legacy `rapid-endpoint` URLs in env or localStorage are ignored.
  */
 
-import { appendRescuePipelineTrace } from './rescuePipelineTrace'
-
 export const SEND_RESCUE_EMAIL_PATH = '/functions/v1/send-rescue-email'
 
 export type RescueEndpointSource =
@@ -95,43 +93,6 @@ export function resolveRapidEndpointMeta(): ResolvedRescueEndpoint {
   return { url: '', source: 'none' }
 }
 
-// #region agent log
-function logRescueEndpointResolution(meta: ResolvedRescueEndpoint): void {
-  let endpointHost = ''
-  let endpointPath = ''
-  if (meta.url) {
-    try {
-      const u = new URL(meta.url)
-      endpointHost = u.host
-      endpointPath = u.pathname
-    } catch {
-      endpointPath = '(invalid-url)'
-    }
-  }
-  appendRescuePipelineTrace({
-    runId: 'post-fix',
-    hypothesisId: 'A',
-    location: 'resolveRapidEndpoint.ts:logRescueEndpointResolution',
-    message: 'rescue endpoint resolved',
-    data: {
-      source: meta.source,
-      hasUrl: meta.url.length > 0,
-      endpointHost,
-      endpointPath,
-      isCanonicalPath: endpointPath.includes('send-rescue-email'),
-    },
-  })
-}
-// #endregion
-
-let lastLoggedEndpointKey = ''
-
 export function resolveRapidEndpoint(): string {
-  const meta = resolveRapidEndpointMeta()
-  const key = `${meta.source}|${meta.url}`
-  if (key !== lastLoggedEndpointKey) {
-    lastLoggedEndpointKey = key
-    logRescueEndpointResolution(meta)
-  }
-  return meta.url
+  return resolveRapidEndpointMeta().url
 }

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import * as maplibregl from 'maplibre-gl'
 import { useMapContext } from '../context/MapContext'
 import { useAppContext } from '../context/AppContext'
+import { useTrailRoute } from '../context/TrailRouteContext'
 import type { WaypointType } from '../types'
 import { haversineDistance, formatDistance } from '../lib/haversine'
 import { getDeviceProfile } from '../runtime/deviceProfile'
@@ -41,7 +42,8 @@ function useDefaultWaypointMarkerDebug(): boolean {
 export default function WaypointLayer() {
   const { map } = useMapContext()
   const { state, removeWaypoint, updateWaypoint } = useAppContext()
-  const { waypoints, showMapLabels, showMapDistances } = state
+  const { waypoints, showMapLabels, showMapDistances, snapToTrailEnabled } = state
+  const trailRoute = useTrailRoute()
 
   const markersRef = useRef<Record<string, maplibregl.Marker>>({})
   const labelMarkersRef = useRef<Record<string, maplibregl.Marker>>({})
@@ -272,10 +274,13 @@ export default function WaypointLayer() {
         for (let i = 1; i < visible.length; i++) {
           const a = visible[i - 1]
           const b = visible[i]
-          const midLng = (a.lng + b.lng) / 2
-          const midLat = (a.lat + b.lat) / 2
-          const seg = haversineDistance(a.lat, a.lng, b.lat, b.lng)
+          const legIdx = i - 1
+          const trailLeg = snapToTrailEnabled ? trailRoute.legs[legIdx] : undefined
+          const useTrailDist = trailLeg?.mode === 'trail'
+          const seg = useTrailDist ? trailLeg.distance : haversineDistance(a.lat, a.lng, b.lat, b.lng)
           const text = formatDistance(seg.miles)
+          const midLng = useTrailDist ? trailLeg.midpoint.lng : (a.lng + b.lng) / 2
+          const midLat = useTrailDist ? trailLeg.midpoint.lat : (a.lat + b.lat) / 2
 
           const segEl = document.createElement('div')
           segEl.style.padding = '2px 7px'
@@ -310,7 +315,18 @@ export default function WaypointLayer() {
         rebuildRafRef.current = null
       }
     }
-  }, [waypoints, map, showMapLabels, showMapDistances, overlaysReady, lowPowerMode, removeWaypoint, updateWaypoint])
+  }, [
+    waypoints,
+    map,
+    showMapLabels,
+    showMapDistances,
+    overlaysReady,
+    lowPowerMode,
+    removeWaypoint,
+    updateWaypoint,
+    snapToTrailEnabled,
+    trailRoute.legs,
+  ])
 
   useEffect(() => {
     return () => {

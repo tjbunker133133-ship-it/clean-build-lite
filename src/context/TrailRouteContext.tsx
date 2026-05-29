@@ -24,8 +24,8 @@ export function TrailRouteProvider({ children }: { children: ReactNode }) {
   const { map } = useMapContext()
   const { state } = useAppContext()
   const { waypoints, snapToTrailEnabled, trailSnapAssistCapable } = state
-  const trailFollowEnabled =
-    waypoints.length >= 2 && (snapToTrailEnabled || trailSnapAssistCapable)
+  /** Trail-following route line only when operator enabled snap (pin-to-pin otherwise). */
+  const trailFollowEnabled = waypoints.length >= 2 && snapToTrailEnabled
 
   const [route, setRoute] = useState<TrailRouteResult>(EMPTY_ROUTE)
   const waypointsRef = useRef(waypoints)
@@ -35,7 +35,7 @@ export function TrailRouteProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const recompute = () => {
-      const wps = waypointsRef.current
+      const wps = waypointsRef.current.filter((w) => w.status !== 'archived')
       if (!enabledRef.current || wps.length < 2) {
         setRoute(computeTrailRoute(null, wps, false))
         return
@@ -49,20 +49,25 @@ export function TrailRouteProvider({ children }: { children: ReactNode }) {
 
     recompute()
 
-    if (!map || waypoints.length < 2) return
+    if (!map || waypoints.length < 2 || !trailFollowEnabled) return
 
+    let tileRetryId: number | null = null
     const onMapChange = () => {
       window.requestAnimationFrame(recompute)
+      if (tileRetryId != null) window.clearTimeout(tileRetryId)
+      tileRetryId = window.setTimeout(() => {
+        tileRetryId = null
+        recompute()
+      }, 450)
     }
     map.on('moveend', onMapChange)
     map.on('zoomend', onMapChange)
     map.on('idle', onMapChange)
-    map.on('styledata', onMapChange)
     return () => {
+      if (tileRetryId != null) window.clearTimeout(tileRetryId)
       map.off('moveend', onMapChange)
       map.off('zoomend', onMapChange)
       map.off('idle', onMapChange)
-      map.off('styledata', onMapChange)
     }
   }, [map, waypoints, trailFollowEnabled, snapToTrailEnabled, trailSnapAssistCapable])
 

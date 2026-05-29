@@ -36,6 +36,14 @@ export const TIER2_EXCLUDED_PATHS = [
   'src/lib/gpsConfidence.ts',
   'src/layers/RouteLayer.tsx',
   'src/layers/WaypointLayer.tsx',
+  'src/lib/trailInspect.ts',
+  'src/hooks/useTrailInspect.ts',
+  'src/hud/TrailInspectCard.tsx',
+  'src/lib/missionSync',
+  'src/context/MissionSyncContext.tsx',
+  'src/hud/MissionLinkPanel.tsx',
+  'src/hud/MissionSyncStatusChip.tsx',
+  'src/layers/TeamPresenceLayer.tsx',
 ] as const
 
 export const TIER2_EXCLUDED_CAPABILITIES = [
@@ -49,6 +57,9 @@ export const TIER2_EXCLUDED_CAPABILITIES = [
   'Terrain-aware navigation',
   'USGS / NASA / environmental integrations',
   'Predictive routing behavior',
+  'Outdoor trail inspect (tap-for-info, link-out)',
+  'Mission P2P sync (WebRTC mesh, waypoint sharing, team check-in/burst)',
+  'Capacitor Android shell + LAN mission discovery plugin',
 ] as const
 
 export type Tier1FreezeAuditResult = {

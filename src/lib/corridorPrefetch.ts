@@ -1,9 +1,18 @@
 import { HALF_CORRIDOR_FEET } from './corridor'
 import { haversineDistance } from './haversine'
+import { maptilerRasterTileTemplates } from './mapStyles'
 
 const METERS_PER_MILE = 1609.344
 const HALF_CORRIDOR_MILES = HALF_CORRIDOR_FEET / 5280
 export const PREFETCH_MOVE_MILES = 1.5
+
+/** Cache Storage bucket for Outdoor corridor tiles (bookmark + PWA). */
+export const OUTDOOR_TILE_CACHE_NAME = 'hud-outdoor-tiles-v1'
+
+/** Per prefetch run — bounded; accumulates across waypoint edits and travel. */
+export const PREFETCH_MAX_TILES_PER_RUN = 200
+
+export const PREFETCH_ZOOM_LEVELS = [11, 12, 13] as const
 
 export type CorridorBounds = {
   minLat: number
@@ -18,6 +27,8 @@ export type CorridorCacheRegion = {
   centerLng: number
   updatedAt: number
   layer: 'outdoor'
+  routeFingerprint: string
+  tilesLoaded: number
 }
 
 const STORAGE_KEY = 'hud_corridor_cache_v1'
@@ -67,6 +78,14 @@ export function computeCorridorBounds(
   return padBounds(route, halfWidthMiles)
 }
 
+/** Stable fingerprint for waypoint route edits (triggers corridor re-prefetch). */
+export function computeRouteFingerprint(route: Array<{ lat: number; lng: number }>): string {
+  if (route.length === 0) return ''
+  return route
+    .map((p) => `${p.lat.toFixed(5)},${p.lng.toFixed(5)}`)
+    .join('|')
+}
+
 export function loadCorridorCacheRegion(): CorridorCacheRegion | null {
   if (typeof localStorage === 'undefined') return null
   try {
@@ -74,7 +93,15 @@ export function loadCorridorCacheRegion(): CorridorCacheRegion | null {
     if (!raw) return null
     const parsed = JSON.parse(raw) as CorridorCacheRegion
     if (!parsed?.bounds) return null
-    return parsed
+    return {
+      ...parsed,
+      layer: 'outdoor',
+      routeFingerprint: typeof parsed.routeFingerprint === 'string' ? parsed.routeFingerprint : '',
+      tilesLoaded:
+        typeof parsed.tilesLoaded === 'number' && Number.isFinite(parsed.tilesLoaded)
+          ? parsed.tilesLoaded
+          : 0,
+    }
   } catch {
     return null
   }
@@ -93,6 +120,12 @@ export function saveCorridorCacheRegion(region: CorridorCacheRegion): void {
   } catch {
     /* quota / private mode */
   }
+}
+
+/** True when a prior Outdoor corridor prefetch has stored bounds (offline boot hint). */
+export function hasCorridorOutdoorCache(): boolean {
+  const region = loadCorridorCacheRegion()
+  return region != null && region.layer === 'outdoor'
 }
 
 export function loadOperationalAreaSeeds(): OperationalAreaSeed[] {
@@ -171,9 +204,11 @@ export function shouldRefreshCorridorPrefetch(
   userLat: number,
   userLng: number,
   region: CorridorCacheRegion | null,
+  routeFingerprint?: string,
   moveThresholdMiles = PREFETCH_MOVE_MILES,
 ): boolean {
   if (!region) return true
+  if (routeFingerprint && routeFingerprint !== region.routeFingerprint) return true
   const { miles } = haversineDistance(userLat, userLng, region.centerLat, region.centerLng)
   return miles >= moveThresholdMiles
 }
@@ -199,7 +234,12 @@ export function distanceToCorridorEdgeFeet(
   return Math.hypot(dx, dy) * 3.28084
 }
 
-/** Extract raster tile URL templates from a loaded MapLibre style. */
+/** Outdoor MapTiler raster XYZ templates (independent of vector style.json). */
+export function getOutdoorCorridorTileTemplates(): string[] {
+  return maptilerRasterTileTemplates('outdoor')
+}
+
+/** @deprecated Prefer `getOutdoorCorridorTileTemplates` for corridor warm-up. */
 export function extractOutdoorTileUrls(style: unknown): string[] {
   if (!style || typeof style !== 'object') return []
   const spec = style as { sources?: Record<string, { type?: string; tiles?: string[] }> }
@@ -209,6 +249,8 @@ export function extractOutdoorTileUrls(style: unknown): string[] {
       urls.push(...src.tiles.filter((t) => typeof t === 'string'))
     }
   }
+  const outdoor = getOutdoorCorridorTileTemplates()
+  if (outdoor.length > 0) return outdoor
   return urls.filter((u) => u.includes('maptiler') || u.includes('openstreetmap'))
 }
 
@@ -230,18 +272,30 @@ function tileUrlFromTemplate(template: string, z: number, x: number, y: number):
     .replace('@2x', '')
 }
 
+async function persistTileResponse(url: string, response: Response): Promise<void> {
+  if (!response.ok || typeof caches === 'undefined') return
+  try {
+    const cache = await caches.open(OUTDOOR_TILE_CACHE_NAME)
+    await cache.put(url, response.clone())
+  } catch {
+    /* quota / private mode */
+  }
+}
+
 /**
- * Bounded tile warm-up for corridor offline use. Outdoor tiles only; fails gracefully.
+ * Bounded tile warm-up for corridor offline use. Outdoor raster only; fails gracefully.
  * Does not modify map view or GPS state.
  */
 export async function prefetchCorridorTiles(
   tileTemplates: string[],
   bounds: CorridorBounds,
-  options?: { zoomLevels?: number[]; maxTiles?: number },
+  options?: { zoomLevels?: readonly number[]; maxTiles?: number },
 ): Promise<number> {
-  if (tileTemplates.length === 0 || typeof fetch === 'undefined') return 0
-  const zoomLevels = options?.zoomLevels ?? [12, 13]
-  const maxTiles = options?.maxTiles ?? 48
+  const templates =
+    tileTemplates.length > 0 ? tileTemplates : getOutdoorCorridorTileTemplates()
+  if (templates.length === 0 || typeof fetch === 'undefined') return 0
+  const zoomLevels = options?.zoomLevels ?? PREFETCH_ZOOM_LEVELS
+  const maxTiles = options?.maxTiles ?? PREFETCH_MAX_TILES_PER_RUN
   let loaded = 0
 
   for (const z of zoomLevels) {
@@ -250,14 +304,20 @@ export async function prefetchCorridorTiles(
     for (let x = tl.x; x <= br.x; x++) {
       for (let y = tl.y; y <= br.y; y++) {
         if (loaded >= maxTiles) return loaded
-        for (const template of tileTemplates.slice(0, 2)) {
-          const url = tileUrlFromTemplate(template, z, x, y)
-          try {
-            await fetch(url, { mode: 'cors', credentials: 'omit', cache: 'force-cache' })
+        const template = templates[0]
+        const url = tileUrlFromTemplate(template, z, x, y)
+        try {
+          const response = await fetch(url, {
+            mode: 'cors',
+            credentials: 'omit',
+            cache: 'force-cache',
+          })
+          if (response.ok) {
+            await persistTileResponse(url, response)
             loaded++
-          } catch {
-            /* degrade gracefully */
           }
+        } catch {
+          /* degrade gracefully */
         }
       }
     }
@@ -269,6 +329,7 @@ export function buildCorridorCacheRegion(
   route: Array<{ lat: number; lng: number }>,
   userLat: number,
   userLng: number,
+  tilesLoaded: number,
 ): CorridorCacheRegion | null {
   const bounds = computeCorridorBounds(route)
   if (!bounds) return null
@@ -278,6 +339,8 @@ export function buildCorridorCacheRegion(
     centerLng: userLng,
     updatedAt: Date.now(),
     layer: 'outdoor',
+    routeFingerprint: computeRouteFingerprint(route),
+    tilesLoaded,
   }
 }
 
