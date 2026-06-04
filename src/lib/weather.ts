@@ -1,18 +1,34 @@
-export type WeatherResult =
-  | {
-      temperature: number
-      humidity: number
-      windSpeed: number
-      condition: string
-      unit: string
-      windUnit: string
-      location: string
-      weatherCode: number
-      updatedAt: number
-      /** IANA zone from Open-Meteo when `timezone=auto` (for location-based clock). */
-      timeZone?: string
-    }
-  | { error: string }
+import { clearOpenMeteoBackoff, isOpenMeteoBackoffActive, recordOpenMeteoRateLimit } from './panelDataBackoff'
+
+export type WeatherSuccess = {
+  temperature: number
+  humidity: number
+  windSpeed: number
+  condition: string
+  unit: string
+  windUnit: string
+  location: string
+  weatherCode: number
+  updatedAt: number
+  /** IANA zone from Open-Meteo when `timezone=auto` (for location-based clock). */
+  timeZone?: string
+  /** Live API fetch failed; values are from device cache. */
+  stale?: boolean
+}
+
+export type WeatherResult = WeatherSuccess | { error: string }
+
+export function isWeatherSuccess(wx: WeatherResult | null | undefined): wx is WeatherSuccess {
+  return !!wx && !('error' in wx)
+}
+
+export function formatWeatherAge(updatedAt: number, nowMs = Date.now()): string {
+  const min = Math.max(0, Math.round((nowMs - updatedAt) / 60_000))
+  if (min < 2) return 'just now'
+  if (min < 60) return `${min}m ago`
+  const h = Math.round(min / 60)
+  return h < 48 ? `${h}h ago` : `${Math.round(h / 24)}d ago`
+}
 
 const WEATHER_CACHE_KEY = 'titanium_weather_cache_v2'
 const WEATHER_CACHE_KEY_LEGACY = 'titanium_weather_cache_v1'
@@ -46,10 +62,11 @@ function writeCachedLocationLabel(lat: number, lon: number, label: string): void
   }
 }
 
-function weatherFromCache(staleOkMs: number, suffix = '(cached)'): WeatherResult | null {
+function weatherFromCache(staleOkMs: number): WeatherSuccess | null {
   const c = readCachedWeather(staleOkMs)
   if (!c || 'error' in c) return null
-  return { ...c, condition: suffix ? `${c.condition} ${suffix}`.trim() : c.condition }
+  const { stale: _s, ...rest } = c
+  return { ...rest, stale: true }
 }
 
 /** Last-known-good weather for instant panel render (no API key required). */
@@ -145,6 +162,11 @@ export async function fetchWeather(
 ): Promise<WeatherResult> {
   const { signal } = opts ?? {}
   if (lat == null || lon == null) return { error: 'No GPS fix available' }
+  if (isOpenMeteoBackoffActive()) {
+    const stale = weatherFromCache(7 * 86_400_000)
+    if (stale) return stale
+    return { error: 'Weather cooling down — try again in a few minutes' }
+  }
   try {
     const cachedLabel = readCachedLocationLabel(lat, lon)
     const response = await fetch(
@@ -152,9 +174,10 @@ export async function fetchWeather(
       { signal },
     )
     if (response.status === 429) {
-      const stale = weatherFromCache(86_400_000, '(rate limited — cached)')
+      recordOpenMeteoRateLimit()
+      const stale = weatherFromCache(7 * 86_400_000)
       if (stale) return stale
-      return { error: 'Weather busy — wait a few minutes' }
+      return { error: 'Weather rate limited — cached data unavailable' }
     }
     if (!response.ok) {
       const stale = weatherFromCache(86_400_000)
@@ -182,7 +205,8 @@ export async function fetchWeather(
         ? Math.round(Number(humidityRaw))
         : null
 
-    const out = {
+    clearOpenMeteoBackoff()
+    const out: WeatherSuccess = {
       temperature: Math.round(Number(current.temperature_2m ?? 0)),
       humidity: humidity ?? 0,
       windSpeed: Number(current.wind_speed_10m ?? 0),
@@ -192,6 +216,7 @@ export async function fetchWeather(
       location,
       weatherCode: Number(current.weather_code ?? -1),
       updatedAt: Date.now(),
+      stale: false,
       ...(timeZone ? { timeZone } : {}),
     }
 
@@ -205,7 +230,7 @@ export async function fetchWeather(
     if (signal?.aborted || (err instanceof DOMException && err.name === 'AbortError')) {
       throw err
     }
-    const stale = weatherFromCache(86_400_000)
+    const stale = weatherFromCache(7 * 86_400_000)
     if (stale) return stale
     return { error: err instanceof Error ? err.message : 'Weather fetch failed' }
   }

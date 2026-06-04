@@ -10,17 +10,35 @@ import React, {
 } from 'react'
 import { tier1Debug } from '../lib/tier1DebugLog'
 import { useGPS } from '../hooks/useGPS'
-import { fetchElevationMeters } from '../lib/elevation'
+import { fetchElevationMeters, readCachedElevationMeters } from '../lib/elevation'
+import {
+  isOpenMeteoBackoffActive,
+  openMeteoBackoffRemainingMs,
+} from '../lib/panelDataBackoff'
 import { shouldRefreshByDistance, shouldRefreshByInterval } from '../lib/panelDataThrottle'
-import { fetchWeather as loadWeather, readCachedWeather, type WeatherResult } from '../lib/weather'
+import {
+  fetchWeather as loadWeather,
+  isWeatherSuccess,
+  readCachedWeather,
+  type WeatherResult,
+} from '../lib/weather'
 
 // ⚠️ LOCKED SYSTEM — Behavior Freeze Active
 // Any change to interaction, layout, display modes, or layers requires explicit approval.
 
-const REFRESH_INTERVAL_MS = 300_000
+const REFRESH_INTERVAL_MS = 600_000
 const WEATHER_MIN_MOVE_M = 750
 const ELEVATION_MIN_MOVE_M = 150
-const WEATHER_MIN_INTERVAL_MS = 300_000
+const WEATHER_MIN_INTERVAL_MS = 600_000
+const WEATHER_MANUAL_MIN_INTERVAL_MS = 120_000
+
+function mergeWeatherResult(prev: WeatherResult | null, next: WeatherResult): WeatherResult {
+  if (isWeatherSuccess(next)) return next
+  const cached = readCachedWeather(7 * 86_400_000)
+  if (cached) return { ...cached, stale: true }
+  if (prev && isWeatherSuccess(prev)) return prev
+  return next
+}
 
 export type PanelUserLocation = { lat: number; lng: number }
 
@@ -33,6 +51,7 @@ export type PanelDataContextValue = {
   elevationError: string | null
   weather: WeatherResult | null
   weatherLoading: boolean
+  weatherRefreshNote: string | null
   locationTimeZone: string | null
   refreshPanelData: () => void
 }
@@ -49,6 +68,7 @@ export function PanelDataProvider({ children }: { children: ReactNode }) {
 
   const [weather, setWeather] = useState<WeatherResult | null>(() => readCachedWeather())
   const [weatherLoading, setWeatherLoading] = useState(false)
+  const [weatherRefreshNote, setWeatherRefreshNote] = useState<string | null>(null)
   const [locationTimeZone, setLocationTimeZone] = useState<string | null>(null)
 
   const abortRef = useRef<AbortController | null>(null)
@@ -56,6 +76,8 @@ export function PanelDataProvider({ children }: { children: ReactNode }) {
   const lastElevationAnchorRef = useRef<PanelUserLocation | null>(null)
   const lastWeatherAnchorRef = useRef<PanelUserLocation | null>(null)
   const lastWeatherFetchMsRef = useRef<number | null>(null)
+  const lastManualWeatherMsRef = useRef<number | null>(null)
+  const weatherNoteTimerRef = useRef<number | null>(null)
 
   const panelsLocationBlocked =
     gps.locationState === 'denied' || gps.locationState === 'error'
@@ -141,20 +163,30 @@ export function PanelDataProvider({ children }: { children: ReactNode }) {
       if (gen !== refreshGenRef.current) return
       if (fetchElevation) {
         lastElevationAnchorRef.current = nextAnchor
-        if (elM != null) {
-          setElevationMeters((prev) => (prev === elM ? prev : elM))
+        let resolvedElev = elM
+        if (resolvedElev == null) {
+          resolvedElev = readCachedElevationMeters(lat, lng)
+        }
+        if (resolvedElev == null && gps.elevation != null && Number.isFinite(gps.elevation)) {
+          resolvedElev = gps.elevation
+        }
+        if (resolvedElev != null) {
+          setElevationMeters((prev) => (prev === resolvedElev ? prev : resolvedElev))
           setElevationError((prev) => (prev === null ? prev : null))
         } else {
           setElevationError((prev) =>
-            prev === 'Elevation unavailable' ? prev : 'Elevation unavailable',
+            prev === 'Elevation unavailable (using GPS altitude if shown)' ? prev : 'Elevation unavailable (using GPS altitude if shown)',
           )
         }
       }
 
-      if (shouldFetchWeather) {
+      if (shouldFetchWeather && wx) {
         lastWeatherAnchorRef.current = nextAnchor
         lastWeatherFetchMsRef.current = Date.now()
-        setWeather((prev) => (Object.is(prev, wx) ? prev : wx))
+        setWeather((prev) => {
+          const merged = mergeWeatherResult(prev, wx)
+          return Object.is(prev, merged) ? prev : merged
+        })
         if (wx && !('error' in wx) && wx.timeZone) {
           const nextZone = wx.timeZone ?? null
           setLocationTimeZone((prev) => (prev === nextZone ? prev : nextZone))
@@ -172,11 +204,7 @@ export function PanelDataProvider({ children }: { children: ReactNode }) {
         })
       }
       if (shouldFetchWeather) {
-        setWeather((prev) => {
-          if (prev && 'error' in prev && prev.error === 'Weather fetch failed') return prev
-          return { error: 'Weather fetch failed' }
-        })
-        setLocationTimeZone((prev) => (prev === null ? prev : null))
+        setWeather((prev) => mergeWeatherResult(prev, { error: 'Weather fetch failed' }))
       }
     } finally {
       if (gen === refreshGenRef.current) {
@@ -188,11 +216,47 @@ export function PanelDataProvider({ children }: { children: ReactNode }) {
         }
       }
     }
-  }, [userLocation?.lat, userLocation?.lng])
+  }, [userLocation?.lat, userLocation?.lng, gps.elevation])
+
+  const refreshPanelData = useCallback(() => {
+    const now = Date.now()
+    if (
+      lastManualWeatherMsRef.current != null &&
+      now - lastManualWeatherMsRef.current < WEATHER_MANUAL_MIN_INTERVAL_MS
+    ) {
+      const waitSec = Math.ceil(
+        (WEATHER_MANUAL_MIN_INTERVAL_MS - (now - lastManualWeatherMsRef.current)) / 1000,
+      )
+      setWeatherRefreshNote(`Wait ${waitSec}s before refreshing again`)
+      return
+    }
+    if (isOpenMeteoBackoffActive()) {
+      const cached = readCachedWeather(7 * 86_400_000)
+      if (cached) setWeather({ ...cached, stale: true })
+      const min = Math.max(1, Math.ceil(openMeteoBackoffRemainingMs() / 60_000))
+      setWeatherRefreshNote(`Cached weather — API cooldown ~${min} min`)
+      return
+    }
+    lastManualWeatherMsRef.current = now
+    setWeatherRefreshNote(null)
+    void runDataFetch({ forceWeather: true })
+  }, [runDataFetch])
+
+  useEffect(() => {
+    if (weatherRefreshNote == null) return
+    if (weatherNoteTimerRef.current != null) window.clearTimeout(weatherNoteTimerRef.current)
+    weatherNoteTimerRef.current = window.setTimeout(() => {
+      weatherNoteTimerRef.current = null
+      setWeatherRefreshNote(null)
+    }, 6_000)
+    return () => {
+      if (weatherNoteTimerRef.current != null) window.clearTimeout(weatherNoteTimerRef.current)
+    }
+  }, [weatherRefreshNote])
 
   useEffect(() => {
     if (userLocation == null) return
-    void runDataFetch({ forceWeather: true })
+    void runDataFetch({ forceWeather: readCachedWeather(600_000) == null })
     return () => {
       abortRef.current?.abort()
     }
@@ -201,7 +265,7 @@ export function PanelDataProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (userLocation == null) return
     let id: number | undefined
-    const tick = () => void runDataFetch({ forceWeather: true })
+    const tick = () => void runDataFetch()
     const arm = () => {
       id = window.setInterval(tick, REFRESH_INTERVAL_MS)
     }
@@ -213,7 +277,7 @@ export function PanelDataProvider({ children }: { children: ReactNode }) {
         }
         return
       }
-      void runDataFetch({ forceWeather: true })
+      void runDataFetch()
       if (id != null) window.clearInterval(id)
       arm()
     }
@@ -226,10 +290,10 @@ export function PanelDataProvider({ children }: { children: ReactNode }) {
   }, [userLocation, runDataFetch])
 
   useEffect(() => {
-    const onRefresh = () => void runDataFetch({ forceWeather: true })
+    const onRefresh = () => refreshPanelData()
     window.addEventListener('hud:weather-refresh', onRefresh)
     return () => window.removeEventListener('hud:weather-refresh', onRefresh)
-  }, [runDataFetch])
+  }, [refreshPanelData])
 
   const value = useMemo(
     () => ({
@@ -240,8 +304,9 @@ export function PanelDataProvider({ children }: { children: ReactNode }) {
       elevationError,
       weather,
       weatherLoading,
+      weatherRefreshNote,
       locationTimeZone,
-      refreshPanelData: () => void runDataFetch({ forceWeather: true }),
+      refreshPanelData,
     }),
     [
       userLocation,
@@ -251,8 +316,9 @@ export function PanelDataProvider({ children }: { children: ReactNode }) {
       elevationError,
       weather,
       weatherLoading,
+      weatherRefreshNote,
       locationTimeZone,
-      runDataFetch,
+      refreshPanelData,
     ],
   )
 

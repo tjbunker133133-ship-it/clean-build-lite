@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import HudPanel from './HudPanel'
 import { useMapContext } from '../context/MapContext'
 import { usePanelData } from '../context/PanelDataContext'
-import type { WeatherResult } from '../lib/weather'
+import { formatWeatherAge, isWeatherSuccess, type WeatherSuccess } from '../lib/weather'
 import { useGPS } from '../hooks/useGPS'
 import { tier1Debug } from '../lib/tier1DebugLog'
 import { getDeviceProfile, isIosFieldHud } from '../runtime/deviceProfile'
@@ -106,9 +106,9 @@ function SituationWeatherSection({
   tapMin: number
   btnBase: CSSProperties
 }) {
-  const { weather, weatherLoading, refreshPanelData } = usePanelData()
-  const hasData = !!weather && !('error' in weather)
-  const wx = hasData ? (weather as Extract<WeatherResult, { temperature: number }>) : null
+  const { weather, weatherLoading, weatherRefreshNote, refreshPanelData } = usePanelData()
+  const hasData = isWeatherSuccess(weather)
+  const wx: WeatherSuccess | null = hasData ? weather : null
 
   return (
     <div style={sectionDivider()}>
@@ -144,9 +144,18 @@ function SituationWeatherSection({
               : '—'}
         </div>
         {hasData && wx ? (
-          <div style={{ fontSize: fontSm, color: 'var(--cockpit-panel-subtle)' }}>{wx.condition}</div>
+          <div style={{ fontSize: fontSm, color: 'var(--cockpit-panel-subtle)' }}>
+            {wx.condition}
+            {wx.stale ? ` · cached ${formatWeatherAge(wx.updatedAt)}` : ''}
+          </div>
+        ) : null}
+        {!hasData && weather && 'error' in weather ? (
+          <div style={{ fontSize: fontSm, color: '#e7c29a' }}>{weather.error}</div>
         ) : null}
       </div>
+      {weatherRefreshNote ? (
+        <div style={{ fontSize: fontSm, color: '#e7c29a', marginTop: 6 }}>{weatherRefreshNote}</div>
+      ) : null}
       <button
         type="button"
         data-no-drag

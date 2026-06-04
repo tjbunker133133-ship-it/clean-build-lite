@@ -3,6 +3,7 @@ import { usePanelData } from '../context/PanelDataContext'
 import { useGPS } from '../hooks/useGPS'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 import { tier1Debug } from '../lib/tier1DebugLog'
+import { formatWeatherAge, isWeatherSuccess } from '../lib/weather'
 import { touchFontSm, touchFontMd, touchGapMd, touchMinTarget } from './tokens'
 
 export default function WeatherPanel() {
@@ -11,12 +12,13 @@ export default function WeatherPanel() {
     userLocation,
     weather,
     weatherLoading,
+    weatherRefreshNote,
     panelsLocationBlocked,
     refreshPanelData,
   } = usePanelData()
 
   const coordsReady = userLocation != null && !panelsLocationBlocked
-  const hasData = !!weather && !('error' in weather)
+  const hasData = isWeatherSuccess(weather)
   const isMobile = getDeviceProfile().interactionMode === 'mobile'
   const fontSm = touchFontSm(isMobile)
   const fontMd = touchFontMd(isMobile)
@@ -60,11 +62,16 @@ export default function WeatherPanel() {
             {weatherLoading
               ? 'Updating weather...'
               : hasData
-                ? weather.condition
-                : coordsReady
-                  ? 'Loading…'
-                  : 'Waiting for location...'}
+                ? `${weather.condition}${weather.stale ? ` · cached ${formatWeatherAge(weather.updatedAt)}` : ''}`
+                : weather && 'error' in weather
+                  ? weather.error
+                  : coordsReady
+                    ? 'Loading…'
+                    : 'Waiting for location...'}
           </div>
+          {weatherRefreshNote ? (
+            <div style={{ fontSize: fontSm, color: '#e7c29a', marginTop: 6 }}>{weatherRefreshNote}</div>
+          ) : null}
           <div style={{ fontSize: fontSm, color: 'var(--cockpit-panel-subtle)', marginTop: 3 }}>
             {hasData ? weather.location : 'Location: --'}
           </div>
