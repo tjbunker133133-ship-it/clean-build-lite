@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAppContext } from '../context/AppContext'
 import { useMissionSync } from '../context/MissionSyncContext'
-import { parseTeamMessageVoice } from '../lib/missionSync/teamComms'
+import { parseTeamMessageVoice, buildTeammateMessageCommandSpecs } from '../lib/missionSync/teamComms'
 import { tryHandleMissionCommsVoice } from '../lib/missionSync/missionCommsVoiceBridge'
 import { useCockpit } from '../context/CockpitContext'
 import { useOverlayContext } from '../context/OverlayContext'
@@ -821,6 +821,42 @@ export function useHudCommands(): {
         },
       },
       {
+        id: 'message team',
+        label: 'Message whole team (voice)',
+        aliases: ['team message', 'send message', 'radio team', 'broadcast message'],
+        paletteVisible: true,
+        group: 'Mission',
+        run: () => {
+          if (missionSync.role === 'idle') {
+            return fail('Start or join a mission first.')
+          }
+          if (!missionSync.teamCommsReady) {
+            return fail('Link a teammate on the mission mesh first.')
+          }
+          missionSync.startTeamMessageTo()
+          return ok('Say your message, then accept to send.')
+        },
+      },
+      ...buildTeammateMessageCommandSpecs(missionSync.peers, missionSync.deviceId).map(
+        (spec) => ({
+          id: spec.id,
+          label: `Message ${spec.callsign}`,
+          aliases: spec.aliases,
+          paletteVisible: true,
+          group: 'Mission',
+          run: () => {
+            if (missionSync.role === 'idle') {
+              return fail('Start or join a mission first.')
+            }
+            if (!missionSync.teamCommsReady) {
+              return fail('Link a teammate on the mission mesh first.')
+            }
+            missionSync.startTeamMessageTo(spec.callsign)
+            return ok(`Say your message to ${spec.callsign}, then accept to send.`)
+          },
+        }),
+      ),
+      {
         id: 'wearables panel',
         label: 'Open wearables panel',
         aliases: ['open wearables', 'wearables', 'companion devices', 'smartwatch panel'],
@@ -1070,7 +1106,7 @@ export function useHudCommands(): {
         )
       }
 
-      const teamParsed = parseTeamMessageVoice(norm, heard)
+      const teamParsed = parseTeamMessageVoice(norm, heard, missionSync.peers)
       if (teamParsed) {
         markCommandResolving(execId, 'team message')
         if (missionSync.role === 'idle') {

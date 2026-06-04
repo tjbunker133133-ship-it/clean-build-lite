@@ -1,4 +1,7 @@
-import { normalizeCallsignKey, resolveMissionPeerByCallsign } from './teamComms'
+import {
+  resolveDirectedMessageRest,
+  resolveMissionPeerByCallsign,
+} from './teamComms'
 import type { ConnectedPeer } from './types'
 import { sanitizeBurstText } from './comms'
 
@@ -82,6 +85,17 @@ export function parseMissionCommsStart(
     }
 
     if (prefix === 'send message to ' || prefix === 'send team message to ') {
+      const directed = resolveDirectedMessageRest(rest, peers)
+      if (directed) {
+        if (directed.callsign) {
+          const t = targetFromCallsign(peers, directed.callsign)
+          if (!t) return null
+          const body = sanitizeBurstText(directed.text)
+          return body ? { target: t.target, body } : { target: t.target }
+        }
+        const body = sanitizeBurstText(directed.text)
+        return body ? { target: wholeTarget(), body } : { target: wholeTarget() }
+      }
       const first = rest.indexOf(' ')
       if (first <= 0) {
         const t = targetFromCallsign(peers, rest)
@@ -93,6 +107,18 @@ export function parseMissionCommsStart(
       if (!t && !TARGET_WORDS.has(who)) return null
       const target = TARGET_WORDS.has(who) ? wholeTarget() : t!.target
       return body ? { target, body } : { target }
+    }
+
+    const directed = resolveDirectedMessageRest(rest, peers)
+    if (directed) {
+      if (directed.callsign) {
+        const t = targetFromCallsign(peers, directed.callsign)
+        if (!t) return null
+        const body = sanitizeBurstText(directed.text)
+        return body ? { target: t.target, body } : { target: t.target }
+      }
+      const body = sanitizeBurstText(directed.text)
+      return body ? { target: wholeTarget(), body } : { target: wholeTarget() }
     }
 
     const first = rest.indexOf(' ')

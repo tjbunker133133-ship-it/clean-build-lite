@@ -206,8 +206,16 @@ export type MissionSyncContextValue = {
   pendingInboundBurst: MissionBurst | null
   confirmInboundMessage: () => void
   skipInboundMessage: () => void
-  /** After hold-to-speak STT — requires voice accept before send. */
+  /** Outbound message waiting for accept (voice or tap). */
+  pendingOutboundConfirm: { label: string; callsign?: string; body: string } | null
+  confirmOutboundMessage: () => boolean
+  cancelOutboundMessage: () => void
+  /** Voice-only: queue send after accept (typed UI sends immediately). */
   queueOutboundConfirm: (body: string, toCallsign?: string) => void
+  /** Start hands-free "who / what / accept" flow. */
+  startTeamMessageFlow: () => void
+  /** Start flow addressed to one callsign or whole mission. */
+  startTeamMessageTo: (toCallsign?: string) => void
   /** True while browser code-room join is active (request-offer pings). */
   joinCodeSearching: boolean
   discoverMissionOnLan: (codeInput: string) => Promise<boolean>
@@ -326,6 +334,11 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     loadMissionCommsPrefs(),
   )
   const [pendingInboundBurst, setPendingInboundBurst] = useState<MissionBurst | null>(null)
+  const [pendingOutboundConfirm, setPendingOutboundConfirm] = useState<{
+    label: string
+    callsign?: string
+    body: string
+  } | null>(null)
   const missionCommsFlowRef = useRef<MissionCommsFlowState>(createIdleMissionCommsFlow())
   const [missionCommsFlowPhase, setMissionCommsFlowPhase] = useState<MissionCommsFlowState['phase']>('idle')
   const lastNativePayloadRef = useRef('')
@@ -605,6 +618,24 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     setMissionCommsPrefsState((prev) => saveMissionCommsPrefs({ ...prev, ...patch }))
   }, [])
 
+  const syncOutboundFlowState = useCallback((flow: MissionCommsFlowState) => {
+    missionCommsFlowRef.current = flow
+    setMissionCommsFlowPhase(flow.phase)
+    if (flow.phase === 'confirm_send' && flow.target && flow.body) {
+      setPendingOutboundConfirm({
+        label: flow.target.label,
+        callsign: flow.target.callsign,
+        body: flow.body,
+      })
+    } else {
+      setPendingOutboundConfirm(null)
+    }
+  }, [])
+
+  const clearOutboundFlow = useCallback(() => {
+    syncOutboundFlowState(createIdleMissionCommsFlow())
+  }, [syncOutboundFlowState])
+
   const queueOutboundConfirm = useCallback(
     (body: string, toCallsign?: string) => {
       const linked = coordinatorRef.current?.connectedPeers ?? peers
@@ -620,17 +651,16 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       }
       const clean = body.trim()
       if (!clean) return
-      missionCommsFlowRef.current = {
+      syncOutboundFlowState({
         phase: 'confirm_send',
         target,
         body: clean,
-      }
-      setMissionCommsFlowPhase('confirm_send')
+      })
       void speakMissionCommsPhrase(
         `Send to ${target.label}: ${clean}. Say accept or cancel.`,
       )
     },
-    [peers],
+    [peers, syncOutboundFlowState],
   )
 
   const openCommsForTeammate = useCallback((deviceId: string, callsign: string) => {
@@ -918,6 +948,7 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     setWatchLinkShared(false)
     lastPublishedPresenceRef.current = null
     setPendingInboundBurst(null)
+    setPendingOutboundConfirm(null)
     missionCommsFlowRef.current = createIdleMissionCommsFlow()
     setMissionCommsFlowPhase('idle')
     setPendingOfferEncoded(null)
@@ -1610,11 +1641,55 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     [deviceId, callsign, role, monitorRelayActive, notify],
   )
 
+  const confirmOutboundMessage = useCallback((): boolean => {
+    const flow = missionCommsFlowRef.current
+    if (flow.phase !== 'confirm_send' || !flow.body) return false
+    const sent = sendTeamBurst(flow.body, flow.target?.callsign)
+    clearOutboundFlow()
+    if (sent) emitHaptic('teamMessageSent')
+    return sent
+  }, [sendTeamBurst, clearOutboundFlow])
+
+  const cancelOutboundMessage = useCallback(() => {
+    clearOutboundFlow()
+    void speakMissionCommsPhrase('Message cancelled.')
+  }, [clearOutboundFlow])
+
+  const startTeamMessageFlow = useCallback(() => {
+    syncOutboundFlowState({ phase: 'await_target', target: null, body: '' })
+    void speakMissionCommsPhrase('Who should receive it? Say callsign or whole team.')
+  }, [syncOutboundFlowState])
+
+  const startTeamMessageTo = useCallback(
+    (toCallsign?: string) => {
+      const linked = coordinatorRef.current?.connectedPeers ?? peers
+      const trimmed = toCallsign?.trim()
+      if (!trimmed) {
+        syncOutboundFlowState({
+          phase: 'await_body',
+          target: { label: 'whole mission' },
+          body: '',
+        })
+        void speakMissionCommsPhrase('To whole mission. What is the message?')
+        return
+      }
+      const peer = resolveMissionPeerByCallsign(linked, trimmed)
+      if (!peer) {
+        void speakMissionCommsPhrase(`No linked member matches ${trimmed}.`)
+        return
+      }
+      syncOutboundFlowState({
+        phase: 'await_body',
+        target: { callsign: peer.callsign, label: peer.callsign },
+        body: '',
+      })
+      void speakMissionCommsPhrase(`To ${peer.callsign}. What is the message?`)
+    },
+    [peers, syncOutboundFlowState],
+  )
+
   const handleMissionCommsVoice = useCallback(
     async (phrase: string): Promise<{ handled: boolean; ok: boolean; feedback: string }> => {
-      if (!missionCommsPrefs.handsFree) {
-        return { handled: false, ok: false, feedback: '' }
-      }
       if (role === 'idle') {
         return { handled: false, ok: false, feedback: '' }
       }
@@ -1629,59 +1704,58 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
         return { handled: true, ok: true, feedback: 'Skipped.' }
       }
 
-      const linked = coordinatorRef.current?.connectedPeers ?? peers
-      const { state, effects } = reduceMissionCommsFlow(
-        missionCommsFlowRef.current,
-        phrase,
-        linked,
-      )
-      missionCommsFlowRef.current = state
-      setMissionCommsFlowPhase(state.phase)
+      const flowBefore = missionCommsFlowRef.current
+      const activeFlow = flowBefore.phase !== 'idle'
 
-      if (effects.length === 0 && state.phase === 'idle') {
-        return { handled: false, ok: false, feedback: '' }
+      if (activeFlow || missionCommsPrefs.handsFree) {
+        const linked = coordinatorRef.current?.connectedPeers ?? peers
+        const { state, effects } = reduceMissionCommsFlow(flowBefore, phrase, linked)
+        syncOutboundFlowState(state)
+
+        if (effects.length > 0 || state.phase !== flowBefore.phase) {
+          let feedback = 'OK.'
+          for (const effect of effects) {
+            if (effect.type === 'speak') {
+              feedback = effect.text
+              await speakMissionCommsPhrase(effect.text)
+            }
+            if (effect.type === 'cancel') {
+              clearOutboundFlow()
+            }
+            if (effect.type === 'confirm_send') {
+              if (!teamCommsReady) {
+                feedback = 'No mission link yet.'
+                await speakMissionCommsPhrase(feedback)
+                clearOutboundFlow()
+                return { handled: true, ok: false, feedback }
+              }
+              const sent = sendTeamBurst(effect.body, effect.target.callsign)
+              clearOutboundFlow()
+              if (sent) {
+                emitHaptic('teamMessageSent')
+                feedback = `Sent to ${effect.target.label}.`
+                await speakMissionCommsPhrase(feedback)
+              } else {
+                feedback = 'Message not sent.'
+                await speakMissionCommsPhrase(feedback)
+              }
+            }
+          }
+          return { handled: true, ok: true, feedback }
+        }
       }
 
-      let feedback = 'OK.'
-      for (const effect of effects) {
-        if (effect.type === 'speak') {
-          feedback = effect.text
-          await speakMissionCommsPhrase(effect.text)
-        }
-        if (effect.type === 'cancel') {
-          missionCommsFlowRef.current = createIdleMissionCommsFlow()
-          setMissionCommsFlowPhase('idle')
-        }
-        if (effect.type === 'confirm_send') {
-          if (!teamCommsReady) {
-            feedback = 'No mission link yet.'
-            await speakMissionCommsPhrase(feedback)
-            missionCommsFlowRef.current = createIdleMissionCommsFlow()
-            setMissionCommsFlowPhase('idle')
-            return { handled: true, ok: false, feedback }
-          }
-          const sent = sendTeamBurst(effect.body, effect.target.callsign)
-          if (sent) {
-            emitHaptic('teamMessageSent')
-            feedback = `Sent to ${effect.target.label}.`
-            await speakMissionCommsPhrase(feedback)
-          } else {
-            feedback = 'Message not sent.'
-            await speakMissionCommsPhrase(feedback)
-          }
-          missionCommsFlowRef.current = createIdleMissionCommsFlow()
-          setMissionCommsFlowPhase('idle')
-        }
-      }
-      return { handled: true, ok: true, feedback }
+      return { handled: false, ok: false, feedback: '' }
     },
     [
-      missionCommsPrefs.handsFree,
       role,
       peers,
       pendingInboundBurst,
       confirmInboundMessage,
       skipInboundMessage,
+      missionCommsPrefs.handsFree,
+      syncOutboundFlowState,
+      clearOutboundFlow,
       teamCommsReady,
       sendTeamBurst,
     ],
@@ -2119,7 +2193,12 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       pendingInboundBurst,
       confirmInboundMessage,
       skipInboundMessage,
+      pendingOutboundConfirm,
+      confirmOutboundMessage,
+      cancelOutboundMessage,
       queueOutboundConfirm,
+      startTeamMessageFlow,
+      startTeamMessageTo,
       joinCodeSearching,
       discoverMissionOnLan,
       joinMissionFromOffer,
@@ -2189,7 +2268,12 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       pendingInboundBurst,
       confirmInboundMessage,
       skipInboundMessage,
+      pendingOutboundConfirm,
+      confirmOutboundMessage,
+      cancelOutboundMessage,
       queueOutboundConfirm,
+      startTeamMessageFlow,
+      startTeamMessageTo,
       joinCodeSearching,
       discoverMissionOnLan,
       joinMissionFromOffer,

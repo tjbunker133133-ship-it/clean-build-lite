@@ -25,6 +25,13 @@ export function mapBannerTopCss(): string {
   return `calc(env(safe-area-inset-top, 0px) + ${topBarContentHeightPx() + 6}px)`
 }
 
+/** Bottom stack for team comms confirm/toast — above field status rail. */
+export function teamCommsToastBottomCss(): string {
+  const p = getDeviceProfile()
+  const lift = p.interactionMode === 'mobile' ? 168 : 108
+  return `calc(env(safe-area-inset-bottom, 0px) + ${lift}px)`
+}
+
 /** Bottom-left field status card — clear dock peek strips and arrival strip on phones. */
 export function fieldStatusRailBottomCss(): string {
   const p = getDeviceProfile()

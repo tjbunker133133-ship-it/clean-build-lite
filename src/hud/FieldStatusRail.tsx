@@ -4,7 +4,6 @@ import { getCorridorOfflineSummary } from '../lib/corridorPrefetch'
 import { useCorridorOffline } from '../hooks/useCorridorOffline'
 import { useNavigationMonitor } from '../hooks/useNavigationMonitor'
 import { monitorTransportLabel } from '../lib/missionSync/monitorUx'
-import { formatBurstLine } from '../lib/missionSync/teamComms'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 import { fieldStatusRailBottomCss } from './hudLayout'
 import { touchFontSm } from './tokens'
@@ -55,13 +54,15 @@ export default function FieldStatusRail() {
       })
     }
 
-    if (sync.lastInboundTeamBurst) {
-      const b = sync.lastInboundTeamBurst
+    if (
+      sync.role === 'member' &&
+      (sync.watchLinkShared || sync.pendingObserverOfferEncoded) &&
+      sync.peers.filter((p) => p.linkRole === 'observer').length === 0
+    ) {
       list.push({
-        id: 'team-comms',
-        label: `Msg · ${formatBurstLine(b, sync.deviceId)}`,
-        live: true,
-        tone: 'mesh',
+        id: 'watch-wait',
+        label: 'Watch link · waiting',
+        tone: 'observer',
       })
     }
 
@@ -145,9 +146,11 @@ export default function FieldStatusRail() {
     sync.observerCount,
     sync.peers,
     sync.phase,
+    sync.pendingObserverOfferEncoded,
     sync.role,
     sync.supported,
     sync.teamCorridorStatus,
+    sync.watchLinkShared,
   ])
 
   if (rows.length === 0) return null

@@ -120,17 +120,106 @@ const MESSAGE_PREFIXES = [
   'team message ',
   'message team ',
   'send team message ',
+  'send message to ',
   'message ',
   'tell team ',
   'tell ',
+  'radio ',
 ]
+
+const BROADCAST_WORDS = new Set(['team', 'all', 'everyone', 'everybody', 'mission'])
+
+/**
+ * Match longest callsign prefix when peers are known — e.g. "good cit hold up" → Good Cit.
+ * Uses exact callsign token match only (no partial prefix on message body words).
+ */
+export function resolveDirectedMessageRest(
+  rest: string,
+  peers: ConnectedPeer[],
+): { text: string; callsign?: string } | null {
+  const trimmed = rest.trim()
+  if (!trimmed) return null
+  const words = trimmed.split(/\s+/).filter(Boolean)
+  if (words.length < 2) return null
+
+  if (BROADCAST_WORDS.has(words[0]!.toLowerCase())) {
+    const text = words.slice(1).join(' ').trim()
+    return text ? { text } : null
+  }
+
+  const fieldPeers = peers.filter((p) => p.linkRole === 'member' || p.linkRole === 'observer')
+  const sorted = [...fieldPeers].sort(
+    (a, b) => b.callsign.trim().split(/\s+/).length - a.callsign.trim().split(/\s+/).length,
+  )
+
+  for (const peer of sorted) {
+    const csWords = peer.callsign.trim().split(/\s+/).filter(Boolean)
+    if (csWords.length > words.length - 1) continue
+    const prefix = words.slice(0, csWords.length).join(' ')
+    if (normalizeCallsignKey(prefix) !== normalizeCallsignKey(peer.callsign)) continue
+    const text = words.slice(csWords.length).join(' ').trim()
+    if (!text) continue
+    return { callsign: peer.callsign, text }
+  }
+
+  return null
+}
+
+function parseDirectedRest(
+  rest: string,
+  peers?: ConnectedPeer[],
+): { text: string; callsign?: string } | null {
+  if (peers && peers.length > 0) {
+    const directed = resolveDirectedMessageRest(rest, peers)
+    if (directed?.text) return directed
+  }
+  const firstSpace = rest.indexOf(' ')
+  if (firstSpace <= 0) return null
+  const maybeCallsign = rest.slice(0, firstSpace).trim()
+  const text = rest.slice(firstSpace + 1).trim()
+  if (!text) return null
+  if (BROADCAST_WORDS.has(maybeCallsign.toLowerCase())) return { text }
+  return { text, callsign: maybeCallsign }
+}
+
+export type TeammateMessageCommandSpec = {
+  callsign: string
+  id: string
+  aliases: string[]
+}
+
+/** Voice/command palette entries for each mesh-linked field member. */
+export function buildTeammateMessageCommandSpecs(
+  peers: ConnectedPeer[],
+  selfDeviceId: string,
+): TeammateMessageCommandSpec[] {
+  const seen = new Set<string>()
+  const specs: TeammateMessageCommandSpec[] = []
+  for (const p of peers) {
+    if (p.linkRole !== 'member' || p.deviceId === selfDeviceId) continue
+    const cs = p.callsign.trim()
+    if (!cs) continue
+    const key = normalizeCallsignKey(cs)
+    if (seen.has(key)) continue
+    seen.add(key)
+    const lower = cs.toLowerCase()
+    specs.push({
+      callsign: cs,
+      id: `message ${lower}`,
+      aliases: [`tell ${lower}`, `radio ${lower}`, `message ${key}`],
+    })
+  }
+  return specs
+}
 
 /**
  * Voice/text: "message bravo hold at gate" or "team message hold at gate".
+ * Pass linked peers so multi-word callsigns resolve (e.g. "good cit").
  */
 export function parseTeamMessageVoice(
   normalized: string,
   raw: string,
+  peers?: ConnectedPeer[],
 ): { text: string; callsign?: string } | null {
   const n = normalized.trim()
   if (!n) return null
@@ -139,23 +228,16 @@ export function parseTeamMessageVoice(
     if (!n.startsWith(prefix)) continue
     const rest = n.slice(prefix.length).trim()
     if (!rest) return null
-    if (prefix === 'message team ' || prefix === 'team message ' || prefix === 'tell team ') {
+    if (
+      prefix === 'message team ' ||
+      prefix === 'team message ' ||
+      prefix === 'tell team ' ||
+      prefix === 'send team message '
+    ) {
       return { text: rest }
     }
-    const firstSpace = rest.indexOf(' ')
-    if (firstSpace <= 0) return null
-    const maybeCallsign = rest.slice(0, firstSpace).trim()
-    const text = rest.slice(firstSpace + 1).trim()
-    if (!text) return null
-    if (
-      maybeCallsign === 'team' ||
-      maybeCallsign === 'all' ||
-      maybeCallsign === 'everyone' ||
-      maybeCallsign === 'everybody'
-    ) {
-      return { text }
-    }
-    return { text, callsign: maybeCallsign }
+    const parsed = parseDirectedRest(rest, peers)
+    if (parsed) return parsed
   }
 
   const rawLower = raw.toLowerCase()
@@ -165,13 +247,8 @@ export function parseTeamMessageVoice(
     const rest = hudStrip.slice(prefix.length).trim()
     if (!rest) return null
     if (prefix === 'message team ' || prefix === 'team message ') return { text: rest }
-    const firstSpace = rest.indexOf(' ')
-    if (firstSpace <= 0) return null
-    const maybeCallsign = rest.slice(0, firstSpace).trim()
-    const text = rest.slice(firstSpace + 1).trim()
-    if (!text) return null
-    if (['team', 'all', 'everyone', 'everybody'].includes(maybeCallsign)) return { text }
-    return { text, callsign: maybeCallsign }
+    const parsed = parseDirectedRest(rest, peers)
+    if (parsed) return parsed
   }
 
   return null

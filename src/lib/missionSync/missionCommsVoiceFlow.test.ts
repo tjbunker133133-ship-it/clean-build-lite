@@ -14,6 +14,13 @@ const peers: ConnectedPeer[] = [
     connectedAt: 1,
     linkRole: 'member',
   },
+  {
+    peerId: 'p3',
+    deviceId: 'd3',
+    callsign: 'Good Cit',
+    connectedAt: 3,
+    linkRole: 'member',
+  },
 ]
 
 describe('missionCommsVoiceFlow', () => {
@@ -21,6 +28,9 @@ describe('missionCommsVoiceFlow', () => {
     const p = parseMissionCommsStart('message upeople hold at the gate', peers)
     expect(p?.target.label).toBe('UPEOPLE')
     expect(p && 'body' in p && p.body).toBe('hold at the gate')
+    const g = parseMissionCommsStart('message good cit slow down', peers)
+    expect(g?.target.label).toBe('Good Cit')
+    expect(g && 'body' in g && g.body).toBe('slow down')
   })
 
   it('walks target then body then confirm', () => {

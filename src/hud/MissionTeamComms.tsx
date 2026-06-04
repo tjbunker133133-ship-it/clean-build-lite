@@ -70,7 +70,7 @@ export default function MissionTeamComms({ isObserver }: Props) {
     if (to && !teammates.find((t) => t.callsign === to)?.meshLinked) {
       return
     }
-    sync.queueOutboundConfirm(body, to)
+    sync.sendTeamBurst(body, to)
     setText('')
   }
 
@@ -78,36 +78,18 @@ export default function MissionTeamComms({ isObserver }: Props) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: touchGapSm(isMobile) }}>
       <p style={{ color: '#94a3b8', margin: 0, lineHeight: 1.45, fontSize: '0.88em' }}>{readyLabel}</p>
       {sync.missionCommsFlowPhase !== 'idle' ? (
-        <p style={{ color: '#fde68a', margin: 0, fontSize: '0.85em', fontWeight: 700 }}>
-          Voice comms active — say your message, then accept or cancel.
+        <p style={{ color: '#64748b', margin: 0, fontSize: '0.82em' }}>
+          Voice flow active — follow prompts or use Send / Cancel bar at bottom.
         </p>
       ) : null}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: '0.82em', color: '#64748b' }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <input
-            type="checkbox"
-            checked={sync.missionCommsPrefs.handsFree}
-            onChange={(e) => sync.setMissionCommsPrefs({ handsFree: e.target.checked })}
-          />
-          Hands-free (HUD wake + voice steps)
-        </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <input
-            type="checkbox"
-            checked={sync.missionCommsPrefs.holdButton}
-            onChange={(e) => sync.setMissionCommsPrefs({ holdButton: e.target.checked })}
-          />
-          Show hold-to-speak button
-        </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <input
-            type="checkbox"
-            checked={sync.missionCommsPrefs.inboundConfirm}
-            onChange={(e) => sync.setMissionCommsPrefs({ inboundConfirm: e.target.checked })}
-          />
-          Say accept before hearing messages (vibrate on arrival)
-        </label>
-      </div>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.82em', color: '#64748b' }}>
+        <input
+          type="checkbox"
+          checked={sync.missionCommsPrefs.inboundConfirm}
+          onChange={(e) => sync.setMissionCommsPrefs({ inboundConfirm: e.target.checked })}
+        />
+        Vibrate on arrival · say accept to hear message
+      </label>
 
       {!isObserver ? (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
@@ -239,8 +221,7 @@ export default function MissionTeamComms({ isObserver }: Props) {
             Send check-in OK
           </button>
           <p style={{ color: '#64748b', margin: 0, fontSize: '0.8em', lineHeight: 1.4 }}>
-            Hold purple to speak (release sends) · They hear &quot;Message from you&quot; read aloud · Text
-            still works offline on mesh
+            Tap Send for instant mesh delivery · Voice commands use confirm bar at bottom
           </p>
         </>
       ) : (

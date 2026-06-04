@@ -10,7 +10,6 @@ import TrailInspectCard from './TrailInspectCard'
 import FieldStatusRail from './FieldStatusRail'
 import TeamCommsToast from './TeamCommsToast'
 import TeammateMessageSheet from './TeammateMessageSheet'
-import WatcherPill from './WatcherPill'
 import { mapBannerTopCss } from './hudLayout'
 import { touchFontSm, touchMinTarget } from './tokens'
 
@@ -41,7 +40,6 @@ export default function NavigationHud() {
       <FieldStatusRail />
       <TeamCommsToast />
       <TeammateMessageSheet />
-      <WatcherPill />
       {hasNext && (
         <div
           style={{

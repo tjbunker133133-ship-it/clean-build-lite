@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest'
 import { buildBurst } from './comms'
 import {
   burstTargetsLocalDevice,
+  buildTeammateMessageCommandSpecs,
   listMessageableTeammates,
   normalizeCallsignKey,
   parseTeamMessageVoice,
+  resolveDirectedMessageRest,
   resolveFieldPeerByCallsign,
 } from './teamComms'
 import type { ConnectedPeer } from './types'
@@ -24,6 +26,13 @@ const peers: ConnectedPeer[] = [
     connectedAt: 2,
     linkRole: 'observer',
   },
+  {
+    peerId: 'p3',
+    deviceId: 'd3',
+    callsign: 'Good Cit',
+    connectedAt: 3,
+    linkRole: 'member',
+  },
 ]
 
 describe('teamComms', () => {
@@ -40,6 +49,26 @@ describe('teamComms', () => {
     expect(parseTeamMessageVoice('team message all clear', 'team message all clear')).toEqual({
       text: 'all clear',
     })
+    expect(
+      parseTeamMessageVoice('message good cit hold up', 'message good cit hold up', peers),
+    ).toEqual({
+      callsign: 'Good Cit',
+      text: 'hold up',
+    })
+  })
+
+  it('resolves multi-word callsign prefix', () => {
+    expect(resolveDirectedMessageRest('good cit regroup here', peers)).toEqual({
+      callsign: 'Good Cit',
+      text: 'regroup here',
+    })
+  })
+
+  it('builds per-teammate command specs', () => {
+    const specs = buildTeammateMessageCommandSpecs(peers, 'self')
+    expect(specs.some((s) => s.callsign === 'Good Cit')).toBe(true)
+    expect(specs.some((s) => s.callsign === 'Bravo-2')).toBe(true)
+    expect(specs.some((s) => s.callsign === 'Alpha')).toBe(false)
   })
 
   it('directed burst targets local device', () => {

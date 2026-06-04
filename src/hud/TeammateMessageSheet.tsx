@@ -60,7 +60,7 @@ export default function TeammateMessageSheet() {
 
   const send = (body: string) => {
     if (!meshLinked) return
-    sync.queueOutboundConfirm(body, target.callsign)
+    sync.sendTeamBurst(body, target.callsign)
     setText('')
     sync.clearActiveCommsTarget()
   }
