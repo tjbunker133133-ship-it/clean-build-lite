@@ -5,6 +5,7 @@ import { useTrailInspect } from '../hooks/useTrailInspect'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 import TrailInspectCard from './TrailInspectCard'
 import FieldStatusRail from './FieldStatusRail'
+import WatcherPill from './WatcherPill'
 import { mapBannerTopCss } from './hudLayout'
 import { touchFontSm, touchMinTarget } from './tokens'
 
@@ -22,6 +23,7 @@ export default function NavigationHud() {
   return (
     <>
       <FieldStatusRail />
+      <WatcherPill />
       {hasNext && (
         <div
           style={{

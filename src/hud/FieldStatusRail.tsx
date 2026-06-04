@@ -71,11 +71,23 @@ export default function FieldStatusRail() {
             : 'Monitor standby'
       } else if (meshConnected) {
         meshLive = true
-        meshLabel = `Mesh ${sync.peers.length}${sync.observerCount > 0 ? ` · ${sync.observerCount} obs` : ''}${mapReady ? ' · map' : ''}`
+        const fieldPeers = sync.peers.filter((p) => p.linkRole === 'member').length
+        const watchers = sync.peers
+          .filter((p) => p.linkRole === 'observer')
+          .map((p) => p.callsign?.trim() || 'Watcher')
+        const watchBit =
+          watchers.length > 0 ? ` · ${watchers.join(', ')} watching` : ''
+        meshLabel = `Mesh ${fieldPeers} teammate${fieldPeers === 1 ? '' : 's'}${watchBit}${mapReady ? ' · map' : ''}`
       } else if (sync.phase === 'awaiting-host-answer') {
         meshLabel = 'Mesh pending'
       } else {
-        meshLabel = sync.observerCount > 0 ? `Mesh on · ${sync.observerCount} obs` : 'Mesh on'
+        const watchers = sync.peers
+          .filter((p) => p.linkRole === 'observer')
+          .map((p) => p.callsign?.trim() || 'Watcher')
+        meshLabel =
+          watchers.length > 0
+            ? `Watching · ${watchers.join(', ')}`
+            : 'Mesh on — share join or watch link'
       }
 
       list.push({
@@ -120,7 +132,7 @@ export default function FieldStatusRail() {
     sync.monitorTargetCallsign,
     sync.monitorTransport,
     sync.observerCount,
-    sync.peers.length,
+    sync.peers,
     sync.phase,
     sync.role,
     sync.supported,

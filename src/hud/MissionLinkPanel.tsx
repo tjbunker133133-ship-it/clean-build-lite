@@ -10,6 +10,7 @@ import { formatJoinCode, isValidJoinCodeInput } from '../lib/missionSync/joinCod
 import { filterTeammatePresence } from '../lib/missionSync/presence'
 import { missionPacketToQrDataUrl, scanMissionPacketFromCamera } from '../lib/missionSync/qr'
 import { isMissionTurnConfigured } from '../lib/missionSync/turnConfig'
+import { FIELD_WALK_WATCHER_STEPS, fieldWalkWatcherSummary } from '../lib/missionSync/fieldTestGuide'
 import { formatPresenceAge, monitorTransportLabel } from '../lib/missionSync/monitorUx'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 import { touchFontSm, touchGapMd, touchGapSm, touchMinTarget } from './tokens'
@@ -109,6 +110,7 @@ export default function MissionLinkPanel() {
     () => sync.peers.filter((p) => p.linkRole === 'member'),
     [sync.peers],
   )
+  const meshPeerCount = fieldPeers.length
   const monitorPeers = useMemo(
     () => sync.peers.filter((p) => p.linkRole === 'observer'),
     [sync.peers],
@@ -308,6 +310,33 @@ export default function MissionLinkPanel() {
         </p>
 
         <div style={{ color: '#5eead4', fontWeight: 700, fontSize: 13 }}>{phaseLabel}</div>
+
+        {isFieldMember && inMission ? (
+          <div
+            style={{
+              padding: '10px 12px',
+              borderRadius: 10,
+              border: '1px solid rgba(125, 211, 252, 0.35)',
+              background: 'rgba(15, 35, 55, 0.45)',
+              lineHeight: 1.45,
+              fontSize: '0.9em',
+            }}
+          >
+            <div style={{ color: '#bae6fd', fontWeight: 800, fontSize: 11, letterSpacing: '0.08em' }}>
+              WALK + HOME WATCHER
+            </div>
+            <ol style={{ margin: '8px 0 0', paddingLeft: 18, color: '#94a3b8' }}>
+              {FIELD_WALK_WATCHER_STEPS.map((step) => (
+                <li key={step} style={{ marginBottom: 4 }}>
+                  {step}
+                </li>
+              ))}
+            </ol>
+            <p style={{ margin: '8px 0 0', color: '#7dd3fc', fontWeight: 700 }}>
+              {fieldWalkWatcherSummary(sync.observerCount, meshPeerCount)}
+            </p>
+          </div>
+        ) : null}
 
         {inMission ? (
           <div
@@ -769,26 +798,12 @@ export default function MissionLinkPanel() {
               </p>
             )}
             {monitorPeers.length > 0 ? (
-              <>
-                <div
-                  style={{
-                    color: '#94a3b8',
-                    margin: fieldLinked ? '14px 0 6px' : '0 0 6px',
-                    fontSize: '0.88em',
-                    fontWeight: 700,
-                  }}
-                >
-                  Remote monitors (read-only)
-                </div>
-                <ul style={{ margin: 0, paddingLeft: 18, color: '#bae6fd' }}>
-                  {monitorPeers.map((p) => (
-                    <li key={p.peerId}>
-                      {p.callsign}{' '}
-                      <span style={{ color: '#64748b' }}>(monitor · {p.deviceId.slice(0, 8)}…)</span>
-                    </li>
-                  ))}
-                </ul>
-              </>
+              <p style={{ color: '#94a3b8', margin: fieldLinked ? '12px 0 0' : '8px 0 0', fontSize: '0.88em' }}>
+                Watchers:{' '}
+                <strong style={{ color: '#bae6fd' }}>
+                  {monitorPeers.map((p) => p.callsign?.trim() || 'Watcher').join(', ')}
+                </strong>
+              </p>
             ) : null}
           </StepCard>
         ) : null}
@@ -870,8 +885,12 @@ export default function MissionLinkPanel() {
               ) : null}
             </details>
             {sync.observerCount > 0 ? (
-              <p style={{ color: '#86efac', margin: '8px 0 0', fontSize: '0.9em' }}>
-                {sync.observerCount} watcher(s) live on map
+              <p style={{ color: '#86efac', margin: '8px 0 0', fontSize: '0.9em', fontWeight: 700 }}>
+                {sync.peers
+                  .filter((p) => p.linkRole === 'observer')
+                  .map((p) => p.callsign?.trim() || 'Watcher')
+                  .join(', ')}{' '}
+                — watching your live map (see pill top-right)
               </p>
             ) : null}
             {!isMissionTurnConfigured() ? (

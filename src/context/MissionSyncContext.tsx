@@ -471,7 +471,8 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
           setPhase('connected')
           if (peer.linkRole === 'observer') {
             setMonitorTransport((prev) => (prev === 'relay' ? 'both' : 'direct'))
-            notify('success', `${peer.callsign} is monitoring (${coord.observerPeers.length} observer(s))`)
+            const name = peer.callsign?.trim() || 'Watcher'
+            notify('success', `${name} is watching your live map`)
             const snap = buildSnapshot()
             if (snap) coord.sendSnapshotToPeer(peer.peerId, snap)
             for (const p of teamPresenceRef.current) {
@@ -491,7 +492,14 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
           pushCorridorHintNow()
         },
         onPeerDisconnected: () => {
+          const prevObserverCount = peers.filter((p) => p.linkRole === 'observer').length
           setPeers(coord.connectedPeers)
+          const nextObserverCount = coord.connectedPeers.filter(
+            (p) => p.linkRole === 'observer',
+          ).length
+          if (isFieldMember && prevObserverCount > nextObserverCount) {
+            notify('info', 'Watcher disconnected — they can reopen your live map link')
+          }
           if (coord.peerCount === 0 && missionId) {
             if (isObserver && Date.now() - relayLastAtRef.current < 45_000) {
               setMonitorTransport('relay')
@@ -946,7 +954,9 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       setPhase('connected')
       notify(
         'success',
-        isObs ? `Observer ${answer.callsign} connected` : 'Teammate linked over mission mesh',
+        isObs
+          ? `${answer.callsign?.trim() || 'Watcher'} is watching your live map`
+          : `${answer.callsign} joined your mission mesh`,
       )
     },
     [notify],
