@@ -18,7 +18,6 @@ import {
   clampMobilePanelFontScale,
   computeDockMetrics,
   dockLaneSlotY,
-  cycleMobilePanelFontScalePreset,
   cycleMobilePanelSizePreset,
   mobileFocusOpacity,
   mobilePresetDimensions,
@@ -271,7 +270,7 @@ export default function CockpitHudPanel({
   const iosFieldHud = isIosFieldHud()
   const mobileFieldHud = isMobileFieldHud()
   const isMobile = profile.interactionMode === 'mobile'
-  /** All mobile interaction (iOS + Android + tablets): compact S/M/L + A + minimize only. */
+  /** All mobile interaction (iOS + Android + tablets): compact S/M/L + minimize only. */
   const showMobileHeaderExtras = false
   const showCompactFieldHeaderExtras = isMobile
   const isCoarsePointer = profile.isCoarsePointer
@@ -2094,34 +2093,6 @@ export default function CockpitHudPanel({
                       : mobileSizePreset === 'large'
                         ? 'L'
                         : 'M'}
-                  </button>
-                  <button
-                    type="button"
-                    data-no-drag
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setMobilePanelFontScale((v) => cycleMobilePanelFontScalePreset(v))
-                    }}
-                    aria-label={`Cycle panel text size for ${title}`}
-                    title="Panel text size"
-                    style={{
-                      background: `${accent}14`,
-                      border: `1px solid ${accent}77`,
-                      color: accent,
-                      cursor: 'pointer',
-                      borderRadius: 4,
-                      minHeight: mobileTapMin,
-                      minWidth: mobileTapMin,
-                      lineHeight: 1,
-                      fontSize: touchFontMd(isMobile),
-                      fontWeight: 800,
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      padding: 0,
-                    }}
-                  >
-                    A
                   </button>
                 </>
               ) : null}

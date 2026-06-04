@@ -39,81 +39,93 @@ export function removeEnvironmentalOverlay(map: Map, id: EnvironmentalOverlayId)
 }
 
 export function applyRasterOverlay(map: Map, id: EnvironmentalOverlayId): boolean {
-  const def = overlayDef(id)
-  const tiles = rasterTileUrls(id)
-  if (!tiles) return false
+  try {
+    if (!map.isStyleLoaded()) return false
+    const def = overlayDef(id)
+    const tiles = rasterTileUrls(id)
+    if (!tiles) return false
 
-  const sourceId = envSourceId(id)
-  const layerId = envLayerId(id)
-  const beforeId = findBeforeTacticalLayer(map)
+    const sourceId = envSourceId(id)
+    const layerId = envLayerId(id)
+    const beforeId = findBeforeTacticalLayer(map)
 
-  if (!map.getSource(sourceId)) {
-    map.addSource(sourceId, {
-      type: 'raster',
-      tiles,
-      tileSize: 256,
-    })
-  }
-
-  if (!map.getLayer(layerId)) {
-    map.addLayer(
-      {
-        id: layerId,
+    if (!map.getSource(sourceId)) {
+      map.addSource(sourceId, {
         type: 'raster',
-        source: sourceId,
-        minzoom: def.minZoom ?? 0,
-        maxzoom: def.maxZoom ?? 22,
-        paint: rasterPaint(id),
-      },
-      beforeId,
-    )
+        tiles,
+        tileSize: 256,
+        scheme: 'xyz',
+      })
+    }
+
+    if (!map.getLayer(layerId)) {
+      map.addLayer(
+        {
+          id: layerId,
+          type: 'raster',
+          source: sourceId,
+          minzoom: def.minZoom ?? 0,
+          maxzoom: def.maxZoom ?? 22,
+          paint: rasterPaint(id),
+        },
+        beforeId,
+      )
+    }
+    return true
+  } catch {
+    return false
   }
-  return true
 }
 
 export function applyGeojsonOverlay(
   map: Map,
   id: EnvironmentalOverlayId,
   geojson: GeoJSON.FeatureCollection,
-): void {
-  const def = overlayDef(id)
-  const sourceId = envSourceId(id)
-  const layerId = envLayerId(id)
-  const beforeId = findBeforeTacticalLayer(map)
+): boolean {
+  try {
+    if (!map.isStyleLoaded()) return false
+    const def = overlayDef(id)
+    const sourceId = envSourceId(id)
+    const layerId = envLayerId(id)
+    const beforeId = findBeforeTacticalLayer(map)
 
-  const existing = map.getSource(sourceId) as GeoJSONSource | undefined
-  if (existing) {
-    existing.setData(geojson)
-  } else {
-    map.addSource(sourceId, { type: 'geojson', data: geojson })
-  }
+    const existing = map.getSource(sourceId) as GeoJSONSource | undefined
+    if (existing) {
+      existing.setData(geojson)
+    } else {
+      map.addSource(sourceId, { type: 'geojson', data: geojson })
+    }
 
-  if (!map.getLayer(layerId)) {
-    const lineColor =
-      id === 'bike_paths'
-        ? '#5ec8ff'
-        : id === 'abandoned_rail'
-          ? '#c9a227'
-          : id === 'mines'
-            ? '#ff6b87'
-            : '#7dff8a'
+    if (!map.getLayer(layerId)) {
+      const lineColor =
+        id === 'bike_paths'
+          ? '#5ec8ff'
+          : id === 'abandoned_rail'
+            ? '#c9a227'
+            : id === 'mines'
+              ? '#ff6b87'
+              : '#7dff8a'
 
-    map.addLayer(
-      {
-        id: layerId,
-        type: 'line',
-        source: sourceId,
-        minzoom: def.minZoom ?? 0,
-        layout: { 'line-join': 'round', 'line-cap': 'round' },
-        paint: {
-          'line-color': lineColor,
-          'line-width': id === 'hiking_trails' ? 1.5 : 2,
-          'line-opacity': 0.75,
-          ...(id === 'abandoned_rail' ? { 'line-dasharray': [2, 2] } : {}),
+      map.addLayer(
+        {
+          id: layerId,
+          type: 'line',
+          source: sourceId,
+          minzoom: def.minZoom ?? 0,
+          layout: { 'line-join': 'round', 'line-cap': 'round' },
+          paint: {
+            'line-color': lineColor,
+            'line-width': id === 'hiking_trails' ? 2.2 : 2.8,
+            'line-opacity': 0.88,
+            ...(id === 'abandoned_rail' ? { 'line-dasharray': [2, 2] } : {}),
+          },
         },
-      },
-      beforeId,
-    )
+        beforeId,
+      )
+    }
+    return true
+  } catch {
+    return false
   }
 }
 
@@ -125,4 +137,20 @@ export function mapBboxFromMap(map: Map): import('./types').MapBbox {
     north: b.getNorth(),
     east: b.getEast(),
   }
+}
+
+export function overlayZoomBlocked(
+  map: Map,
+  id: EnvironmentalOverlayId,
+): { blocked: boolean; message?: string } {
+  const def = overlayDef(id)
+  const minZ = def.minZoom ?? 0
+  const z = map.getZoom()
+  if (z + 0.05 < minZ) {
+    return {
+      blocked: true,
+      message: `Zoom in closer (map level ${minZ}+) to load ${def.label.toLowerCase()}.`,
+    }
+  }
+  return { blocked: false }
 }

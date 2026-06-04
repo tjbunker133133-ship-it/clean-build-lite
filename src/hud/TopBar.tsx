@@ -1,7 +1,9 @@
 import React, { useCallback } from 'react'
+import { useCockpit } from '../context/CockpitContext'
 import { useMapContext } from '../context/MapContext'
 import { useDeviceHeading } from '../hooks/useDeviceHeading'
 import { deriveGpsUiStatus, useGPS } from '../hooks/useGPS'
+import { useTacticalProfile } from '../hooks/useTacticalProfile'
 import { useTravelSpeed } from '../hooks/useTravelSpeed'
 import { requestDeviceOrientationPermission } from '../lib/deviceHeading'
 import { getDeviceProfile } from '../runtime/deviceProfile'
@@ -21,9 +23,16 @@ function LocateIcon() {
 
 export default function TopBar() {
   const { map } = useMapContext()
+  const { raisePanel, updatePanel } = useCockpit()
+  const { operationalReady } = useTacticalProfile()
   const gps = useGPS()
   const gpsUi = deriveGpsUiStatus(gps)
-  const { display: speed } = useTravelSpeed(gps.lat, gps.lng, gpsUi === 'locked')
+  const { display: speed } = useTravelSpeed(
+    gps.lat,
+    gps.lng,
+    gpsUi === 'locked',
+    gps.accuracy,
+  )
   const { heading, status, cardinal } = useDeviceHeading()
   const profile = getDeviceProfile()
   const isMobile = profile.interactionMode === 'mobile'
@@ -52,6 +61,16 @@ export default function TopBar() {
       essential: true,
     })
   }
+
+  const openPreflight = useCallback(() => {
+    updatePanel('preflight', { docked: false, minimized: false })
+    raisePanel('preflight')
+  }, [raisePanel, updatePanel])
+
+  const preflightBorder = operationalReady
+    ? 'rgba(125,255,138,0.55)'
+    : 'rgba(251, 191, 36, 0.65)'
+  const preflightGlow = operationalReady ? 'rgba(125,255,138,0.12)' : 'rgba(251, 191, 36, 0.14)'
 
   return (
     <div
@@ -83,19 +102,41 @@ export default function TopBar() {
           overflow: 'hidden',
         }}
       >
-        <div
+        <button
+          type="button"
+          onClick={openPreflight}
+          aria-label={
+            operationalReady
+              ? 'Open preflight checklist — profile ready'
+              : 'Open preflight checklist — setup incomplete'
+          }
+          title={operationalReady ? 'Preflight — ready' : 'Preflight — finish setup'}
           style={{
             display: 'inline-flex',
             alignItems: 'center',
             gap: 6,
             padding: isCompact ? '5px 9px' : '5px 11px',
             borderRadius: 7,
-            border: '1px solid rgba(125,255,138,0.42)',
-            background: 'rgba(125,255,138,0.06)',
-            boxShadow: 'inset 0 0 0 1px rgba(125,255,138,0.08)',
+            border: `1px solid ${preflightBorder}`,
+            background: preflightGlow,
+            boxShadow: `inset 0 0 0 1px ${preflightGlow}`,
             flexShrink: 0,
+            cursor: 'pointer',
+            minHeight: tapMin,
+            touchAction: 'manipulation',
           }}
         >
+          <span
+            aria-hidden
+            style={{
+              width: 7,
+              height: 7,
+              borderRadius: 999,
+              background: operationalReady ? '#7dffa8' : '#fbbf24',
+              boxShadow: operationalReady ? '0 0 6px #7dffa866' : '0 0 6px #fbbf2466',
+              flexShrink: 0,
+            }}
+          />
           <span
             style={{
               fontFamily: 'var(--font-ui)',
@@ -122,7 +163,7 @@ export default function TopBar() {
               HUD
             </span>
           )}
-        </div>
+        </button>
         {!isCompact && profile.interactionMode === 'desktop' && !profile.isIOS && (
           <span
             style={{

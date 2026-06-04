@@ -1,9 +1,7 @@
 import React from 'react'
 import { useAppContext } from '../context/AppContext'
-import { useCorridorOffline } from '../hooks/useCorridorOffline'
 import { useNavigationMonitor } from '../hooks/useNavigationMonitor'
 import { useTrailInspect } from '../hooks/useTrailInspect'
-import { getCorridorOfflineSummary } from '../lib/corridorPrefetch'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 import TrailInspectCard from './TrailInspectCard'
 import FieldStatusRail from './FieldStatusRail'
@@ -14,19 +12,12 @@ export default function NavigationHud() {
   const { confirmWaypointArrival, state } = useAppContext()
   const { activeLayer } = state
   const nav = useNavigationMonitor()
-  const corridor = useCorridorOffline()
-  const offlineMap = getCorridorOfflineSummary()
   const trailInspect = useTrailInspect()
   const isMobile = getDeviceProfile().interactionMode === 'mobile'
   const fontSm = touchFontSm(isMobile)
   const tapMin = touchMinTarget(isMobile)
 
   const hasNext = nav.activeWaypointLabel != null
-  const advisory =
-    nav.arrivalCandidate != null
-      ? null
-      : nav.offRouteAdvisory ??
-        (corridor.approachingEdge ? 'Approaching offline map edge' : nav.corridorAlert)
 
   return (
     <>
@@ -190,29 +181,6 @@ export default function NavigationHud() {
         </div>
       )}
 
-      {advisory && !nav.arrivalCandidate && !trailInspect.selection && !trailInspect.missHint && (
-        <div
-          style={{
-            position: 'absolute',
-            bottom: 'calc(env(safe-area-inset-bottom, 0px) + 24px)',
-            left: '50%',
-            transform: 'translateX(-50%)',
-            zIndex: 205,
-            pointerEvents: 'none',
-            padding: '8px 14px',
-            borderRadius: 8,
-            background: 'rgba(40, 24, 8, 0.9)',
-            border: '1px solid rgba(251, 191, 36, 0.5)',
-            color: '#fde68a',
-            fontSize: fontSm,
-            letterSpacing: '0.06em',
-            maxWidth: 'min(92vw, 400px)',
-            textAlign: 'center',
-          }}
-        >
-          {advisory}
-        </div>
-      )}
     </>
   )
 }

@@ -379,6 +379,33 @@ describe('findNearestTrailCandidate', () => {
     expect(Number.isFinite(c!.snappedLat) && Number.isFinite(c!.snappedLng)).toBe(true)
   })
 
+  it('prefers trail vertex on sharp corner when closer than segment chord', () => {
+    const map = stubMap({
+      features: [
+        {
+          type: 'Feature',
+          geometry: {
+            type: 'LineString',
+            coordinates: [
+              [-74.02, 40.0],
+              [-74.0, 40.0],
+              [-74.0, 40.002],
+            ],
+          },
+          properties: { class: 'footway' },
+        },
+      ],
+    })
+    const c = findNearestTrailCandidate(map, {
+      lat: 40.00003,
+      lng: -74.00003,
+      radiusMeters: MAX_SNAP_RADIUS_M,
+    })
+    expect(c).not.toBeNull()
+    expect(c!.snappedLat).toBeCloseTo(40.0, 4)
+    expect(c!.snappedLng).toBeCloseTo(-74.0, 4)
+  })
+
   it('deterministic output: identical queries yield identical candidates', () => {
     const features: StubFeature[] = [
       {

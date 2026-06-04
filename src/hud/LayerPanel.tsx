@@ -6,6 +6,7 @@ import { useMapContext } from '../context/MapContext'
 import type { LayerType } from '../types'
 import type { ScreenHueMode } from '../types/cockpit'
 import { ENVIRONMENTAL_OVERLAY_CATALOG } from '../lib/environmentalOverlays/catalog'
+import { firmsMapKeyConfigured } from '../lib/environmentalOverlays/sources'
 import { useOverlayContext } from '../context/OverlayContext'
 import { iosWebPushRequirementLine } from '../lib/iosFieldCapabilities'
 import { getDeviceProfile } from '../runtime/deviceProfile'
@@ -44,6 +45,7 @@ export default function LayerPanel() {
   const gapSm = touchGapSm(isMobile)
   const gapMd = touchGapMd(isMobile)
   const tapMin = touchMinTarget(isMobile)
+  const firmsReady = firmsMapKeyConfigured()
 
   const sliderStyle: CSSProperties = {
     width: '100%',
@@ -152,7 +154,19 @@ export default function LayerPanel() {
           <p style={sectionLabelStyle}>SITUATIONAL OVERLAYS</p>
           <p style={{ margin: 0, fontSize: fontSm, color: '#8a948c', lineHeight: 1.4 }}>
             Drawn over the basemap. Does not change Streets/Topo/Outdoor/Satellite. OSM layers cache
-            in this view for offline; raster layers need network.
+            in this view for offline; raster layers need network. Zoom in if a layer says level 10+.
+          </p>
+          <p
+            style={{
+              margin: 0,
+              fontSize: fontSm,
+              color: firmsReady ? '#7dffa8' : '#ffd166',
+              lineHeight: 1.35,
+            }}
+          >
+            {firmsReady
+              ? 'NASA FIRMS fire layer: MAP_KEY is configured in this build.'
+              : 'NASA FIRMS fire only: add VITE_FIRMS_MAP_KEY (local + Vercel production), then redeploy.'}
           </p>
           {iosWebPushRequirementLine() ? (
             <p style={{ margin: 0, fontSize: fontSm, color: '#9ea7a0', lineHeight: 1.4 }}>
@@ -187,7 +201,9 @@ export default function LayerPanel() {
                 <input
                   type="checkbox"
                   checked={checked}
-                  onChange={(e) => setEnabled(def.id, e.target.checked)}
+                  onChange={(e) => {
+                    setEnabled(def.id, e.target.checked)
+                  }}
                   style={{ marginTop: 4, accentColor: '#7dff8a' }}
                 />
                 <span style={{ display: 'grid', gap: 2 }}>

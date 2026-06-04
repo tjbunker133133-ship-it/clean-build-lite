@@ -8,6 +8,7 @@ import {
   shouldPublishHeading,
   smoothHeading,
 } from '../lib/deviceHeading'
+import { getDeviceProfile } from '../runtime/deviceProfile'
 
 export type DeviceHeadingState = {
   heading: number | null
@@ -30,6 +31,9 @@ export function useDeviceHeading(): DeviceHeadingState {
     if (typeof window === 'undefined') return
     let mounted = true
     let fallbackTimer: number | null = null
+    const isIOS = getDeviceProfile().isIOS
+    /** After earth-relative absolute events, ignore relative alpha (prevents 180° flips). */
+    let preferAbsoluteOnly = false
 
     const applyStatus = (next: CompassStatus) => {
       if (!mounted) return
@@ -44,7 +48,9 @@ export function useDeviceHeading(): DeviceHeadingState {
       applyStatus('active')
     }
 
-    const onOrientation = (event: DeviceOrientationEvent) => {
+    const ingestOrientation = (event: DeviceOrientationEvent) => {
+      if (!isIOS && preferAbsoluteOnly && event.absolute !== true) return
+
       if (isCompassTiltUnreliable(event.beta, event.gamma)) {
         applyStatus('level')
         return
@@ -52,6 +58,8 @@ export function useDeviceHeading(): DeviceHeadingState {
 
       const raw = resolveOrientationHeading(event)
       if (raw == null) return
+
+      if (event.absolute === true) preferAbsoluteOnly = true
 
       const lastRaw = lastRawRef.current
       if (lastRaw != null && Math.abs(headingDelta(lastRaw, raw)) > OUTLIER_DEG) {
@@ -69,12 +77,18 @@ export function useDeviceHeading(): DeviceHeadingState {
       publishDisplay(smoothed)
     }
 
-    const onAbsolute = (event: DeviceOrientationEvent) => {
-      onOrientation(event)
+    if (isIOS) {
+      window.addEventListener('deviceorientation', ingestOrientation as EventListener, {
+        passive: true,
+      })
+    } else {
+      window.addEventListener('deviceorientationabsolute', ingestOrientation as EventListener, {
+        passive: true,
+      })
+      window.addEventListener('deviceorientation', ingestOrientation as EventListener, {
+        passive: true,
+      })
     }
-
-    window.addEventListener('deviceorientationabsolute', onAbsolute as EventListener, { passive: true })
-    window.addEventListener('deviceorientation', onOrientation as EventListener, { passive: true })
 
     fallbackTimer = window.setTimeout(() => {
       if (!mounted || gotReadingRef.current) return
@@ -84,8 +98,8 @@ export function useDeviceHeading(): DeviceHeadingState {
 
     return () => {
       mounted = false
-      window.removeEventListener('deviceorientationabsolute', onAbsolute as EventListener)
-      window.removeEventListener('deviceorientation', onOrientation as EventListener)
+      window.removeEventListener('deviceorientation', ingestOrientation as EventListener)
+      window.removeEventListener('deviceorientationabsolute', ingestOrientation as EventListener)
       if (fallbackTimer != null) window.clearTimeout(fallbackTimer)
     }
   }, [])

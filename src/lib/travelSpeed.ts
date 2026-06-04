@@ -8,21 +8,33 @@ export type TravelSpeedSample = {
 
 const MPS_TO_MPH = 2.23694
 const MPS_TO_KPH = 3.6
-const STOPPED_MPS = 0.4
+/** ~2.5 mph — GPS drift while stationary often reads 2–4 mph without a displacement gate. */
+export const STOPPED_MPS = 1.15
 const MIN_DT_SEC = 0.35
 const MAX_DT_SEC = 25
 const MAX_IMPLIED_MPS = 55
+const MIN_DISPLACEMENT_M = 2.5
 
-export function computeTravelSpeedMps(
-  prev: { lat: number; lng: number; atMs: number } | null,
-  lat: number,
-  lng: number,
-  atMs: number,
-): number | null {
+export type TravelSpeedSampleInput = {
+  prev: { lat: number; lng: number; atMs: number } | null
+  lat: number
+  lng: number
+  atMs: number
+  /** When set, ignore jitter moves smaller than a fraction of reported accuracy. */
+  accuracyM?: number | null
+}
+
+export function computeTravelSpeedMps(input: TravelSpeedSampleInput): number | null {
+  const { prev, lat, lng, atMs, accuracyM } = input
   if (!prev) return null
   const dtSec = (atMs - prev.atMs) / 1000
   if (dtSec < MIN_DT_SEC || dtSec > MAX_DT_SEC) return null
   const distM = haversineMeters(prev.lat, prev.lng, lat, lng)
+  const minMoveM =
+    accuracyM != null && Number.isFinite(accuracyM) && accuracyM > 0
+      ? Math.max(MIN_DISPLACEMENT_M, accuracyM * 0.85)
+      : MIN_DISPLACEMENT_M
+  if (distM < minMoveM) return null
   const mps = distM / dtSec
   if (!Number.isFinite(mps) || mps > MAX_IMPLIED_MPS) return null
   return mps
@@ -30,7 +42,15 @@ export function computeTravelSpeedMps(
 
 export function smoothSpeedMps(prev: number | null, next: number, factor = 0.35): number {
   if (prev == null) return next
-  return prev + (next - prev) * factor
+  const f = next < prev ? Math.min(factor, 0.22) : factor
+  return prev + (next - prev) * f
+}
+
+/** Pull smoothed speed down when fixes stop implying movement (GPS wander). */
+export function decaySpeedMps(prev: number | null, factor = 0.35): number | null {
+  if (prev == null) return null
+  const next = prev * factor
+  return next < STOPPED_MPS ? null : next
 }
 
 export function formatTravelSpeed(mps: number | null): {

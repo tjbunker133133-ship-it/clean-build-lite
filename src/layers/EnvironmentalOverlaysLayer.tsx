@@ -7,6 +7,7 @@ import {
   applyGeojsonOverlay,
   applyRasterOverlay,
   mapBboxFromMap,
+  overlayZoomBlocked,
   removeEnvironmentalOverlay,
 } from '../lib/environmentalOverlays/mapOverlayRuntime'
 import { readCachedOverlayGeo, writeCachedOverlayGeo } from '../lib/environmentalOverlays/overlayCache'
@@ -34,6 +35,19 @@ function syncOverlay(
 
   const run = async () => {
     if (!map.isStyleLoaded()) return
+
+    const zoomGate = overlayZoomBlocked(map, id)
+    if (zoomGate.blocked) {
+      removeEnvironmentalOverlay(map, id)
+      patchStatus(id, {
+        loading: false,
+        error: zoomGate.message ?? 'Zoom in to load this layer',
+        stale: false,
+        fromCache: false,
+      })
+      return
+    }
+
     const bbox = mapBboxFromMap(map)
 
     if (def.delivery === 'raster-wms') {
@@ -49,13 +63,18 @@ function syncOverlay(
       }
       if (id === 'fire_firms' && !readFirmsMapKey()) {
         removeEnvironmentalOverlay(map, id)
-        patchStatus(id, { loading: false, error: 'FIRMS MAP_KEY missing', stale: false, fromCache: false })
+        patchStatus(id, {
+          loading: false,
+          error: 'FIRMS MAP_KEY missing in this build — add VITE_FIRMS_MAP_KEY and redeploy',
+          stale: false,
+          fromCache: false,
+        })
         return
       }
       const ok = applyRasterOverlay(map, id)
       patchStatus(id, {
         loading: false,
-        error: ok ? null : 'Layer unavailable',
+        error: ok ? null : 'Layer unavailable — retry or check network',
         stale: false,
         fromCache: false,
       })
@@ -67,13 +86,21 @@ function syncOverlay(
     if (!online && def.offlineCacheable) {
       const cached = readCachedOverlayGeo(id, bbox)
       if (cached) {
-        applyGeojsonOverlay(map, id, cached.geojson)
-        patchStatus(id, {
-          loading: false,
-          error: null,
-          stale: true,
-          fromCache: true,
-        })
+        if (applyGeojsonOverlay(map, id, cached.geojson)) {
+          patchStatus(id, {
+            loading: false,
+            error: null,
+            stale: true,
+            fromCache: true,
+          })
+        } else {
+          patchStatus(id, {
+            loading: false,
+            error: 'Map still loading — try again',
+            stale: false,
+            fromCache: false,
+          })
+        }
         return
       }
       removeEnvironmentalOverlay(map, id)
@@ -95,21 +122,31 @@ function syncOverlay(
     try {
       const geojson = await fetchOverpassGeojson(id, bbox)
       if (cancelled) return
-      applyGeojsonOverlay(map, id, geojson)
+      if (!applyGeojsonOverlay(map, id, geojson)) {
+        patchStatus(id, {
+          loading: false,
+          error: 'Map still loading — try again',
+          stale: false,
+          fromCache: false,
+        })
+        return
+      }
       if (def.offlineCacheable) {
         writeCachedOverlayGeo({ overlayId: id, bbox, fetchedAt: Date.now(), geojson })
       }
       patchStatus(id, {
         loading: false,
-        error: geojson.features.length === 0 ? 'No features in this view' : null,
+        error:
+          geojson.features.length === 0
+            ? 'No features in this view — zoom in or pan to trail/bike areas'
+            : null,
         stale: false,
         fromCache: false,
       })
     } catch (e) {
       if (cancelled) return
       const cached = def.offlineCacheable ? readCachedOverlayGeo(id, bbox) : null
-      if (cached) {
-        applyGeojsonOverlay(map, id, cached.geojson)
+      if (cached && applyGeojsonOverlay(map, id, cached.geojson)) {
         patchStatus(id, {
           loading: false,
           error: null,
@@ -128,13 +165,10 @@ function syncOverlay(
     }
   }
 
-  const onStyle = () => void run()
-  if (map.isStyleLoaded()) void run()
-  else map.once('styledata', onStyle)
+  void run()
 
   return () => {
     cancelled = true
-    map.off('styledata', onStyle)
   }
 }
 
@@ -144,6 +178,7 @@ export default function EnvironmentalOverlaysLayer() {
   const patchRef = useRef(patchStatus)
   patchRef.current = patchStatus
   const moveTimerRef = useRef<number | null>(null)
+  const styleRafRef = useRef<number | null>(null)
   const cleanupRef = useRef<Partial<Record<EnvironmentalOverlayId, () => void>>>({})
 
   useEffect(() => {
@@ -152,11 +187,34 @@ export default function EnvironmentalOverlaysLayer() {
     const refreshAll = () => {
       for (const def of ENVIRONMENTAL_OVERLAY_CATALOG) {
         cleanupRef.current[def.id]?.()
-        cleanupRef.current[def.id] = syncOverlay(map, def.id, toggles[def.id], online, patchRef.current)
+        cleanupRef.current[def.id] = syncOverlay(
+          map,
+          def.id,
+          toggles[def.id],
+          online,
+          patchRef.current,
+        )
       }
     }
 
+    const scheduleRefreshAll = () => {
+      if (styleRafRef.current != null) window.cancelAnimationFrame(styleRafRef.current)
+      styleRafRef.current = window.requestAnimationFrame(() => {
+        styleRafRef.current = null
+        refreshAll()
+      })
+    }
+
     refreshAll()
+
+    /** Basemap setStyle() wipes custom layers — re-apply enabled overlays like RouteLayer does. */
+    const onStyleData = () => {
+      const anyOn = ENVIRONMENTAL_OVERLAY_CATALOG.some((d) => toggles[d.id])
+      if (!anyOn) return
+      scheduleRefreshAll()
+    }
+
+    map.on('styledata', onStyleData)
 
     const onMoveEnd = () => {
       if (moveTimerRef.current != null) window.clearTimeout(moveTimerRef.current)
@@ -173,10 +231,15 @@ export default function EnvironmentalOverlaysLayer() {
     map.on('moveend', onMoveEnd)
 
     return () => {
+      map.off('styledata', onStyleData)
       map.off('moveend', onMoveEnd)
       if (moveTimerRef.current != null) {
         window.clearTimeout(moveTimerRef.current)
         moveTimerRef.current = null
+      }
+      if (styleRafRef.current != null) {
+        window.cancelAnimationFrame(styleRafRef.current)
+        styleRafRef.current = null
       }
       for (const id of Object.keys(cleanupRef.current) as EnvironmentalOverlayId[]) {
         cleanupRef.current[id]?.()

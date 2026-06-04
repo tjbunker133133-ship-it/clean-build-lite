@@ -3,12 +3,24 @@ import type { EnvironmentalOverlayId, MapBbox } from './types'
 const OVERPASS_URL = 'https://overpass-api.de/api/interpreter'
 const MAX_BBOX_DEG = 0.35
 
+/** Shrink wide viewports to a fetchable box (centered) instead of failing silently. */
 export function clampBbox(bbox: MapBbox): MapBbox | null {
   const latSpan = bbox.north - bbox.south
   const lngSpan = bbox.east - bbox.west
   if (latSpan <= 0 || lngSpan <= 0) return null
-  if (latSpan > MAX_BBOX_DEG || lngSpan > MAX_BBOX_DEG) return null
-  return bbox
+
+  if (latSpan <= MAX_BBOX_DEG && lngSpan <= MAX_BBOX_DEG) return bbox
+
+  const centerLat = (bbox.south + bbox.north) / 2
+  const centerLng = (bbox.west + bbox.east) / 2
+  const halfLat = Math.min(MAX_BBOX_DEG / 2, latSpan / 2)
+  const halfLng = Math.min(MAX_BBOX_DEG / 2, lngSpan / 2)
+  return {
+    south: centerLat - halfLat,
+    north: centerLat + halfLat,
+    west: centerLng - halfLng,
+    east: centerLng + halfLng,
+  }
 }
 
 export function overpassQuery(id: EnvironmentalOverlayId, bbox: MapBbox): string | null {
@@ -72,7 +84,7 @@ export async function fetchOverpassGeojson(
 ): Promise<GeoJSON.FeatureCollection> {
   const q = overpassQuery(id, bbox)
   if (!q) {
-    throw new Error('Map zoom in — area too large for OSM fetch.')
+    throw new Error('Map area invalid — pan or zoom and try again.')
   }
   const res = await fetch(OVERPASS_URL, {
     method: 'POST',

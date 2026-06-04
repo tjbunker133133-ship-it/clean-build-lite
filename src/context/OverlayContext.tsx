@@ -89,7 +89,8 @@ export function OverlayProvider({ children }: { children: ReactNode }) {
           import.meta as unknown as { env?: Record<string, string | undefined> }
         ).env?.VITE_FIRMS_MAP_KEY?.trim()
         if (!key) {
-          const error = 'Add VITE_FIRMS_MAP_KEY — open Map panel for signup link'
+          const error =
+            'FIRMS MAP_KEY not in this build — add VITE_FIRMS_MAP_KEY to .env.local, sync Vercel, redeploy'
           patchStatus(id, {
             enabled: false,
             error,

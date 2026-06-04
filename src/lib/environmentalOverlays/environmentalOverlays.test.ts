@@ -25,9 +25,12 @@ describe('environmentalOverlays', () => {
     expect(rasterTileUrls('relief_usgs')?.length).toBeGreaterThan(0)
   })
 
-  it('overpass query rejects huge bbox', () => {
+  it('overpass query shrinks huge bbox instead of failing', () => {
     const huge = { south: 0, west: 0, north: 1, east: 1 }
-    expect(clampBbox(huge)).toBeNull()
+    const shrunk = clampBbox(huge)
+    expect(shrunk).not.toBeNull()
+    expect(shrunk!.north - shrunk!.south).toBeCloseTo(0.35, 5)
+    expect(overpassQuery('bike_paths', huge)).toContain('cycleway')
     const small = { south: 39.5, west: -105.2, north: 39.7, east: -105.0 }
     expect(overpassQuery('bike_paths', small)).toContain('cycleway')
   })

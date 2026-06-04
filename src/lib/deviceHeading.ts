@@ -55,6 +55,18 @@ export function shouldPublishHeading(
 }
 
 /** iOS 13+ requires a user gesture before compass events fire. */
+/** Screen rotation offset for alpha-based compass (portrait = 0). */
+export function getScreenOrientationAngle(): number {
+  if (typeof screen !== 'undefined' && screen.orientation?.angle != null) {
+    return screen.orientation.angle
+  }
+  const legacy = (typeof window !== 'undefined'
+    ? (window as Window & { orientation?: number }).orientation
+    : undefined) as number | undefined
+  if (typeof legacy === 'number' && Number.isFinite(legacy)) return legacy
+  return 0
+}
+
 export async function requestDeviceOrientationPermission(): Promise<
   'granted' | 'denied' | 'unsupported'
 > {
@@ -71,14 +83,28 @@ export async function requestDeviceOrientationPermission(): Promise<
   }
 }
 
+/**
+ * Map DeviceOrientation to compass heading (0° = north, clockwise).
+ *
+ * - iOS: `webkitCompassHeading` (degrees clockwise from north).
+ * - `deviceorientationabsolute`: W3C — alpha 0° = top of device toward north.
+ * - Legacy relative `deviceorientation`: use inverted alpha (older Android).
+ */
 export function resolveOrientationHeading(event: DeviceOrientationEvent): number | null {
   const webkitHeading = (event as DeviceOrientationEvent & { webkitCompassHeading?: number })
     .webkitCompassHeading
   if (typeof webkitHeading === 'number' && Number.isFinite(webkitHeading)) {
     return normalizeHeading(webkitHeading)
   }
-  if (typeof event.alpha === 'number' && Number.isFinite(event.alpha)) {
-    return normalizeHeading(360 - event.alpha)
+  if (typeof event.alpha !== 'number' || !Number.isFinite(event.alpha)) {
+    return null
   }
-  return null
+
+  const orient = getScreenOrientationAngle()
+
+  if (event.absolute === true) {
+    return normalizeHeading(event.alpha + orient)
+  }
+
+  return normalizeHeading(360 - event.alpha + orient)
 }

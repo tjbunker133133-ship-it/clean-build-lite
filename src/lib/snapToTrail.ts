@@ -660,6 +660,19 @@ function queryNearestTrailHit(map: Map, p: LatLng, maxM: number): TrailFeatureHi
   const acc: { best: TrailFeatureHit | null } = { best: null }
   const segBudget = { left: MAX_SEGMENT_EVALUATIONS }
 
+  const considerHit = (
+    lat: number,
+    lng: number,
+    distanceMeters: number,
+    sourceClass: string,
+    properties: Record<string, unknown>,
+  ) => {
+    if (distanceMeters > maxM) return
+    if (acc.best === null || distanceMeters < acc.best.distanceMeters) {
+      acc.best = { lat, lng, distanceMeters, sourceClass, properties }
+    }
+  }
+
   for (const f of ordered) {
     if (segBudget.left <= 0) break
     const snapClass = resolveTrailSnapClass(f)
@@ -670,17 +683,14 @@ function queryNearestTrailHit(map: Map, p: LatLng, maxM: number): TrailFeatureHi
       const a: LatLng = { lat: c1[1], lng: c1[0] }
       const b: LatLng = { lat: c2[1], lng: c2[0] }
       const proj = projectPointOnSegment(p, a, b)
-      if (!proj) return
-      const dist = proj.distanceMeters
-      if (acc.best === null || dist < acc.best.distanceMeters) {
-        acc.best = {
-          lat: proj.lat,
-          lng: proj.lng,
-          distanceMeters: dist,
-          sourceClass: snapClass,
-          properties: props,
-        }
+      if (proj) {
+        considerHit(proj.lat, proj.lng, proj.distanceMeters, snapClass, props)
       }
+      // Vertices at sharp corners: segment projection can cut the bend; endpoints win when closer.
+      const distA = haversineMeters(p.lat, p.lng, a.lat, a.lng)
+      considerHit(a.lat, a.lng, distA, snapClass, props)
+      const distB = haversineMeters(p.lat, p.lng, b.lat, b.lng)
+      considerHit(b.lat, b.lng, distB, snapClass, props)
     })
   }
 

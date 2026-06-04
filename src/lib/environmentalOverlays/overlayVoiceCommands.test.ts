@@ -17,7 +17,7 @@ describe('overlay voice commands', () => {
   it('fire on reports FIRMS key error from setEnabled', async () => {
     const setEnabled = vi.fn().mockReturnValue({
       applied: false,
-      error: 'Add VITE_FIRMS_MAP_KEY — open Map panel for signup link',
+      error: 'FIRMS MAP_KEY not in this build — add VITE_FIRMS_MAP_KEY to .env.local, sync Vercel, redeploy',
     })
     const cmds = buildOverlayVoiceCommands({
       setEnabled,

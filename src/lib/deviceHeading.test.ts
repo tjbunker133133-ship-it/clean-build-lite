@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
+  getScreenOrientationAngle,
   headingDelta,
   headingToCardinal,
   isCompassTiltUnreliable,
   normalizeHeading,
+  resolveOrientationHeading,
   shouldPublishHeading,
   smoothHeading,
 } from './deviceHeading'
@@ -38,5 +40,29 @@ describe('deviceHeading', () => {
   it('throttles small frequent updates', () => {
     expect(shouldPublishHeading(10, 12, 1000, 900, 6, 320)).toBe(false)
     expect(shouldPublishHeading(10, 20, 1500, 900, 6, 320)).toBe(true)
+  })
+
+  it('resolveOrientationHeading prefers webkit compass on iOS-style events', () => {
+    const h = resolveOrientationHeading({
+      alpha: 200,
+      webkitCompassHeading: 12,
+    } as unknown as DeviceOrientationEvent)
+    expect(h).toBe(12)
+  })
+
+  it('resolveOrientationHeading uses alpha for absolute earth frame (north = 0)', () => {
+    const h = resolveOrientationHeading({
+      alpha: 0,
+      absolute: true,
+    } as unknown as DeviceOrientationEvent)
+    expect(h).toBe(getScreenOrientationAngle())
+  })
+
+  it('resolveOrientationHeading inverts relative alpha (legacy Android)', () => {
+    const h = resolveOrientationHeading({
+      alpha: 90,
+      absolute: false,
+    } as unknown as DeviceOrientationEvent)
+    expect(h).toBe(normalizeHeading(270 + getScreenOrientationAngle()))
   })
 })

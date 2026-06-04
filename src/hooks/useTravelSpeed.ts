@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   computeTravelSpeedMps,
+  decaySpeedMps,
   formatTravelSpeed,
   smoothSpeedMps,
   type TravelSpeedSample,
@@ -9,7 +10,12 @@ import {
 /**
  * Tier 2 travel speed from successive GPS fixes (does not modify Tier 1 useGPS).
  */
-export function useTravelSpeed(lat: number | null, lng: number | null, gpsLocked: boolean) {
+export function useTravelSpeed(
+  lat: number | null,
+  lng: number | null,
+  gpsLocked: boolean,
+  accuracyM: number | null = null,
+) {
   const [sample, setSample] = useState<TravelSpeedSample | null>(null)
   const prevRef = useRef<{ lat: number; lng: number; atMs: number } | null>(null)
   const smoothRef = useRef<number | null>(null)
@@ -22,9 +28,28 @@ export function useTravelSpeed(lat: number | null, lng: number | null, gpsLocked
       return
     }
     const atMs = Date.now()
-    const raw = computeTravelSpeedMps(prevRef.current, lat, lng, atMs)
+    const raw = computeTravelSpeedMps({
+      prev: prevRef.current,
+      lat,
+      lng,
+      atMs,
+      accuracyM,
+    })
     prevRef.current = { lat, lng, atMs }
-    if (raw == null) return
+    if (raw == null) {
+      smoothRef.current = decaySpeedMps(smoothRef.current)
+      const mps = smoothRef.current
+      if (mps == null) {
+        setSample(null)
+        return
+      }
+      setSample({
+        speedMps: mps,
+        mph: mps * 2.23694,
+        kph: mps * 3.6,
+      })
+      return
+    }
     smoothRef.current = smoothSpeedMps(smoothRef.current, raw)
     const mps = smoothRef.current
     setSample({
@@ -32,7 +57,7 @@ export function useTravelSpeed(lat: number | null, lng: number | null, gpsLocked
       mph: mps * 2.23694,
       kph: mps * 3.6,
     })
-  }, [lat, lng, gpsLocked])
+  }, [lat, lng, gpsLocked, accuracyM])
 
   const display = formatTravelSpeed(sample?.speedMps ?? null)
   return { sample, display }

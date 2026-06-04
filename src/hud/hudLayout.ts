@@ -25,7 +25,9 @@ export function mapBannerTopCss(): string {
   return `calc(env(safe-area-inset-top, 0px) + ${topBarContentHeightPx() + 6}px)`
 }
 
-/** Bottom-left field status stack (mesh, offline map) — above dock gutter. */
+/** Bottom-left field status card — clear dock peek strips and arrival strip on phones. */
 export function fieldStatusRailBottomCss(): string {
-  return 'calc(env(safe-area-inset-bottom, 0px) + 12px)'
+  const p = getDeviceProfile()
+  const lift = p.interactionMode === 'mobile' ? 76 : 20
+  return `calc(env(safe-area-inset-bottom, 0px) + ${lift}px)`
 }

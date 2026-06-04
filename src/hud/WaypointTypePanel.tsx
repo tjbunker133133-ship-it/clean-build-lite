@@ -93,36 +93,39 @@ export default function WaypointTypePanel() {
     setPendingType(item.id)
   }
 
-  const clearRouteDockedBtn = (
+  function clearEntireRoute(e: MouseEvent | PointerEvent) {
+    e.preventDefault()
+    e.stopPropagation()
+    tier1Debug('waypoint', 'clear-route-click')
+    ;(window as Window & { __FORCE_CLEAR_ROUTE__?: () => void }).__FORCE_CLEAR_ROUTE__?.()
+  }
+
+  const clearRoutePanelBtn = (
     <button
       type="button"
       data-no-drag
-      data-testid="waypoint-clear-route-docked"
+      data-testid="waypoint-clear-route"
       className="waypoint-clear"
       title="Clear entire route"
       aria-label="Clear entire route"
       disabled={waypoints.length === 0}
-        onClick={(e) => {
-        e.preventDefault()
-        e.stopPropagation()
-        tier1Debug('waypoint', 'clear-route-click')
-        ;(window as Window & { __FORCE_CLEAR_ROUTE__?: () => void }).__FORCE_CLEAR_ROUTE__?.()
-      }}
+      onClick={clearEntireRoute}
       style={{
-        minHeight: btnMin(28),
-        padding: '4px 8px',
-        borderRadius: 6,
-        fontSize: labelPx(10),
+        minHeight: btnMin(44),
+        padding: '10px 16px',
+        borderRadius: 10,
+        fontSize: labelPx(12),
         fontWeight: 800,
         letterSpacing: '0.08em',
         lineHeight: 1.2,
-        minWidth: 72,
+        width: '100%',
         background: '#ef4444',
         color: '#fff',
         border: '2px solid #fbbf24',
+        touchAction: 'manipulation',
       }}
     >
-      CLR
+      CLEAR ROUTE
     </button>
   )
 
@@ -134,14 +137,14 @@ export default function WaypointTypePanel() {
       initialWidth={360}
       minHeight={isMobile ? 300 : 72}
       disableMobileDensityCollapse
-      dockedHeaderTrailing={clearRouteDockedBtn}
     >
       <div style={{ marginBottom: gapMd, fontSize: labelPx(11), color: '#9fb0c7' }}>
         Arm a type to enable map placement. Disarmed map taps never drop pins.
         {isDocked ? ' Undock this panel to arm a type.' : ''}
       </div>
+      <div style={{ marginBottom: gapMd }}>{clearRoutePanelBtn}</div>
       <div style={{ marginBottom: gapMd, fontSize: labelPx(10), color: '#94a3b8', lineHeight: 1.35 }}>
-        <strong style={{ color: '#fca5a5' }}>CLEAR ROUTE</strong> (red/yellow) removes all pins — not a waypoint type.
+        Removes all pins — not a waypoint type.
       </div>
       <div
         style={{
