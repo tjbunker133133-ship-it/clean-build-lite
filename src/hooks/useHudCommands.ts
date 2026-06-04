@@ -47,6 +47,10 @@ import {
   readDeadManVoiceStatus,
   waterConditionsVoiceMessage,
 } from '../lib/environmentalVoice'
+import {
+  invokeVoiceContinuous,
+  invokeVoiceSleep,
+} from '../runtime/voicePanelCommandBridge'
 
 /**
  * Single source of truth for HUD commands.
@@ -767,6 +771,31 @@ export function useHudCommands(): {
         },
       },
       {
+        id: 'voice sleep',
+        label: 'Stop voice listening',
+        aliases: ['sleep', 'voice off', 'stop listening'],
+        group: 'Voice',
+        run: () => {
+          if (!invokeVoiceSleep()) {
+            return ok('Voice off.')
+          }
+          return ok('Voice off.')
+        },
+      },
+      {
+        id: 'voice continuous',
+        label: 'Enable continuous voice listening',
+        aliases: ['continuous listening', 'voice continuous listening'],
+        group: 'Voice',
+        run: async () => {
+          const armed = await invokeVoiceContinuous()
+          if (!armed) {
+            return fail('Open Voice panel and grant mic access to enable continuous listening.')
+          }
+          return ok('Continuous listening enabled. Say HUD sleep to stop.')
+        },
+      },
+      {
         id: 'contacts panel',
         label: 'Open emergency contacts panel',
         aliases: ['open contacts', 'open emergency contacts', 'preflight panel'],
@@ -984,9 +1013,9 @@ export function useHudCommands(): {
       },
       {
         id: 'ai route',
-        label: 'Route planning status',
+        label: 'Route planning (preview — not in build)',
         aliases: ['ai reroute', 'smart route'],
-        group: 'Route',
+        group: 'Route (preview)',
         run: () => {
           const total = totalRouteDistance(state.waypoints.map((w) => ({ lat: w.lat, lng: w.lng })))
           updatePanel('waypoints', { docked: false, minimized: false })
@@ -1017,23 +1046,23 @@ export function useHudCommands(): {
       },
       {
         id: 'forage',
-        label: 'Seasonal foraging tip',
+        label: 'Seasonal foraging tip (preview)',
         aliases: ['foraging', 'morels'],
-        group: 'Environmental',
+        group: 'Environmental (preview)',
         run: () => ok(buildForageSeasonalTip()),
       },
       {
         id: 'lidar',
-        label: 'Trail / LiDAR status',
+        label: 'Trail / LiDAR status (preview — not in build)',
         aliases: ['ghost trail', 'ghost trails'],
-        group: 'Navigation',
+        group: 'Navigation (preview)',
         run: () => ok(buildLidarVoiceMessage(state.snapToTrailEnabled)),
       },
       {
         id: 'ar',
-        label: 'AR HUD status',
+        label: 'AR HUD status (preview — not in build)',
         aliases: ['augmented reality', 'ar hud'],
-        group: 'Display',
+        group: 'Display (preview)',
         run: () => ok(buildArVoiceMessage()),
       },
     ]

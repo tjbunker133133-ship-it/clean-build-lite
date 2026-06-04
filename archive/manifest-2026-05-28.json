@@ -1,0 +1,28 @@
+{
+  "archiveId": "tier2-consolidation-2026-05-28",
+  "createdAt": "2026-05-28",
+  "branch": "archive/tier2-consolidation-2026-05-28",
+  "tag": "archive/tier2-consolidation-2026-05-28",
+  "reason": "Tier 2 stabilization — preserve historical reference systems before active-tree removal",
+  "retainedInProduction": [
+    "src/tier3-intelligence.html"
+  ],
+  "archivedPaths": {
+    "orphanComponents": [
+      "src/hud/MissionSyncStatusChip.tsx"
+    ],
+    "wipHold": "_wip-hold/",
+    "legacyHudHtml": [
+      "src/titanium-hud-elite.html",
+      "src/titanium-hud-elite-v2.html"
+    ]
+  },
+  "deprecatedNotArchived": {
+    "outboundVoiceClip": "Removed from MissionSyncContext export; inbound playback retained in teamVoiceClip.ts"
+  },
+  "verification": {
+    "runtimeImportsFromArchived": "none expected",
+    "tier1References": "none — tier1-hud.html and production vite entry unchanged",
+    "productionEntry": "index.html + src/main.tsx"
+  }
+}

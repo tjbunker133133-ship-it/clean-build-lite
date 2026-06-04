@@ -1,11 +1,22 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMissionSync } from '../context/MissionSyncContext'
 import { getCorridorOfflineSummary } from '../lib/corridorPrefetch'
 import { useCorridorOffline } from '../hooks/useCorridorOffline'
 import { useNavigationMonitor } from '../hooks/useNavigationMonitor'
-import { monitorTransportLabel } from '../lib/missionSync/monitorUx'
+import {
+  buildMemberConnectionStatus,
+  buildObserverConnectionStatus,
+  buildRelayHealthSupplement,
+  isFieldSessionBackgrounded,
+} from '../lib/missionSync/fieldConnectionStatus'
+import { linkRecoveryStatusLabel } from '../lib/missionSync/relayRecovery'
 import { getDeviceProfile } from '../runtime/deviceProfile'
-import { isFieldWakeLockHeld, isFieldWakeLockSupported } from '../runtime/fieldWakeLock'
+import {
+  isFieldWakeLockHeld,
+  isFieldWakeLockSupported,
+  isFieldWakeLockWanted,
+  subscribeFieldWakeLock,
+} from '../runtime/fieldWakeLock'
 import { fieldStatusRailBottomCss } from './hudLayout'
 import { touchFontSm } from './tokens'
 
@@ -37,6 +48,17 @@ export default function FieldStatusRail() {
   const offlineMap = getCorridorOfflineSummary()
   const isMobile = getDeviceProfile().interactionMode === 'mobile'
   const fontSm = touchFontSm(isMobile)
+  const [backgrounded, setBackgrounded] = useState(isFieldSessionBackgrounded)
+  const [wakeHeld, setWakeHeld] = useState(isFieldWakeLockHeld())
+
+  useEffect(() => subscribeFieldWakeLock(setWakeHeld), [])
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    const onVisibility = () => setBackgrounded(isFieldSessionBackgrounded())
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => document.removeEventListener('visibilitychange', onVisibility)
+  }, [])
 
   const rows = useMemo(() => {
     const list: StatusRow[] = []
@@ -46,19 +68,55 @@ export default function FieldStatusRail() {
     if (inMission && !profile.isStandalone) {
       list.push({
         id: 'browser-tab',
-        label: 'Browser tab — open HUD from Home Screen icon for full screen',
+        label: 'Browser tab — Add to Home Screen for full-screen field mode',
         tone: 'warn',
       })
     }
 
-    if (inMission && isFieldWakeLockSupported()) {
+    if (inMission && backgrounded) {
+      list.push({
+        id: 'background',
+        label: 'App in background — mesh and voice may pause',
+        tone: 'warn',
+      })
+    }
+
+    if (inMission) {
+      const recoveryLabel = linkRecoveryStatusLabel({
+        linkRecoveryPending: sync.linkRecoveryPending,
+        relayLinkState: sync.relayLinkState,
+      })
+      if (recoveryLabel) {
+        list.push({
+          id: 'link-recovery',
+          label: recoveryLabel,
+          tone: sync.relayLinkState === 'unavailable' ? 'warn' : 'warn',
+        })
+      }
+      const relayHealth = buildRelayHealthSupplement(sync.relayLinkState)
+      if (relayHealth && !sync.linkRecoveryPending && sync.peers.length === 0 && sync.teamCommsReady) {
+        list.push({
+          id: 'relay-health',
+          label: relayHealth,
+          tone: sync.relayLinkState === 'unavailable' ? 'warn' : 'warn',
+        })
+      }
+    }
+
+    if (inMission && isFieldWakeLockWanted()) {
       list.push({
         id: 'wake-lock',
-        label: isFieldWakeLockHeld()
+        label: wakeHeld
           ? 'Screen awake for mission'
-          : 'Tap screen once if display sleeps',
-        live: isFieldWakeLockHeld(),
-        tone: 'ready',
+          : 'Wake lock recovering — tap screen; OS lock may override',
+        live: wakeHeld,
+        tone: wakeHeld ? 'ready' : 'warn',
+      })
+    } else if (inMission && isFieldWakeLockSupported()) {
+      list.push({
+        id: 'wake-lock',
+        label: 'Wake lock unsupported — display may sleep',
+        tone: 'warn',
       })
     }
 
@@ -91,52 +149,57 @@ export default function FieldStatusRail() {
     const showMesh = sync.supported && sync.role !== 'idle'
     if (showMesh) {
       const isObserver = sync.role === 'observer'
-      const meshConnected = sync.phase === 'connected' && sync.peers.length > 0
-      const mapReady = sync.teamCorridorStatus === 'ready'
-      let meshLabel: string
-      let meshLive = false
+      const observerCallsigns = sync.peers
+        .filter((p) => p.linkRole === 'observer')
+        .map((p) => p.callsign?.trim() || 'Watcher')
+      const fieldMemberCount = sync.peers.filter((p) => p.linkRole === 'member').length
 
       if (isObserver) {
-        meshLive = sync.monitorLive
-        meshLabel = meshLive
-          ? `Monitor · ${sync.monitorTargetCallsign}`
-          : sync.phase === 'awaiting-host-answer' || sync.phase === 'connecting'
-            ? 'Monitor connecting'
-            : 'Monitor standby'
-      } else if (meshConnected) {
-        meshLive = true
-        const fieldPeers = sync.peers.filter((p) => p.linkRole === 'member').length
-        const watchers = sync.peers
-          .filter((p) => p.linkRole === 'observer')
-          .map((p) => p.callsign?.trim() || 'Watcher')
-        const watchBit =
-          watchers.length > 0 ? ` · ${watchers.join(', ')} watching` : ''
-        meshLabel = `Mesh ${fieldPeers} teammate${fieldPeers === 1 ? '' : 's'}${watchBit}${mapReady ? ' · map' : ''}`
-      } else if (sync.phase === 'awaiting-host-answer') {
-        meshLabel = 'Mesh pending'
-      } else {
-        const watchers = sync.peers
-          .filter((p) => p.linkRole === 'observer')
-          .map((p) => p.callsign?.trim() || 'Watcher')
-        meshLabel =
-          watchers.length > 0
-            ? `Watching · ${watchers.join(', ')}`
-            : 'Mesh on — share join or watch link'
-      }
-
-      list.push({
-        id: 'mesh',
-        label: meshLabel,
-        live: meshLive,
-        tone: isObserver ? 'observer' : 'mesh',
-      })
-
-      if (isObserver && meshLive && sync.monitorTransport !== 'idle') {
+        const observerStatus = buildObserverConnectionStatus({
+          phase: sync.phase,
+          monitorLive: sync.monitorLive,
+          monitorTargetCallsign: sync.monitorTargetCallsign,
+          teamCommsReady: sync.teamCommsReady,
+          peerCount: sync.peers.length,
+          monitorTransport: sync.monitorTransport,
+        })
         list.push({
-          id: 'mesh-transport',
-          label: monitorTransportLabel(sync.monitorTransport),
+          id: 'mesh',
+          label: observerStatus.label,
+          live: observerStatus.live,
           tone: 'observer',
         })
+        if (observerStatus.supplement) {
+          list.push({
+            id: 'mesh-transport',
+            label: observerStatus.supplement,
+            tone: 'observer',
+            live: observerStatus.live,
+          })
+        }
+      } else {
+        const memberStatus = buildMemberConnectionStatus({
+          phase: sync.phase,
+          peerCount: sync.peers.length,
+          fieldMemberCount,
+          observerCallsigns,
+          teamCommsReady: sync.teamCommsReady,
+          mapReady: sync.teamCorridorStatus === 'ready',
+        })
+        list.push({
+          id: 'mesh',
+          label: memberStatus.label,
+          live: memberStatus.live,
+          tone: 'mesh',
+        })
+        if (memberStatus.supplement) {
+          list.push({
+            id: 'mesh-transport',
+            label: memberStatus.supplement,
+            tone: 'warn',
+            live: memberStatus.live,
+          })
+        }
       }
     }
 
@@ -172,7 +235,12 @@ export default function FieldStatusRail() {
     sync.role,
     sync.supported,
     sync.teamCorridorStatus,
+    sync.teamCommsReady,
+    sync.linkRecoveryPending,
+    sync.relayLinkState,
     sync.watchLinkShared,
+    backgrounded,
+    wakeHeld,
   ])
 
   if (rows.length === 0) return null

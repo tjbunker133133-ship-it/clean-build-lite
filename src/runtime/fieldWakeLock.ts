@@ -7,6 +7,19 @@ type WakeLockSentinel = { release: () => Promise<void> }
 
 let sentinel: WakeLockSentinel | null = null
 let wantActive = false
+type WakeLockListener = (held: boolean) => void
+const wakeLockListeners = new Set<WakeLockListener>()
+
+function notifyWakeLockListeners(): void {
+  const held = sentinel != null
+  wakeLockListeners.forEach((fn) => {
+    try {
+      fn(held)
+    } catch {
+      /* ignore */
+    }
+  })
+}
 
 async function tryAcquire(): Promise<void> {
   if (!wantActive || typeof navigator === 'undefined') return
@@ -17,12 +30,15 @@ async function tryAcquire(): Promise<void> {
   try {
     if (sentinel) return
     sentinel = await nav.wakeLock.request('screen')
+    notifyWakeLockListeners()
     sentinel.release().then(() => {
       sentinel = null
+      notifyWakeLockListeners()
       if (wantActive) void tryAcquire()
     })
   } catch {
     sentinel = null
+    notifyWakeLockListeners()
   }
 }
 
@@ -31,9 +47,20 @@ export function setFieldWakeLockActive(active: boolean): void {
   if (!active) {
     void sentinel?.release()
     sentinel = null
+    notifyWakeLockListeners()
     return
   }
   void tryAcquire()
+}
+
+export function isFieldWakeLockWanted(): boolean {
+  return wantActive
+}
+
+export function subscribeFieldWakeLock(listener: WakeLockListener): () => void {
+  wakeLockListeners.add(listener)
+  listener(sentinel != null)
+  return () => wakeLockListeners.delete(listener)
 }
 
 export function isFieldWakeLockSupported(): boolean {

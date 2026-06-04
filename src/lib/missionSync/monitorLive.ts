@@ -1,4 +1,5 @@
 import type { MissionSyncConnectionPhase, MissionSyncRole } from './types'
+import { RELAY_FRESH_MS } from './relayRecovery'
 
 export type MissionMonitorTransport = 'idle' | 'direct' | 'relay' | 'both'
 
@@ -13,7 +14,7 @@ export function isMonitorSessionLive(args: {
 }): boolean {
   if (args.role !== 'observer') return false
   const now = args.nowMs ?? Date.now()
-  const recentSync = args.lastSyncAt != null && now - args.lastSyncAt < 45_000
+  const recentSync = args.lastSyncAt != null && now - args.lastSyncAt < RELAY_FRESH_MS
   const direct = args.peerCount > 0 && args.phase === 'connected'
   const relay =
     args.monitorTransport === 'relay' || args.monitorTransport === 'both'

@@ -14,6 +14,7 @@ import { useTravelSpeed } from '../hooks/useTravelSpeed'
 import {
   installFieldWakeLockRecovery,
   setFieldWakeLockActive,
+  subscribeFieldWakeLock,
 } from '../runtime/fieldWakeLock'
 import { useTacticalProfile } from '../hooks/useTacticalProfile'
 import { decodeMissionPacket, packetFitsCompactQr } from '../lib/missionSync/codec'
@@ -72,12 +73,8 @@ import {
   type TeamBurstTarget,
 } from '../lib/missionSync/teamComms'
 import {
-  blobToBase64,
-  buildVoiceClip,
   playVoiceClip,
-  VOICE_CLIP_MIN_INTERVAL_MS,
   voiceClipTargetsLocalDevice,
-  type VoiceRecordResult,
 } from '../lib/missionSync/teamVoiceClip'
 import type {
   ConnectedPeer,
@@ -132,15 +129,35 @@ import {
 import {
   buildWatchMeInviteText,
   buildWatchMeUrl,
-  watchOfferFitsQr,
 } from '../lib/missionSync/monitorInviteUrl'
 import { SyncWireDedupe } from '../lib/missionSync/wireDedupe'
 import type { SyncWireMessage } from '../lib/missionSync/types'
 import { isMissionTurnConfigured, MISSION_TURN_SETUP_HINT } from '../lib/missionSync/turnConfig'
 import { copyMissionBundle, shareMissionBundle } from '../lib/missionSync/shareBundle'
 import { isMissionSyncSupported } from '../lib/missionSync/webrtc'
-import { isMonitorSessionLive } from '../lib/missionSync/monitorLive'
-import { pickMonitoredPresence } from '../lib/missionSync/monitorUx'
+import {
+  evaluateRelayLinkState,
+  isRelayFresh,
+  LINK_RECOVERY_TIMEOUT_MS,
+  resolveLinkRecoveryTimeout,
+  resolvePeerDisconnectRecovery,
+  type RelayLinkState,
+} from '../lib/missionSync/relayRecovery'
+import {
+  evaluateMissionRestore,
+  missionRestoreGuidance,
+} from '../lib/missionSync/missionRestoreContract'
+import { recordMissionOperationalEvent } from '../lib/missionSync/operationalTelemetry'
+import { isFieldSessionBackgrounded } from '../runtime/fieldLifecycle'
+import {
+  computeFilteredTeamComms,
+  computeMissionRelayFlags,
+  computeMissionQrFitFlags,
+  computeMonitorLive,
+  computeMonitoredPresence,
+  computeObserverCount,
+  computeTeamCommsReady,
+} from '../lib/missionSync/missionSyncDerived'
 import { captureMonitorJoinFromLocation } from '../lib/missionSync/pendingMonitorJoin'
 import MonitorJoinBootstrap from '../hud/MonitorJoinBootstrap'
 
@@ -190,6 +207,10 @@ export type MissionSyncContextValue = {
   teamBursts: MissionBurst[]
   /** True when mesh or monitor relay can carry team text (works offline on LAN). */
   teamCommsReady: boolean
+  /** True while mesh dropped and system is attempting mesh or relay recovery. */
+  linkRecoveryPending: boolean
+  /** Internet relay health when local mesh peers are absent. */
+  relayLinkState: RelayLinkState
   /** Latest inbound burst for HUD toast (directed messages prioritized). */
   lastInboundTeamBurst: MissionBurst | null
   dismissTeamCommsAlert: () => void
@@ -199,7 +220,6 @@ export type MissionSyncContextValue = {
   clearActiveCommsTarget: () => void
   sendTeamCheckIn: (note?: string) => void
   sendTeamBurst: (text: string, toCallsign?: string) => boolean
-  sendVoiceClipBlob: (capture: VoiceRecordResult, toCallsign?: string) => Promise<boolean>
   /** True after host shares live map link this mission (controls watcher pill). */
   watchLinkShared: boolean
   missionCommsPrefs: MissionCommsPrefs
@@ -303,6 +323,8 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
   const [teamCorridorStatus, setTeamCorridorStatus] = useState<MissionMeshCorridorStatus>('idle')
   const [pendingObserverOfferEncoded, setPendingObserverOfferEncoded] = useState<string | null>(null)
   const [monitorTransport, setMonitorTransport] = useState<MissionMonitorTransport>('idle')
+  const [linkRecoveryPending, setLinkRecoveryPending] = useState(false)
+  const [relayLinkState, setRelayLinkState] = useState<RelayLinkState>('active')
   const [monitorHostDeviceId, setMonitorHostDeviceId] = useState<string | null>(null)
   const [monitorTargetCallsign, setMonitorTargetCallsign] = useState('Operator')
 
@@ -331,7 +353,6 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
   const sessionCoordinatorReadyRef = useRef(false)
   const lastCheckInAtRef = useRef(0)
   const lastBurstAtRef = useRef(0)
-  const lastVoiceAtRef = useRef(0)
   const lastPublishedPresenceRef = useRef<TeamPresence | null>(null)
   const [watchLinkShared, setWatchLinkShared] = useState(false)
   const [missionCommsPrefs, setMissionCommsPrefsState] = useState<MissionCommsPrefs>(() =>
@@ -373,22 +394,26 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
   const waitingForMonitorOfferRef = useRef(false)
   const relayDedupeRef = useRef(new SyncWireDedupe())
   const relayLastAtRef = useRef(0)
+  const linkRecoveryTimerRef = useRef<number | null>(null)
+  const prevWakeHeldRef = useRef(false)
 
   const isFieldMember = role === 'member'
   const isObserver = role === 'observer'
   const observerSignalingAvailable = isObserverSignalingAvailable()
-  /** Supabase mission channel — local P2P first; internet relay when mesh peers drop. */
-  const missionRelayActive =
-    Boolean(missionId && observerTokenState && observerSignalingAvailable) &&
-    (isFieldMember || isObserver)
-  const monitorRelayActive = isFieldMember && missionRelayActive
-  const observerCount = useMemo(
-    () => peers.filter((p) => p.linkRole === 'observer').length,
-    [peers],
+  const { missionRelayActive, monitorRelayActive } = useMemo(
+    () =>
+      computeMissionRelayFlags({
+        missionId,
+        observerToken: observerTokenState,
+        observerSignalingAvailable,
+        role,
+      }),
+    [missionId, observerTokenState, observerSignalingAvailable, role],
   )
+  const observerCount = useMemo(() => computeObserverCount(peers), [peers])
   const monitorLive = useMemo(
     () =>
-      isMonitorSessionLive({
+      computeMonitorLive({
         role,
         phase,
         peerCount: peers.length,
@@ -398,8 +423,22 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     [role, phase, peers.length, monitorTransport, lastSyncAt],
   )
   const monitoredPresence = useMemo(
-    () => pickMonitoredPresence(teamPresence, deviceId, monitorHostDeviceId),
+    () => computeMonitoredPresence(teamPresence, deviceId, monitorHostDeviceId),
     [teamPresence, deviceId, monitorHostDeviceId],
+  )
+  const joinCodeSignalingAvailable = useMemo(() => isJoinCodeSignalingAvailable(), [])
+  const filteredTeamComms = useMemo(
+    () => computeFilteredTeamComms(teamCheckIns, teamBursts),
+    [teamCheckIns, teamBursts],
+  )
+  const qrFitFlags = useMemo(
+    () =>
+      computeMissionQrFitFlags({
+        pendingOfferEncoded,
+        pendingAnswerEncoded,
+        pendingObserverOfferEncoded,
+      }),
+    [pendingOfferEncoded, pendingAnswerEncoded, pendingObserverOfferEncoded],
   )
 
   const supported = isMissionSyncSupported()
@@ -407,6 +446,29 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
 
   const notify = useCallback((level: MissionSyncNotice['level'], message: string) => {
     setLastNotice({ level, message, at: Date.now() })
+  }, [])
+
+  const clearLinkRecoveryTimer = useCallback(() => {
+    if (linkRecoveryTimerRef.current != null) {
+      window.clearTimeout(linkRecoveryTimerRef.current)
+      linkRecoveryTimerRef.current = null
+    }
+  }, [])
+
+  const completeLinkRecovery = useCallback(
+    (mode?: 'mesh' | 'relay') => {
+      clearLinkRecoveryTimer()
+      setLinkRecoveryPending(false)
+      setRelayLinkState('active')
+      if (mode === 'mesh') recordMissionOperationalEvent('link_recovery_complete_mesh')
+      else if (mode === 'relay') recordMissionOperationalEvent('link_recovery_complete_relay')
+    },
+    [clearLinkRecoveryTimer],
+  )
+
+  const beginLinkRecovery = useCallback(() => {
+    setLinkRecoveryPending(true)
+    recordMissionOperationalEvent('link_recovery_start')
   }, [])
 
   const waypointsForSync = useCallback((): typeof waypoints => {
@@ -674,11 +736,16 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
 
   const clearActiveCommsTarget = useCallback(() => setActiveCommsTarget(null), [])
 
-  const teamCommsReady = useMemo(() => {
-    if (role !== 'member' && role !== 'observer') return false
-    const coord = coordinatorRef.current
-    return (coord?.peerCount ?? 0) > 0 || monitorRelayActive
-  }, [role, peers, monitorRelayActive])
+  const teamCommsReady = useMemo(
+    () =>
+      computeTeamCommsReady({
+        role,
+        peerCount: coordinatorRef.current?.peerCount ?? peers.length,
+        missionRelayActive,
+        monitorRelayActive,
+      }),
+    [role, peers.length, missionRelayActive, monitorRelayActive],
+  )
 
   const handleRelayWire = useCallback(
     (msg: SyncWireMessage) => {
@@ -715,8 +782,9 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       if (msg.type === 'voice-clip') ingestInboundVoiceClip(msg.payload)
       if (msg.type === 'corridor-hint') handleRemoteCorridorHint(msg.payload)
       setLastSyncAt(Date.now())
+      completeLinkRecovery('relay')
     },
-    [applyRemoteSnapshot, deviceId, handleRemoteCorridorHint, isObserver, ingestInboundBurst],
+    [applyRemoteSnapshot, deviceId, handleRemoteCorridorHint, isObserver, ingestInboundBurst, completeLinkRecovery],
   )
 
   const attachFieldMonitorRelay = useCallback(
@@ -748,6 +816,7 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       attachFieldMonitorRelay(coord)
       coord.setCallbacks({
         onPeerConnected: (peer) => {
+          completeLinkRecovery('mesh')
           setPeers(coord.connectedPeers)
           setPhase('connected')
           if (peer.linkRole === 'observer') {
@@ -782,23 +851,19 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
             notify('info', 'Watcher disconnected — they can reopen your live map link')
           }
           if (coord.peerCount === 0 && missionId) {
-            if (isObserver && Date.now() - relayLastAtRef.current < 45_000) {
-              setMonitorTransport('relay')
-              setPhase('connected')
-            } else if (isObserver && observerSignalingAvailable) {
-              setPhase('connecting')
-            } else if (
-              isFieldMember &&
-              missionRelayActive &&
-              (Date.now() - relayLastAtRef.current < 45_000 || observerSignalingAvailable)
-            ) {
-              setPhase('connected')
-              notify(
-                'info',
-                'Direct mesh link dropped — mission sync continues over internet relay when online.',
-              )
-            } else {
-              setPhase('awaiting-joiner')
+            const recovery = resolvePeerDisconnectRecovery({
+              isObserver,
+              isFieldMember,
+              relayLastAtMs: relayLastAtRef.current,
+              missionRelayActive,
+              observerSignalingAvailable,
+            })
+            if (recovery.monitorTransport) setMonitorTransport(recovery.monitorTransport)
+            setPhase(recovery.phase)
+            if (recovery.linkRecoveryPending) beginLinkRecovery()
+            else completeLinkRecovery(recovery.monitorTransport === 'relay' ? 'relay' : undefined)
+            if (recovery.notifyLevel && recovery.notifyMessage) {
+              notify(recovery.notifyLevel, recovery.notifyMessage)
             }
           }
           if (coord.peerCount === 0 && !isObserver) setMonitorTransport('idle')
@@ -821,6 +886,7 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
         onCorridorHint: (hint) => handleRemoteCorridorHint(hint),
         onError: (msg) => {
           if (msg.includes('disconnected') || msg.includes('peer-disconnected')) {
+            beginLinkRecovery()
             notify('warn', 'Link blip — mission stays active, reconnecting mesh…')
             return
           }
@@ -829,11 +895,12 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
             (coordinatorRef.current?.role === 'observer' ||
               (isFieldMember && missionRelayActive))
           ) {
-            if (Date.now() - relayLastAtRef.current < 45_000 || observerSignalingAvailable) {
+            if (isRelayFresh(relayLastAtRef.current) || observerSignalingAvailable) {
               if (coordinatorRef.current?.role === 'observer') {
                 setMonitorTransport((prev) => (prev === 'direct' ? 'relay' : prev))
               }
               setPhase('connected')
+              completeLinkRecovery('relay')
               notify(
                 'info',
                 coordinatorRef.current?.role === 'observer'
@@ -875,6 +942,8 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       peers,
       ingestInboundBurst,
       ingestInboundVoiceClip,
+      beginLinkRecovery,
+      completeLinkRecovery,
     ],
   )
 
@@ -974,12 +1043,15 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     setMonitorTransport('idle')
     setMonitorHostDeviceId(null)
     setMonitorTargetCallsign('Operator')
+    clearLinkRecoveryTimer()
+    setLinkRecoveryPending(false)
+    setRelayLinkState('active')
     saveMissionSession(null)
     locallySuppressedWaypointIdsRef.current.clear()
     peerSnapshotStateRef.current.clear()
     prevWaypointIdsRef.current.clear()
     notify('info', wasObserver ? 'Mission monitor ended' : 'Mission link ended')
-  }, [notify, role, setObserverToken, stopJoinCodeDiscovery, disposeHostJoinCodeRoom])
+  }, [notify, role, setObserverToken, stopJoinCodeDiscovery, disposeHostJoinCodeRoom, clearLinkRecoveryTimer])
 
   const endMonitor = endMission
 
@@ -1370,6 +1442,88 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
   }, [applyJoinAnswer])
 
   useEffect(() => installFieldWakeLockRecovery(), [])
+
+  useEffect(() => {
+    if (!linkRecoveryPending) {
+      clearLinkRecoveryTimer()
+      return
+    }
+    linkRecoveryTimerRef.current = window.setTimeout(() => {
+      linkRecoveryTimerRef.current = null
+      const outcome = resolveLinkRecoveryTimeout({
+        relayLastAtMs: relayLastAtRef.current,
+        peerCount: coordinatorRef.current?.peerCount ?? 0,
+        missionRelayActive,
+        observerSignalingAvailable,
+        online: typeof navigator !== 'undefined' ? navigator.onLine : true,
+        role,
+      })
+      setLinkRecoveryPending(outcome.linkRecoveryPending)
+      setRelayLinkState(outcome.relayLinkState)
+      setPhase(outcome.phase)
+      notify('warn', outcome.notifyMessage)
+      recordMissionOperationalEvent('link_recovery_timeout', outcome.relayLinkState)
+      if (outcome.relayLinkState === 'degraded') {
+        recordMissionOperationalEvent('relay_degraded')
+      } else if (outcome.relayLinkState === 'unavailable') {
+        recordMissionOperationalEvent('relay_unavailable')
+      }
+    }, LINK_RECOVERY_TIMEOUT_MS)
+    return () => clearLinkRecoveryTimer()
+  }, [
+    linkRecoveryPending,
+    missionRelayActive,
+    observerSignalingAvailable,
+    role,
+    notify,
+    clearLinkRecoveryTimer,
+  ])
+
+  useEffect(() => {
+    if (role === 'idle' || !missionId) return
+    const tick = () => {
+      const next = evaluateRelayLinkState({
+        relayLastAtMs: relayLastAtRef.current,
+        peerCount: coordinatorRef.current?.peerCount ?? peers.length,
+        missionRelayActive,
+        observerSignalingAvailable,
+        online: typeof navigator !== 'undefined' ? navigator.onLine : true,
+      })
+      setRelayLinkState((prev) => {
+        if (prev === next) return prev
+        if (next === 'degraded') recordMissionOperationalEvent('relay_degraded')
+        if (next === 'unavailable') recordMissionOperationalEvent('relay_unavailable')
+        return next
+      })
+    }
+    tick()
+    const id = window.setInterval(tick, 15_000)
+    return () => window.clearInterval(id)
+  }, [role, missionId, peers.length, missionRelayActive, observerSignalingAvailable])
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    const onVisibility = () => {
+      if (isFieldSessionBackgrounded()) {
+        recordMissionOperationalEvent('visibility_background')
+      } else {
+        recordMissionOperationalEvent('visibility_foreground')
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => document.removeEventListener('visibilitychange', onVisibility)
+  }, [])
+
+  useEffect(() => {
+    return subscribeFieldWakeLock((held) => {
+      if (prevWakeHeldRef.current && !held) {
+        recordMissionOperationalEvent('wake_lock_lost')
+      } else if (!prevWakeHeldRef.current && held) {
+        recordMissionOperationalEvent('wake_lock_recovered')
+      }
+      prevWakeHeldRef.current = held
+    })
+  }, [])
 
   useEffect(() => {
     const keepAwake = role === 'member' || role === 'observer'
@@ -1779,57 +1933,6 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     return () => setMissionCommsVoiceHandler(null)
   }, [handleMissionCommsVoice])
 
-  const sendVoiceClipBlob = useCallback(
-    async (capture: VoiceRecordResult, toCallsign?: string): Promise<boolean> => {
-      const coord = coordinatorRef.current
-      if (!coord || (role !== 'member' && role !== 'observer')) return false
-      const linked = coord.connectedPeers
-      if (linked.length === 0 && !monitorRelayActive) {
-        notify('warn', 'No mission link — voice needs mesh or relay')
-        return false
-      }
-      const now = Date.now()
-      if (now - lastVoiceAtRef.current < VOICE_CLIP_MIN_INTERVAL_MS) {
-        notify('warn', 'Voice cooldown — wait a few seconds')
-        return false
-      }
-      let target: TeamBurstTarget | undefined
-      const trimmedTarget = toCallsign?.trim()
-      if (trimmedTarget) {
-        const peer = resolveMissionPeerByCallsign(linked, trimmedTarget)
-        if (!peer) {
-          notify('warn', `No linked member matches "${trimmedTarget}"`)
-          return false
-        }
-        target = {
-          scope: 'direct',
-          peerId: peer.peerId,
-          deviceId: peer.deviceId,
-          callsign: peer.callsign,
-        }
-      }
-      const b64 = await blobToBase64(capture.blob)
-      const clip = buildVoiceClip(deviceId, callsign, b64, capture.durationMs, target)
-      if (!clip) {
-        notify('warn', 'Voice clip too long — keep it under 12 seconds')
-        return false
-      }
-      lastVoiceAtRef.current = now
-      if (target?.scope === 'direct') {
-        coord.sendVoiceClipToPeer(target.peerId, clip)
-      } else {
-        coord.sendVoiceClip(clip)
-      }
-      const label =
-        target?.scope === 'direct'
-          ? `Voice sent to ${target.callsign}`
-          : 'Voice sent to whole mission'
-      notify('success', label)
-      return true
-    },
-    [deviceId, callsign, role, monitorRelayActive, notify],
-  )
-
   const discoverMissionOnLan = useCallback(
     async (codeInput: string): Promise<boolean> => {
       if (!isValidJoinCodeInput(codeInput)) {
@@ -2074,7 +2177,23 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const saved = loadMissionSession()
-    if (!saved || saved.deviceId !== deviceId) return
+    const outcome = evaluateMissionRestore({
+      session: saved,
+      deviceId,
+      observerSignalingAvailable: isObserverSignalingAvailable(),
+    })
+    if (outcome === 'none') return
+    if (outcome === 'device_mismatch') {
+      notify('warn', missionRestoreGuidance(outcome))
+      return
+    }
+    if (outcome === 'corrupt') {
+      saveMissionSession(null)
+      notify('warn', missionRestoreGuidance(outcome))
+      return
+    }
+    if (!saved) return
+
     setMissionName(saved.missionName)
     setMissionId(saved.missionId)
     setRole(saved.role === 'observer' ? 'observer' : 'member')
@@ -2083,32 +2202,20 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     setPhase('idle')
     refreshCorridorStatus()
     if (saved.role === 'member' && saved.observerToken) setWatchLinkShared(true)
+    recordMissionOperationalEvent('mission_restore', outcome)
 
     if (sessionCoordinatorReadyRef.current) return
-    if (saved.role === 'observer') {
+    if (outcome === 'observer_wait' || outcome === 'observer_paste') {
       sessionCoordinatorReadyRef.current = true
-      if (saved.observerToken && saved.observerWaitMode && isObserverSignalingAvailable()) {
-        waitingForMonitorOfferRef.current = true
-        setPhase('connecting')
-        notify(
-          'info',
-          'Monitor session restored — waiting for field lead. Internet relay resumes when online.',
-        )
-      } else if (saved.observerToken) {
-        setPhase('connecting')
-        notify(
-          'info',
-          'Monitor session restored — paste a new monitor bundle to reconnect WebRTC, or wait for field lead.',
-        )
-      } else {
-        notify('info', 'Monitor session restored — paste a new monitor bundle to reconnect')
-      }
+      if (outcome === 'observer_wait') waitingForMonitorOfferRef.current = true
+      setPhase('connecting')
+      notify('info', missionRestoreGuidance(outcome))
       return
     }
     if (!saved.joinToken) return
     sessionCoordinatorReadyRef.current = true
     let observerToken = saved.observerToken ?? ''
-    const isMissionHost = !saved.hostDeviceId || saved.hostDeviceId === saved.deviceId
+    const isMissionHost = outcome === 'host_restore'
     if (!observerToken) {
       if (isMissionHost) {
         observerToken = createMissionIds().observerToken
@@ -2137,11 +2244,11 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     wireCoordinator(coord)
     if (isMissionHost) {
       setPhase('awaiting-joiner')
-      notify('info', 'Mission restored — reopening join code for teammates')
+      notify('info', missionRestoreGuidance('host_restore'))
       void createJoinOfferRef.current()
     } else {
       setPhase('connecting')
-      notify('info', 'Mission restored — rejoin with mission code if mesh is quiet')
+      notify('info', missionRestoreGuidance('joiner_restore'))
     }
   }, [deviceId, setJoinToken, setObserverToken, callsign, wireCoordinator, notify, refreshCorridorStatus])
 
@@ -2161,6 +2268,8 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  const dismissNotice = useCallback(() => setLastNotice(null), [])
+
   const value = useMemo<MissionSyncContextValue>(
     () => ({
       supported,
@@ -2178,19 +2287,21 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       lastNotice,
       pendingOfferEncoded,
       pendingAnswerEncoded,
-      pendingOfferFitsQr: pendingOfferEncoded ? packetFitsCompactQr(pendingOfferEncoded) : false,
-      pendingAnswerFitsQr: pendingAnswerEncoded ? packetFitsCompactQr(pendingAnswerEncoded) : false,
+      pendingOfferFitsQr: qrFitFlags.pendingOfferFitsQr,
+      pendingAnswerFitsQr: qrFitFlags.pendingAnswerFitsQr,
       bluetoothNote,
       joinCode,
       nativeLink,
-      joinCodeSignalingAvailable: isJoinCodeSignalingAvailable(),
+      joinCodeSignalingAvailable,
       signalingTransport,
       signalingLabel,
       teamCorridorStatus,
       reconnectMesh,
-      teamCheckIns: filterFreshCheckIns(teamCheckIns),
-      teamBursts: filterRecentBursts(teamBursts),
+      teamCheckIns: filteredTeamComms.teamCheckIns,
+      teamBursts: filteredTeamComms.teamBursts,
       teamCommsReady,
+      linkRecoveryPending,
+      relayLinkState,
       lastInboundTeamBurst,
       dismissTeamCommsAlert,
       activeCommsTarget,
@@ -2198,7 +2309,6 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       clearActiveCommsTarget,
       sendTeamCheckIn,
       sendTeamBurst,
-      sendVoiceClipBlob,
       watchLinkShared,
       missionCommsPrefs,
       setMissionCommsPrefs,
@@ -2226,9 +2336,7 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       observerToken,
       observerCount,
       pendingObserverOfferEncoded,
-      pendingObserverOfferFitsQr: pendingObserverOfferEncoded
-        ? watchOfferFitsQr(pendingObserverOfferEncoded)
-        : false,
+      pendingObserverOfferFitsQr: qrFitFlags.pendingObserverOfferFitsQr,
       observerSignalingAvailable,
       createObserverInvite,
       monitorMissionFromOffer,
@@ -2240,7 +2348,7 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       shareMonitorInvite,
       applyObserverAnswer,
       endMonitor,
-      dismissNotice: () => setLastNotice(null),
+      dismissNotice,
     }),
     [
       supported,
@@ -2256,6 +2364,7 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       autoApply,
       bluetoothNote,
       nativeLink,
+      joinCodeSignalingAvailable,
       signalingTransport,
       signalingLabel,
       teamCorridorStatus,
@@ -2263,9 +2372,11 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       observerCount,
       pendingObserverOfferEncoded,
       observerSignalingAvailable,
-      teamCheckIns,
-      teamBursts,
+      filteredTeamComms,
+      qrFitFlags,
       teamCommsReady,
+      linkRecoveryPending,
+      relayLinkState,
       lastInboundTeamBurst,
       dismissTeamCommsAlert,
       activeCommsTarget,
@@ -2273,7 +2384,6 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       clearActiveCommsTarget,
       sendTeamCheckIn,
       sendTeamBurst,
-      sendVoiceClipBlob,
       watchLinkShared,
       missionCommsPrefs,
       setMissionCommsPrefs,
@@ -2310,6 +2420,7 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       endMonitor,
       pushSnapshotNow,
       reconnectMesh,
+      dismissNotice,
     ],
   )
 

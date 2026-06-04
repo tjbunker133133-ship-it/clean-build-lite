@@ -13,6 +13,7 @@ import { isMissionTurnConfigured } from '../lib/missionSync/turnConfig'
 import { FIELD_WALK_WATCHER_STEPS, fieldWalkWatcherSummary } from '../lib/missionSync/fieldTestGuide'
 import { formatPresenceAge, monitorTransportLabel } from '../lib/missionSync/monitorUx'
 import MissionTeamComms from './MissionTeamComms'
+import MissionReadinessStrip from './MissionReadinessStrip'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 import { touchFontSm, touchGapMd, touchGapSm, touchMinTarget } from './tokens'
 
@@ -283,6 +284,8 @@ export default function MissionLinkPanel() {
             iPhone can join via paste — sharing uses the text boxes below.
           </p>
         ) : null}
+
+        <MissionReadinessStrip mode={inMission ? 'in-mission' : 'pre-mission'} />
 
         {!inMission ? (
           <div

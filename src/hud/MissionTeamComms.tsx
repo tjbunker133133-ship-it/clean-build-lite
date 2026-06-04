@@ -77,6 +77,11 @@ export default function MissionTeamComms({ isObserver }: Props) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: touchGapSm(isMobile) }}>
       <p style={{ color: '#94a3b8', margin: 0, lineHeight: 1.45, fontSize: '0.88em' }}>{readyLabel}</p>
+      {sync.missionCommsPrefs.handsFree ? (
+        <p style={{ color: '#64748b', margin: 0, fontSize: '0.82em' }}>
+          Hands-free confirm enabled — say accept to send after voice compose.
+        </p>
+      ) : null}
       {sync.missionCommsFlowPhase !== 'idle' ? (
         <p style={{ color: '#64748b', margin: 0, fontSize: '0.82em' }}>
           Voice flow active — follow prompts or use Send / Cancel bar at bottom.

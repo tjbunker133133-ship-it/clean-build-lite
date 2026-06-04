@@ -50,6 +50,7 @@ import {
   speakHudPhrase,
   stopVoiceOutputOnly,
 } from '../runtime/voiceAudioArbitration'
+import { setVoicePanelCommandHandlers } from '../runtime/voicePanelCommandBridge'
 
 type VoiceState = 'sleeping' | 'listening' | 'processing' | 'success' | 'failure'
 
@@ -416,6 +417,14 @@ export default function VoicePanel() {
     [listenMode, requestMicGranted],
   )
 
+  useEffect(() => {
+    setVoicePanelCommandHandlers({
+      sleep: hardDisarm,
+      enableContinuous: () => armListenMode('hardListen'),
+    })
+    return () => setVoicePanelCommandHandlers(null)
+  }, [hardDisarm, armListenMode])
+
   /** Transient acknowledgement: centralized snapshot signal → CockpitHudShell CSS pulse.
    * Haptic is dispatched by `recordWakeWordGatePassed` via the centralized
    * runtime broker (capability-checked, throttled, mobile-only). SR/parser/
@@ -501,17 +510,6 @@ export default function VoicePanel() {
     setVoiceState('processing')
     setLastHeard(formatVoicePhraseForDisplay(rawTranscript ?? `hud ${cmd}`))
     const res = await dispatch(cmd, source, rawTranscript ?? `HUD ${cmd}`)
-    if (cmd === 'voice continuous') {
-      // Already armed if we're hearing this command, but the alias is preserved
-      // for parity with the legacy directory.
-      report('Continuous listening enabled. Say HUD sleep to stop.')
-      return
-    }
-    if (cmd === 'sleep' || cmd === 'voice sleep') {
-      hardDisarm()
-      report('Voice off.', true)
-      return
-    }
     report(res.message, res.ok)
   }
 

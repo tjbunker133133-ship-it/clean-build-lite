@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
 import HudPanel from './HudPanel'
 import { useCockpit } from '../context/CockpitContext'
 import { requestNotificationPermission } from '../lib/devicePermissions'
@@ -19,6 +19,26 @@ import {
   readinessColor,
   readinessLabel,
 } from '../lib/wearables/wearablesStatus'
+import {
+  createEscalationSnapshot,
+  createWalRuntime,
+  disconnectWearables,
+  loadWalConnectionState,
+  runConnectWearableFlow,
+  silentReconnectWearable,
+  getWalPresetConfig,
+  loadWalUserMode,
+  saveWalUserMode,
+  WAL_PRESET_DEFAULTS,
+  WAL_UI_REFRESH_IDLE_MS,
+  WAL_UI_REFRESH_PENDING_MS,
+  type ConnectWearableReadyCard,
+  type ConnectWearableUiPhase,
+  type EscalationSnapshot,
+  type WalRuntime,
+  type WalUserMode,
+} from '../lib/wearables/wal'
+import WearableConnectFlow from './WearableConnectFlow'
 import { useTacticalProfile } from '../hooks/useTacticalProfile'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 import { touchFontSm, touchGapMd, touchGapSm, touchMinTarget } from './tokens'
@@ -53,6 +73,98 @@ export default function WearablesPanel() {
   const [health, setHealth] = useState<HealthConnectUiSnapshot | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [walMode, setWalMode] = useState<WalUserMode>(() => loadWalUserMode())
+  const walPreset = getWalPresetConfig(walMode)
+  const walRef = useRef<WalRuntime | null>(null)
+  const [connectPhase, setConnectPhase] = useState<ConnectWearableUiPhase>(() =>
+    loadWalConnectionState().connected ? 'ready' : 'idle',
+  )
+  const [connectCard, setConnectCard] = useState<ConnectWearableReadyCard | null>(null)
+  const [walConnected, setWalConnected] = useState(() => loadWalConnectionState().connected)
+  const [walSnap, setWalSnap] = useState<EscalationSnapshot>(() => createEscalationSnapshot())
+
+  const ensureWalRef = useCallback(() => {
+    if (!walRef.current) walRef.current = createWalRuntime()
+    walRef.current.setUserMode(walMode)
+    return walRef.current
+  }, [walMode])
+
+  const ensureWal = ensureWalRef
+
+  useEffect(() => {
+    if (!walConnected) return
+    const intervalMs =
+      walSnap.state === 'escalation_pending' ? WAL_UI_REFRESH_PENDING_MS : WAL_UI_REFRESH_IDLE_MS
+    const id = window.setInterval(() => {
+      if (walRef.current) setWalSnap({ ...walRef.current.getEscalationSnapshot() })
+    }, intervalMs)
+    return () => window.clearInterval(id)
+  }, [walConnected, walSnap.state])
+
+  useEffect(() => {
+    const saved = loadWalConnectionState()
+    if (!saved.connected || !saved.autoReconnect) return
+    const wal = ensureWalRef()
+    void silentReconnectWearable(wal).then((ok) => {
+      if (!ok) {
+        setWalConnected(false)
+        setConnectPhase('idle')
+        return
+      }
+      setWalConnected(true)
+      setConnectPhase('idle')
+      setWalSnap({ ...wal.getEscalationSnapshot() })
+    })
+  }, [ensureWalRef])
+
+  const runConnect = async () => {
+    setBusy(true)
+    setNotice(null)
+    setConnectCard(null)
+    try {
+      const wal = ensureWal()
+      const result = await runConnectWearableFlow(wal, { onPhase: setConnectPhase })
+      if (result.phase === 'error') {
+        setWalConnected(false)
+        return
+      }
+      setWalConnected(true)
+      setConnectCard(result.card)
+      setWalSnap({ ...wal.getEscalationSnapshot() })
+      refresh()
+      await refreshHealth()
+    } catch {
+      setConnectPhase('error')
+      setWalConnected(false)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const dismissConnectCard = () => {
+    setConnectPhase('idle')
+    setConnectCard(null)
+    setWalConnected(true)
+  }
+
+  const disconnectCompanion = async () => {
+    setBusy(true)
+    try {
+      if (walRef.current) await disconnectWearables(walRef.current)
+      setWalConnected(false)
+      setConnectPhase('idle')
+      setConnectCard(null)
+      setNotice(null)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  useEffect(() => {
+    return () => {
+      void walRef.current?.stop()
+    }
+  }, [])
 
   const refresh = useCallback(() => {
     setStatus(getWearablesCompanionStatus())
@@ -272,6 +384,129 @@ export default function WearablesPanel() {
               Install the Android field APK to use Health Connect. Browser and iOS show notifications only.
             </p>
           )}
+        </section>
+
+        <section style={{ display: 'grid', gap: gapSm }}>
+          <p style={sectionLabel}>WEARABLE</p>
+          {walConnected && connectPhase === 'idle' && !connectCard ? (
+            <div style={{ display: 'grid', gap: gapSm }}>
+              <StatusRow label="Status" value="Ready" color="#7dff8a" />
+              <button type="button" style={btn} disabled={busy} onClick={() => void disconnectCompanion()}>
+                Disconnect wearable
+              </button>
+            </div>
+          ) : (
+            <WearableConnectFlow
+              phase={connectPhase}
+              card={connectCard}
+              fontSm={fontSm}
+              gapSm={gapSm}
+              tapMin={tapMin}
+              busy={busy}
+              onConnect={() => void runConnect()}
+              onDismiss={dismissConnectCard}
+              onRetry={() => void runConnect()}
+            />
+          )}
+        </section>
+
+        <section style={{ display: 'grid', gap: gapSm }}>
+          <p style={sectionLabel}>ESCALATION SAFETY</p>
+          <label style={{ display: 'grid', gap: 4, fontSize: fontSm, color: '#b8c4b8' }}>
+            Companion mode
+            <select
+              value={walMode}
+              onChange={(e) => {
+                const next = e.target.value as WalUserMode
+                setWalMode(next)
+                saveWalUserMode(next)
+              }}
+              style={{
+                minHeight: tapMin,
+                borderRadius: 8,
+                border: '1px solid rgba(199,206,198,0.35)',
+                background: 'rgba(10,12,12,0.85)',
+                color: '#e2e8e2',
+                padding: '0 10px',
+                fontSize: fontSm,
+              }}
+            >
+              {(Object.keys(WAL_PRESET_DEFAULTS) as WalUserMode[]).map((key) => (
+                <option key={key} value={key}>
+                  {WAL_PRESET_DEFAULTS[key].label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <StatusRow
+            label="Escalation timer"
+            value={`${Math.round(walPreset.defaultEscalationTimerMs / 1000)}s countdown`}
+          />
+          <StatusRow
+            label="Auto triggers"
+            value={
+              walPreset.autoEscalationTriggers.length > 0
+                ? walPreset.autoEscalationTriggers.join(', ')
+                : 'Manual only'
+            }
+          />
+          <StatusRow label="Escalation state" value={walSnap.state.replace(/_/g, ' ')} />
+          {walSnap.state === 'escalation_pending' && walSnap.timerRemainingMs != null ? (
+            <StatusRow
+              label="Countdown"
+              value={`${Math.ceil(walSnap.timerRemainingMs / 1000)}s remaining`}
+              color="#ffd166"
+            />
+          ) : null}
+          <div style={{ display: 'grid', gap: gapSm }}>
+            {walConnected ? (
+              <>
+                <button
+                  type="button"
+                  style={btn}
+                  disabled={busy}
+                  onClick={() => {
+                    ensureWal().submitUserEmergency()
+                    setWalSnap({ ...ensureWal().getEscalationSnapshot() })
+                  }}
+                >
+                  Test safety countdown (not SOS)
+                </button>
+                {walSnap.state === 'escalation_pending' ? (
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button
+                      type="button"
+                      style={{ ...btn, flex: 1, borderColor: 'rgba(255,107,135,0.55)' }}
+                      disabled={busy}
+                      onClick={() => {
+                        ensureWal().userCancel('operator_cancel')
+                        setWalSnap({ ...ensureWal().getEscalationSnapshot() })
+                        setNotice('Escalation cancelled.')
+                      }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      style={{ ...btn, flex: 1 }}
+                      disabled={busy}
+                      onClick={() => {
+                        ensureWal().userConfirm('operator_confirm')
+                        setWalSnap({ ...ensureWal().getEscalationSnapshot() })
+                        setNotice('Confirmed — rescue dispatch not enabled in this build.')
+                      }}
+                    >
+                      Confirm
+                    </button>
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <p style={{ margin: 0, fontSize: fontSm, color: '#9ea7a0' }}>
+                Connect a companion device to enable safety countdown testing.
+              </p>
+            )}
+          </div>
         </section>
 
         <section style={{ display: 'grid', gap: gapSm }}>
