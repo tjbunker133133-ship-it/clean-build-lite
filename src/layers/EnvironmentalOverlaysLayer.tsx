@@ -7,6 +7,7 @@ import {
   applyGeojsonOverlay,
   applyRasterOverlay,
   mapBboxFromMap,
+  mapStyleMutable,
   overlayZoomBlocked,
   removeEnvironmentalOverlay,
 } from '../lib/environmentalOverlays/mapOverlayRuntime'
@@ -32,9 +33,28 @@ function syncOverlay(
 
   const def = overlayDef(id)
   let cancelled = false
+  let styleWaitCleanup: (() => void) | null = null
 
   const run = async () => {
-    if (!map.isStyleLoaded()) return
+    if (!mapStyleMutable(map)) {
+      const onReady = () => {
+        if (cancelled || !mapStyleMutable(map)) return
+        void run()
+      }
+      map.once('styledata', onReady)
+      map.once('idle', onReady)
+      styleWaitCleanup = () => {
+        try {
+          map.off('styledata', onReady)
+          map.off('idle', onReady)
+        } catch {
+          /* ignore */
+        }
+      }
+      return
+    }
+    styleWaitCleanup?.()
+    styleWaitCleanup = null
 
     const zoomGate = overlayZoomBlocked(map, id)
     if (zoomGate.blocked) {
@@ -169,6 +189,8 @@ function syncOverlay(
 
   return () => {
     cancelled = true
+    styleWaitCleanup?.()
+    styleWaitCleanup = null
   }
 }
 

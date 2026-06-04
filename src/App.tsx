@@ -6,6 +6,7 @@ import { OverlayProvider } from './context/OverlayContext'
 import { PanelDataProvider } from './context/PanelDataContext'
 import { TrailRouteProvider } from './context/TrailRouteContext'
 import { MissionSyncProvider } from './context/MissionSyncContext'
+import HudSystemHealthBridge from './runtime/HudSystemHealthBridge'
 import TopBar from './hud/TopBar'
 import ScanlineOverlay from './hud/ScanlineOverlay'
 import CockpitKeyboard from './hud/CockpitKeyboard'
@@ -49,6 +50,7 @@ export default function App() {
       <MapProvider>
         <OverlayProvider>
         <TrailRouteProvider>
+        <HudSystemHealthBridge />
         {/* Full-screen container */}
         <div
           style={{

@@ -131,3 +131,12 @@ export type {
 
 export { WAL_TIER_MAPPING, WAL_REFACTOR_PLAN } from './tierMapping'
 export type { WalTierEntry, WalTierSlot, WalRefactorPhase } from './tierMapping'
+
+export {
+  WEARABLE_DEVICE_CONTRACTS,
+  enforceEscalationProjection,
+  enforceChannelProjection,
+  validateEscalationProjection,
+  getWcelDiagnostics,
+} from '../wcel'
+export type { WearableDeviceType, WcelDiagnostics, WcelValidationResult } from '../wcel'

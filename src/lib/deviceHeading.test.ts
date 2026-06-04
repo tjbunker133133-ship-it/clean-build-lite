@@ -3,6 +3,7 @@ import {
   getScreenOrientationAngle,
   headingDelta,
   headingToCardinal,
+  isCompassLevelOrientation,
   isCompassTiltUnreliable,
   normalizeHeading,
   quantizeHeading,
@@ -32,8 +33,9 @@ describe('deviceHeading', () => {
     expect(headingToCardinal(90)).toBe('E')
   })
 
-  it('flags flat and edge tilt as unreliable', () => {
-    expect(isCompassTiltUnreliable(10, 0)).toBe(true)
+  it('flags edge tilt as unreliable but not flat screen-up', () => {
+    expect(isCompassTiltUnreliable(10, 0)).toBe(false)
+    expect(isCompassLevelOrientation(10, 0)).toBe(true)
     expect(isCompassTiltUnreliable(80, 10)).toBe(false)
     expect(isCompassTiltUnreliable(90, 75)).toBe(true)
   })
@@ -56,12 +58,23 @@ describe('deviceHeading', () => {
     expect(h).toBe(12)
   })
 
-  it('resolveOrientationHeading uses inverted alpha for compass (north = 0)', () => {
+  it('resolveOrientationHeading uses fusion when beta/gamma present (absolute)', () => {
     const h = resolveOrientationHeading({
       alpha: 0,
+      beta: 10,
+      gamma: 0,
       absolute: true,
     } as unknown as DeviceOrientationEvent)
-    expect(h).toBe(normalizeHeading(360 + getScreenOrientationAngle()))
+    expect(h).not.toBeNull()
+    expect(Number.isFinite(h)).toBe(true)
+  })
+
+  it('resolveOrientationHeading uses alpha minus screen angle when absolute without tilt', () => {
+    const h = resolveOrientationHeading({
+      alpha: 90,
+      absolute: true,
+    } as unknown as DeviceOrientationEvent)
+    expect(h).toBe(normalizeHeading(90 - getScreenOrientationAngle()))
   })
 
   it('resolveOrientationHeading inverts relative alpha (legacy Android)', () => {

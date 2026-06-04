@@ -10,6 +10,8 @@ import {
   getRuntimeSnapshot,
   updatePendingSwUpdate,
 } from './runtime/runtimeSnapshot'
+import { installHudSystemHealth } from './runtime/hudSystemHealth'
+import { installWcelDiagnostics } from './lib/wearables/wcel/store'
 import { logInfo, logWarn } from './runtime/logger'
 import { getDeviceProfile } from './runtime/deviceProfile'
 import { reportPolicyAttempt } from './runtime/devicePolicy'
@@ -58,6 +60,8 @@ if (import.meta.env.DEV && typeof window !== 'undefined') {
 // Install runtime truth beacon as early as possible so any subsequent
 // subsystem (SW registration, voice, permissions) can update it.
 installRuntimeSnapshot()
+installHudSystemHealth()
+installWcelDiagnostics()
 if (import.meta.env.DEV) {
   void import('./runtime/RuntimeDebugOverlay').then(({ mountRuntimeDebugOverlay }) => {
     mountRuntimeDebugOverlay()

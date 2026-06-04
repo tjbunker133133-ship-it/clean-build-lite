@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   type CompassStatus,
   headingToCardinal,
+  isCompassLevelOrientation,
   isCompassTiltUnreliable,
   quantizeHeading,
   resolveOrientationHeading,
@@ -16,8 +17,10 @@ export type DeviceHeadingState = {
   cardinal: string
 }
 
-/** Lower = steadier dial (less twitch on phone magnetometer). */
+/** Lower = steadier dial; level/edge orientations use heavier smoothing. */
 const SMOOTH_FACTOR = getDeviceProfile().isIOS ? 0.09 : 0.12
+const LEVEL_SMOOTH_FACTOR = 0.06
+const EDGE_SMOOTH_FACTOR = 0.05
 
 export function useDeviceHeading(): DeviceHeadingState {
   const [heading, setHeading] = useState<number | null>(null)
@@ -45,38 +48,43 @@ export function useDeviceHeading(): DeviceHeadingState {
       displayRef.current = quantized
       setHeading(quantized)
       gotReadingRef.current = true
-      applyStatus('active')
     }
 
     const ingestOrientation = (event: DeviceOrientationEvent) => {
       if (!isIOS && preferAbsoluteOnly && event.absolute !== true) return
 
-      const tilted = isCompassTiltUnreliable(event.beta, event.gamma)
-      if (tilted) {
-        if (!tiltRef.current) {
-          tiltRef.current = true
-          applyStatus('level')
-        }
-        return
-      }
-      if (tiltRef.current) {
-        tiltRef.current = false
-        if (displayRef.current != null) applyStatus('active')
-      }
+      const beta = event.beta
+      const gamma = event.gamma
+      const edgeTilt = isCompassTiltUnreliable(beta, gamma)
+      const level = isCompassLevelOrientation(beta, gamma)
 
       const raw = resolveOrientationHeading(event)
       if (raw == null) return
 
       if (event.absolute === true) preferAbsoluteOnly = true
 
+      const smoothFactor = edgeTilt ? EDGE_SMOOTH_FACTOR : level ? LEVEL_SMOOTH_FACTOR : SMOOTH_FACTOR
       const display = displayRef.current
-      const smoothed = display == null ? raw : smoothHeading(display, raw, SMOOTH_FACTOR)
+      const smoothed = display == null ? raw : smoothHeading(display, raw, smoothFactor)
       const now = performance.now()
 
       if (!shouldPublishHeading(display, smoothed, now, lastPublishRef.current)) return
 
       lastPublishRef.current = now
       publishDisplay(smoothed)
+
+      if (edgeTilt) {
+        if (!tiltRef.current) {
+          tiltRef.current = true
+          applyStatus('level')
+        }
+      } else if (level) {
+        tiltRef.current = false
+        applyStatus('level')
+      } else {
+        if (tiltRef.current) tiltRef.current = false
+        applyStatus('active')
+      }
     }
 
     if (isIOS) {
@@ -107,7 +115,7 @@ export function useDeviceHeading(): DeviceHeadingState {
   }, [])
 
   const cardinal = useMemo(() => {
-    if (status !== 'active' || heading == null) return '—'
+    if (heading == null || status === 'unavailable') return '—'
     return headingToCardinal(heading)
   }, [heading, status])
 

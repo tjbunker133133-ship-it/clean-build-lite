@@ -1104,7 +1104,10 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
   )
 
   const resetLayout = useCallback(() => {
-    const fresh = normalizeNoOverlapLayout(DEFAULT_PANELS(), panelGapPx(prefs))
+    const device = detectDevicePreset()
+    const run = firstRunPreset(device)
+    const base = { ...DEFAULT_PANELS(), ...run.panelPatches }
+    const fresh = normalizeNoOverlapLayout(base, panelGapPx({ ...prefs, ...run.prefs }))
     setPanels(fresh)
     persist(fresh, prefs)
   }, [persist, prefs])

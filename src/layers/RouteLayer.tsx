@@ -9,6 +9,7 @@ import { useTrailRoute } from '../context/TrailRouteContext'
 import * as maplibregl from 'maplibre-gl'
 
 import { tier1Debug } from '../lib/tier1DebugLog'
+import { reportRouteLayerObservation } from '../runtime/hudSystemHealth'
 
 
 
@@ -86,25 +87,35 @@ export default function RouteLayer() {
 
 
 
-    const trailFollowActive =
-      snapToTrailEnabled &&
-      trailRoute.legs.some((leg) => leg.mode === 'trail' && leg.points.length >= 3)
-
     const buildTrailGeojson = (): GeoJSON.FeatureCollection => ({
       type: 'FeatureCollection',
-      features: trailFollowActive
-        ? [
-            {
-              type: 'Feature',
-              properties: {},
-              geometry: {
-                type: 'LineString',
-                coordinates: trailRoute.coordinates,
+      features:
+        snapToTrailEnabled && trailRoute.coordinates.length >= 2
+          ? [
+              {
+                type: 'Feature',
+                properties: {},
+                geometry: {
+                  type: 'LineString',
+                  coordinates: trailRoute.coordinates,
+                },
               },
-            },
-          ]
-        : [],
+            ]
+          : [],
     })
+
+    const trailFollowActive =
+      snapToTrailEnabled &&
+      trailRoute.coordinates.length >= 2 &&
+      trailRoute.legs.some((leg) => leg.mode === 'trail' && leg.points.length >= 3)
+
+    const pinGeojson = buildGeojson()
+    const trailGeojson = buildTrailGeojson()
+    /** Never leave operators without a route line when 2+ waypoints exist. */
+    const geojson =
+      trailFollowActive && trailGeojson.features.length > 0
+        ? { type: 'FeatureCollection' as const, features: [] }
+        : pinGeojson
 
 
 
@@ -232,21 +243,18 @@ export default function RouteLayer() {
 
       }
 
-      const geojson = trailFollowActive
-        ? { type: 'FeatureCollection' as const, features: [] }
-        : buildGeojson()
-
-      const trailGeojson = buildTrailGeojson()
+      const routeGeojson = geojson
+      const routeTrailGeojson = trailGeojson
 
       const source = map.getSource(ROUTE_SOURCE_ID) as maplibregl.GeoJSONSource | undefined
 
       if (source) {
 
-        source.setData(geojson)
+        source.setData(routeGeojson)
 
         if (!map.getLayer(ROUTE_LAYER_ID)) {
 
-          ensureRouteLayers(geojson)
+          ensureRouteLayers(routeGeojson)
 
         }
 
@@ -254,9 +262,9 @@ export default function RouteLayer() {
 
         const ensure = () => {
 
-          if (!map.isStyleLoaded()) return
+          if (!map.getStyle()) return
 
-          ensureRouteLayers(geojson)
+          ensureRouteLayers(routeGeojson)
 
         }
 
@@ -268,9 +276,9 @@ export default function RouteLayer() {
 
 
 
-      if (trailGeojson.features.length > 0) {
+      if (routeTrailGeojson.features.length > 0) {
 
-        ensureTrailLayers(trailGeojson)
+        ensureTrailLayers(routeTrailGeojson)
 
       } else if (map.getLayer(TRAIL_ROUTE_LAYER_ID)) {
 
@@ -283,6 +291,12 @@ export default function RouteLayer() {
         })
 
       }
+
+      reportRouteLayerObservation({
+        waypointCount: visibleWaypoints.length,
+        pinLineFeatureCount: routeGeojson.features.length,
+        trailLineFeatureCount: routeTrailGeojson.features.length,
+      })
 
     }
 

@@ -5,6 +5,7 @@
 
 import type { EscalationProjection, EscalationSnapshot, OutputChannelKind } from './types'
 import type { WalPresetConfig } from './userPresets'
+import { enforceChannelProjection } from '../wcel/enforce'
 
 export type OutputChannel = {
   kind: OutputChannelKind
@@ -78,6 +79,7 @@ export function buildEscalationProjection(
 export const WAL_ESCALATION_NOTIFICATION_TAG = 'signal-one-wal-escalation'
 
 export async function projectToWatchNotification(projection: EscalationProjection): Promise<void> {
+  if (!enforceChannelProjection('watch_notification', projection)) return
   if (typeof window === 'undefined' || typeof Notification === 'undefined') return
   if (Notification.permission !== 'granted') return
   const payload = {

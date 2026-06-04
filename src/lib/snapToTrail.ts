@@ -67,13 +67,28 @@ export const SKI_HIKE_TRAIL_CLASSES = new Set(['hike', 'skitour', 'snowshoe'])
 
 const TRAIL_VECTOR_SOURCE_LAYERS = new Set(['trail', 'transportation', 'ski'])
 
+/** OpenMapTiles path-like classes used when dedicated trails are unavailable. */
+export const FALLBACK_NAV_PATH_CLASSES = new Set([
+  'unclassified',
+  'service',
+  'residential',
+  'living_street',
+  'tertiary',
+])
+
+/** Situational overlay line layers that can back snap on raster basemaps. */
+export const OVERLAY_SNAP_LAYER_IDS = [
+  'hud-env-lyr-bike_paths',
+  'hud-env-lyr-hiking_trails',
+  'hud-env-lyr-abandoned_rail',
+] as const
+
 /** Motor vehicle classes — never snap, even if a style mis-tags a layer id. */
 const REJECTED_ROAD_CLASSES = new Set([
   'motorway',
   'trunk',
   'primary',
   'secondary',
-  'tertiary',
   'busway',
   'bus_guideway',
   'ferry',
@@ -211,7 +226,7 @@ function forEachLineStringSegmentBudgeted(
 }
 
 /** Layer-id substrings that signal trail/foot geometry on relaxed-schema styles. */
-const TRAIL_LAYER_ID_HINTS = ['trail', 'path', 'track', 'footway', 'cycleway', 'bridleway']
+const TRAIL_LAYER_ID_HINTS = ['trail', 'path', 'track', 'footway', 'cycleway', 'bridleway', 'road', 'street']
 
 /** Vector source-layers that can carry hike / foot / path geometry (OpenMapTiles + MapTiler Outdoor). */
 const TRAIL_SOURCE_LAYER_HINTS = ['trail', 'transportation', 'transportation_name', 'ski']
@@ -518,7 +533,15 @@ export function resolveTrailSnapClass(feature: SnapFeatureLike): string | null {
   if (cls && ALLOWED_TRAIL_CLASSES.has(cls)) return cls
   if (cls && OUTDOOR_TRAIL_CLASSES.has(cls)) return cls
   if (cls && SKI_HIKE_TRAIL_CLASSES.has(cls)) return cls
+  if (cls && FALLBACK_NAV_PATH_CLASSES.has(cls)) return cls
   if (sub && ALLOWED_TRAIL_SUBCLASSES.has(sub)) return sub
+
+  if (layerId.startsWith('hud-env-lyr-')) {
+    if (layerId.includes('bike')) return 'cycleway'
+    if (layerId.includes('hiking')) return 'footway'
+    if (layerId.includes('rail')) return 'track'
+    return 'path'
+  }
 
   if (srcLayer === 'trail') return cls || sub || 'trail'
   if (srcLayer === 'ski' && cls && SKI_HIKE_TRAIL_CLASSES.has(cls)) return cls
@@ -546,10 +569,10 @@ export function collectTrailSnapLayerIds(map: Map): string[] {
   try {
     spec = map.getStyle?.()
   } catch {
-    return []
+    return collectActiveOverlaySnapLayerIds(map)
   }
   const layers = (spec as { layers?: unknown })?.layers
-  if (!Array.isArray(layers)) return []
+  if (!Array.isArray(layers)) return collectActiveOverlaySnapLayerIds(map)
 
   const ids: string[] = []
   for (const layer of layers) {
@@ -572,7 +595,26 @@ export function collectTrailSnapLayerIds(map: Map): string[] {
     if (!match && layerIdLooksTrail(id)) match = true
     if (match && id) ids.push(id)
   }
+  for (const overlayId of collectActiveOverlaySnapLayerIds(map)) {
+    if (!ids.includes(overlayId)) ids.push(overlayId)
+  }
   return ids
+}
+
+function collectActiveOverlaySnapLayerIds(map: Map): string[] {
+  const ids: string[] = []
+  for (const id of OVERLAY_SNAP_LAYER_IDS) {
+    try {
+      if (map.getLayer(id)) ids.push(id)
+    } catch {
+      /* ignore */
+    }
+  }
+  return ids
+}
+
+function hasOverlaySnapLayers(map: Map): boolean {
+  return collectActiveOverlaySnapLayerIds(map).length > 0
 }
 
 /**
@@ -754,8 +796,9 @@ export function isSnapAvailable(map: Map | null | undefined): boolean {
     if (!probe.hasStyle) return false
     const matched =
       probe.matchedTransportationSourceLayers > 0 || probe.matchedTrailIdLayers > 0
-    if (!matched) return false
-    return true
+    if (matched) return true
+    if (hasOverlaySnapLayers(map)) return true
+    return false
   } catch {
     return false
   } finally {
@@ -780,7 +823,9 @@ export function isSnapAvailable(map: Map | null | undefined): boolean {
           }
         const available =
           safeProbe.hasStyle &&
-          (safeProbe.matchedTransportationSourceLayers > 0 || safeProbe.matchedTrailIdLayers > 0) &&
+          (safeProbe.matchedTransportationSourceLayers > 0 ||
+            safeProbe.matchedTrailIdLayers > 0 ||
+            hasOverlaySnapLayers(map)) &&
           safeZoom >= MIN_SNAP_ZOOM
         devLogCapability(map, safeZoom, available, safeProbe)
       }

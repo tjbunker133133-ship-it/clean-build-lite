@@ -16,6 +16,15 @@ export function envLayerId(id: EnvironmentalOverlayId): string {
   return `${LAYER_PREFIX}${id}`
 }
 
+/** Style object exists — safe to add HUD overlay sources (do not gate on tile load). */
+export function mapStyleMutable(map: Map): boolean {
+  try {
+    return map.getStyle() != null
+  } catch {
+    return false
+  }
+}
+
 function findBeforeTacticalLayer(map: Map): string | undefined {
   for (const id of TACTICAL_LAYER_IDS) {
     if (map.getLayer(id)) return id
@@ -40,7 +49,7 @@ export function removeEnvironmentalOverlay(map: Map, id: EnvironmentalOverlayId)
 
 export function applyRasterOverlay(map: Map, id: EnvironmentalOverlayId): boolean {
   try {
-    if (!map.isStyleLoaded()) return false
+    if (!mapStyleMutable(map)) return false
     const def = overlayDef(id)
     const tiles = rasterTileUrls(id)
     if (!tiles) return false
@@ -83,7 +92,7 @@ export function applyGeojsonOverlay(
   geojson: GeoJSON.FeatureCollection,
 ): boolean {
   try {
-    if (!map.isStyleLoaded()) return false
+    if (!mapStyleMutable(map)) return false
     const def = overlayDef(id)
     const sourceId = envSourceId(id)
     const layerId = envLayerId(id)

@@ -50,6 +50,7 @@ export default function FieldStatusRail() {
   const fontSm = touchFontSm(isMobile)
   const [backgrounded, setBackgrounded] = useState(isFieldSessionBackgrounded)
   const [wakeHeld, setWakeHeld] = useState(isFieldWakeLockHeld())
+  const [expanded, setExpanded] = useState(false)
 
   useEffect(() => subscribeFieldWakeLock(setWakeHeld), [])
 
@@ -245,6 +246,10 @@ export default function FieldStatusRail() {
 
   if (rows.length === 0) return null
 
+  const primary = rows[0]
+  const secondary = rows.slice(1)
+  const hasMore = secondary.length > 0
+
   return (
     <div
       style={{
@@ -252,7 +257,7 @@ export default function FieldStatusRail() {
         left: 12,
         bottom: fieldStatusRailBottomCss(),
         zIndex: 204,
-        pointerEvents: 'none',
+        pointerEvents: 'auto',
         maxWidth: 'min(78vw, 300px)',
       }}
     >
@@ -260,23 +265,68 @@ export default function FieldStatusRail() {
         style={{
           display: 'flex',
           flexDirection: 'column',
-          gap: 5,
-          padding: '8px 11px',
+          gap: expanded ? 5 : 0,
+          padding: expanded ? '8px 11px' : '6px 10px',
           borderRadius: 10,
           background: 'rgba(8, 12, 14, 0.94)',
           border: '1px solid rgba(94, 234, 212, 0.28)',
           boxShadow: '0 6px 20px rgba(0,0,0,0.4)',
         }}
       >
-        {rows.map((row) => (
-          <StatusRowLine key={row.id} row={row} fontSm={fontSm} />
-        ))}
+        <button
+          type="button"
+          onClick={() => hasMore && setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          disabled={!hasMore}
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 8,
+            padding: 0,
+            margin: 0,
+            border: 'none',
+            background: 'transparent',
+            cursor: hasMore ? 'pointer' : 'default',
+            textAlign: 'left',
+            width: '100%',
+          }}
+        >
+          <StatusRowLine
+            row={{
+              ...primary,
+              label: hasMore && !expanded ? `${primary.label} · +${secondary.length} more` : primary.label,
+            }}
+            fontSm={fontSm}
+          />
+          {hasMore ? (
+            <span
+              aria-hidden
+              style={{
+                marginTop: Math.max(2, fontSm * 0.2),
+                fontSize: fontSm - 1,
+                color: '#94a3b8',
+                flexShrink: 0,
+              }}
+            >
+              {expanded ? '▾' : '▸'}
+            </span>
+          ) : null}
+        </button>
+        {expanded
+          ? secondary.map((row) => <StatusRowLine key={row.id} row={row} fontSm={fontSm} />)
+          : null}
       </div>
     </div>
   )
 }
 
-function StatusRowLine({ row, fontSm }: { row: StatusRow; fontSm: number }) {
+function StatusRowLine({
+  row,
+  fontSm,
+}: {
+  row: StatusRow
+  fontSm: number
+}) {
   const dotColor =
     row.tone === 'nav'
       ? '#fbbf24'

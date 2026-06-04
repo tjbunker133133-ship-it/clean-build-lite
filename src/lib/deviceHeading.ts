@@ -22,22 +22,53 @@ export function smoothHeading(prev: number, next: number, factor: number): numbe
 }
 
 /**
- * Compass readouts degrade when the device is too flat or rolled on edge.
- * beta/gamma are null on some browsers until permission is granted.
+ * True when the device is rolled hard on edge — heading may jitter; still published.
+ * Flat (screen-up) orientations are handled via tilt-compensated fusion instead of blocking.
  */
 export function isCompassTiltUnreliable(beta: number | null, gamma: number | null): boolean {
   if (beta == null || gamma == null || !Number.isFinite(beta) || !Number.isFinite(gamma)) {
     return false
   }
-  const absBeta = Math.abs(beta)
   const absGamma = Math.abs(gamma)
-  // Screen parallel to ground — alpha spins and magnetometer geometry is poor.
-  if (absBeta < 25) return true
   // Rolled hard to either side.
   if (absGamma > 68) return true
   // Upside-down flat.
-  if (absBeta > 155) return true
+  if (Math.abs(beta) > 155) return true
   return false
+}
+
+/** True when the device is near-horizontal — advisory "level" state only. */
+export function isCompassLevelOrientation(beta: number | null, gamma: number | null): boolean {
+  if (beta == null || !Number.isFinite(beta)) return false
+  return Math.abs(beta) < 25
+}
+
+/**
+ * Tilt-compensated compass from DeviceOrientation alpha/beta/gamma (W3C rotation matrix).
+ * Works in portrait, landscape, and flat orientations when sensors are available.
+ */
+export function computeTiltCompensatedHeading(
+  alpha: number,
+  beta: number,
+  gamma: number,
+): number {
+  const degToRad = Math.PI / 180
+  const _alpha = alpha * degToRad
+  const _beta = beta * degToRad
+  const _gamma = gamma * degToRad
+
+  const cA = Math.cos(_alpha)
+  const sA = Math.sin(_alpha)
+  const cB = Math.cos(_beta)
+  const sB = Math.sin(_beta)
+  const cG = Math.cos(_gamma)
+  const sG = Math.sin(_gamma)
+
+  const Vx = -cA * sG - sA * sB * cG
+  const Vy = -sA * sG + cA * sB * cG
+
+  const heading = Math.atan2(Vx, Vy) * (180 / Math.PI)
+  return normalizeHeading(heading)
 }
 
 export function shouldPublishHeading(
@@ -89,29 +120,107 @@ export async function requestDeviceOrientationPermission(): Promise<
   }
 }
 
+export type OrientationHeadingDebug = {
+  rawAlpha: number | null
+  fusedHeading: number | null
+  displayedHeading: number | null
+  source: 'webkit' | 'fusion' | 'absolute' | 'relative' | 'none'
+  absolute: boolean
+  screenAngle: number
+  level: boolean
+  edgeTilt: boolean
+}
+
+let lastHeadingDebug: OrientationHeadingDebug | null = null
+
+export function readLastHeadingDebug(): OrientationHeadingDebug | null {
+  return lastHeadingDebug
+}
+
+function logHeadingDebug(d: OrientationHeadingDebug): void {
+  lastHeadingDebug = d
+  try {
+    if (
+      typeof window !== 'undefined' &&
+      (window.localStorage?.getItem('hud_compass_debug') === '1' ||
+        window.localStorage?.getItem('hud_tier1_debug') === '1')
+    ) {
+      console.info('[hud-compass]', d)
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 /**
  * Map DeviceOrientation to compass heading (0° = north, clockwise).
  *
  * - iOS: `webkitCompassHeading` (degrees clockwise from north).
- * - `deviceorientationabsolute`: W3C — alpha 0° = top of device toward north.
- * - Legacy relative `deviceorientation`: use inverted alpha (older Android).
+ * - Absolute + beta/gamma: tilt-compensated fusion (flat-safe).
+ * - Absolute alpha-only: alpha adjusted for screen rotation (no 90° inversion).
+ * - Legacy relative `deviceorientation`: inverted alpha (older Android).
  */
 export function resolveOrientationHeading(event: DeviceOrientationEvent): number | null {
+  const orient = getScreenOrientationAngle()
+  const alpha = typeof event.alpha === 'number' && Number.isFinite(event.alpha) ? event.alpha : null
+  const beta = typeof event.beta === 'number' && Number.isFinite(event.beta) ? event.beta : null
+  const gamma = typeof event.gamma === 'number' && Number.isFinite(event.gamma) ? event.gamma : null
+  const level = isCompassLevelOrientation(beta, gamma)
+  const edgeTilt = isCompassTiltUnreliable(beta, gamma)
+
   const webkitHeading = (event as DeviceOrientationEvent & { webkitCompassHeading?: number })
     .webkitCompassHeading
   if (typeof webkitHeading === 'number' && Number.isFinite(webkitHeading)) {
-    return normalizeHeading(webkitHeading)
+    const fused = normalizeHeading(webkitHeading)
+    logHeadingDebug({
+      rawAlpha: alpha,
+      fusedHeading: fused,
+      displayedHeading: fused,
+      source: 'webkit',
+      absolute: event.absolute === true,
+      screenAngle: orient,
+      level,
+      edgeTilt,
+    })
+    return fused
   }
-  if (typeof event.alpha !== 'number' || !Number.isFinite(event.alpha)) {
+
+  if (alpha == null) {
+    logHeadingDebug({
+      rawAlpha: null,
+      fusedHeading: null,
+      displayedHeading: null,
+      source: 'none',
+      absolute: event.absolute === true,
+      screenAngle: orient,
+      level,
+      edgeTilt,
+    })
     return null
   }
 
-  const orient = getScreenOrientationAngle()
+  let fused: number
+  let source: OrientationHeadingDebug['source']
+  if (beta != null && gamma != null) {
+    fused = computeTiltCompensatedHeading(alpha, beta, gamma)
+    source = 'fusion'
+  } else if (event.absolute === true) {
+    fused = normalizeHeading(alpha - orient)
+    source = 'absolute'
+  } else {
+    fused = normalizeHeading(360 - alpha + orient)
+    source = 'relative'
+  }
 
-  /**
-   * Compass heading from alpha (W3C / MDN): 0° = north, clockwise.
-   * Same inversion for relative and Android `absolute` — using `alpha` directly
-   * misreads ~90° on many Android Chrome builds.
-   */
-  return normalizeHeading(360 - event.alpha + orient)
+  logHeadingDebug({
+    rawAlpha: alpha,
+    fusedHeading: fused,
+    displayedHeading: fused,
+    source,
+    absolute: event.absolute === true,
+    screenAngle: orient,
+    level,
+    edgeTilt,
+  })
+  return fused
 }

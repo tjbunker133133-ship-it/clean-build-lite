@@ -51,6 +51,7 @@ export const TIER2_EXCLUDED_PATHS = [
   'src/lib/wearables',
   'src/lib/wearables/wearablesFieldValidation.ts',
   'src/lib/wearables/wal',
+  'src/lib/wearables/wcel',
   'plugins/capacitor-hud-health-connect',
   'src/hud/WearablesPanel.tsx',
   'src/hud/FieldStatusRail.tsx',
@@ -68,6 +69,9 @@ export const TIER2_EXCLUDED_PATHS = [
   'src/hud/hudLayout.ts',
   'src/lib/travelSpeed.ts',
   'src/hooks/useTravelSpeed.ts',
+  'src/lib/hudConsistency',
+  'src/runtime/hudSystemHealth.ts',
+  'src/runtime/HudSystemHealthBridge.tsx',
 ] as const
 
 export const TIER2_EXCLUDED_CAPABILITIES = [
