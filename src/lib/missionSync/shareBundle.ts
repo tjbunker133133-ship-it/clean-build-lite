@@ -40,6 +40,10 @@ export async function copyMissionBundle(text: string): Promise<boolean> {
   }
 }
 
+/**
+ * Optional clipboard read — never prompts; returns null if the browser blocks read access.
+ * Prefer pasting into a visible textarea (long-press → Paste).
+ */
 export async function readMissionBundleFromClipboard(): Promise<string | null> {
   try {
     if (navigator.clipboard?.readText) {
@@ -50,6 +54,28 @@ export async function readMissionBundleFromClipboard(): Promise<string | null> {
     return null
   }
   return null
+}
+
+export function shareBundleResultMessage(
+  result: ShareBundleResult,
+  context: 'join' | 'answer' | 'monitor' | 'invite' = 'join',
+): string {
+  switch (result) {
+    case 'shared':
+      return context === 'monitor'
+        ? 'Share sheet opened — send to your watcher.'
+        : context === 'answer'
+          ? 'Share sheet opened — send this answer to the mission host.'
+          : 'Share sheet opened — send to your teammate (SMS, Bluetooth, etc.).'
+    case 'copied':
+      return context === 'invite'
+        ? 'Invite copied — paste into Messages or email.'
+        : 'Link copied — paste into Messages or the other tablet’s Mission Link box.'
+    case 'downloaded':
+      return 'Saved as a file — attach or AirDrop it to your teammate.'
+    case 'failed':
+      return 'Could not share — paste the bundle text manually in the box below.'
+  }
 }
 
 async function shareViaNativeSheet(text: string, title: string): Promise<boolean> {
@@ -108,11 +134,11 @@ export async function shareMissionBundle(
   const filename = opts.filename ?? 'signal-one-mission-link.txt'
 
   if (await shareViaNativeSheet(trimmed, title)) {
-    if (opts.alsoCopy) await copyMissionBundle(trimmed)
+    if (opts.alsoCopy) void copyMissionBundle(trimmed)
     return 'shared'
   }
   if (await shareViaWebApi(trimmed, title)) {
-    if (opts.alsoCopy) await copyMissionBundle(trimmed)
+    if (opts.alsoCopy) void copyMissionBundle(trimmed)
     return 'shared'
   }
   if (await copyMissionBundle(trimmed)) {

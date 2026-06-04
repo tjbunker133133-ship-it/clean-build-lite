@@ -46,7 +46,10 @@ export class MissionSyncCoordinator {
   readonly missionId: string
   readonly missionName: string
   readonly joinToken: string
-  readonly observerToken: string
+  private _observerToken: string
+  get observerToken(): string {
+    return this._observerToken
+  }
   readonly hostDeviceId: string
   readonly hostCallsign: string
   readonly role: 'member' | 'observer'
@@ -78,7 +81,7 @@ export class MissionSyncCoordinator {
     this.missionId = args.missionId
     this.missionName = args.missionName
     this.joinToken = args.joinToken
-    this.observerToken = args.observerToken ?? ''
+    this._observerToken = args.observerToken ?? ''
     this.hostDeviceId = args.hostDeviceId
     this.hostCallsign = args.hostCallsign
     this.role = args.role
@@ -112,10 +115,16 @@ export class MissionSyncCoordinator {
   }
 
   /** Remote monitor link — multiple pending observer slots; internet ICE profile. */
-  async createObserverOffer(): Promise<{ packet: MissionOfferPacket; encoded: string; peerId: string }> {
-    if (!this.observerToken) {
-      throw new Error('Observer token not configured for this mission')
+  /** Mint token for missions restored before monitor links existed. */
+  ensureObserverToken(): string {
+    if (!this._observerToken) {
+      this._observerToken = createMissionIds().observerToken
     }
+    return this._observerToken
+  }
+
+  async createObserverOffer(): Promise<{ packet: MissionOfferPacket; encoded: string; peerId: string }> {
+    this.ensureObserverToken()
     if (this.observerPeers.length >= MAX_OBSERVER_PEERS) {
       throw new Error(`Observer limit reached (${MAX_OBSERVER_PEERS})`)
     }

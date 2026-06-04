@@ -52,6 +52,10 @@ export const TIER2_EXCLUDED_PATHS = [
   'src/lib/wearables',
   'plugins/capacitor-hud-health-connect',
   'src/hud/WearablesPanel.tsx',
+  'src/hud/FieldStatusRail.tsx',
+  'src/hud/hudLayout.ts',
+  'src/lib/travelSpeed.ts',
+  'src/hooks/useTravelSpeed.ts',
 ] as const
 
 export const TIER2_EXCLUDED_CAPABILITIES = [

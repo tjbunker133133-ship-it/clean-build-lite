@@ -77,7 +77,6 @@ const DOCKED_PANEL_STACK_PX = 4
 const DOCKED_PANEL_MIN_HEIGHT_PX = 76
 const DOCKED_PANEL_MAX_HEIGHT_PX = 92
 const DOCKED_PANEL_WIDTH_PX = 280
-const DOCK_TOP_OFFSET_PX = 48
 const DOCK_BOTTOM_GUTTER_PX = 12
 
 function snap(n: number): number {

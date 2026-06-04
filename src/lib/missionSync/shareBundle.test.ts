@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { copyMissionBundle, shareMissionBundle } from './shareBundle'
+import { copyMissionBundle, shareBundleResultMessage, shareMissionBundle } from './shareBundle'
 
 describe('shareBundle', () => {
   beforeEach(() => {
@@ -26,5 +26,10 @@ describe('shareBundle', () => {
   it('falls back to copy when share unavailable', async () => {
     const result = await shareMissionBundle('HUDMS1:test', { title: 'Join' })
     expect(result).toBe('copied')
+  })
+
+  it('describes share outcomes in plain language', () => {
+    expect(shareBundleResultMessage('shared', 'join')).toContain('Share sheet')
+    expect(shareBundleResultMessage('copied', 'join')).toContain('copied')
   })
 })

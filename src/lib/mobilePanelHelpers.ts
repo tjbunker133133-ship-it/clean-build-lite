@@ -22,15 +22,22 @@ export const MOBILE_DENSITY_COLLAPSE_IDLE_MS = 9000
 /** CONTRACT lock: mobile drag release never auto-docks from edge proximity (see CockpitHudPanel). */
 export const MOBILE_DRAG_EDGE_DOCK_DISABLED = true as const
 
+import { dockTopOffsetPx } from '../hud/hudLayout'
+
 /** Keep in sync with CockpitContext / CockpitHudPanel dock constants. */
-export const DOCK_TOP_OFFSET_PX = 48
+export function dockTopOffsetPxForLayout(): number {
+  return dockTopOffsetPx()
+}
+
+/** @deprecated use dockTopOffsetPxForLayout() — static fallback for tests */
+export const DOCK_TOP_OFFSET_PX = 56
 export const DOCK_BOTTOM_GUTTER_PX = 12
 export const DOCKED_PANEL_STACK_PX = 4
 export const DOCKED_PANEL_MIN_HEIGHT_PX = 76
 export const DOCKED_PANEL_MAX_HEIGHT_PX = 92
 
 export function computeDockMetrics(vh: number, count: number) {
-  const minY = DOCK_TOP_OFFSET_PX
+  const minY = dockTopOffsetPxForLayout()
   const safeCount = Math.max(1, count)
   const available = Math.max(140, vh - minY - DOCK_BOTTOM_GUTTER_PX)
   const stackTotal = Math.max(0, safeCount - 1) * DOCKED_PANEL_STACK_PX

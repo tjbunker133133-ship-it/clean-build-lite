@@ -1,9 +1,12 @@
-import React from 'react'
+import React, { useCallback } from 'react'
 import { useMapContext } from '../context/MapContext'
 import { useDeviceHeading } from '../hooks/useDeviceHeading'
-import { useGPS } from '../hooks/useGPS'
+import { deriveGpsUiStatus, useGPS } from '../hooks/useGPS'
+import { useTravelSpeed } from '../hooks/useTravelSpeed'
+import { requestDeviceOrientationPermission } from '../lib/deviceHeading'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 import CompassDial from './CompassDial'
+import { topBarContentHeightPx } from './hudLayout'
 import { touchFontSm, touchFontMd, touchGapMd, touchMinTarget } from './tokens'
 
 function LocateIcon() {
@@ -19,6 +22,8 @@ function LocateIcon() {
 export default function TopBar() {
   const { map } = useMapContext()
   const gps = useGPS()
+  const gpsUi = deriveGpsUiStatus(gps)
+  const { display: speed } = useTravelSpeed(gps.lat, gps.lng, gpsUi === 'locked')
   const { heading, status, cardinal } = useDeviceHeading()
   const profile = getDeviceProfile()
   const isMobile = profile.interactionMode === 'mobile'
@@ -28,8 +33,15 @@ export default function TopBar() {
   const tapMin = touchMinTarget(isMobile)
   const isCompact = profile.width < 720 || profile.isCoarsePointer
   const hasFix = gps.lat != null && gps.lng != null
-  const dialSize = isCompact ? 38 : 42
-  const barHeight = isCompact ? 54 : 50
+  const dialSize = isCompact ? 52 : 56
+  const barHeight = topBarContentHeightPx()
+
+  const enableCompass = useCallback(async () => {
+    const result = await requestDeviceOrientationPermission()
+    if (result === 'denied') {
+      /* iOS Settings → Safari → Motion; user can retry tap */
+    }
+  }, [])
 
   const locateMe = () => {
     if (!map || !hasFix) return
@@ -129,8 +141,14 @@ export default function TopBar() {
         )}
       </div>
 
-      <div style={{ justifySelf: 'center' }}>
-        <CompassDial heading={heading} status={status} cardinal={cardinal} size={dialSize} />
+      <div style={{ justifySelf: 'center', paddingBottom: 2 }}>
+        <CompassDial
+          heading={heading}
+          status={status}
+          cardinal={cardinal}
+          size={dialSize}
+          onRequestPermission={status === 'unavailable' ? () => void enableCompass() : undefined}
+        />
       </div>
 
       <div
@@ -142,6 +160,44 @@ export default function TopBar() {
           minWidth: 0,
         }}
       >
+        <div
+          aria-label={speed.moving ? `Travel speed ${speed.primary}` : 'Not moving'}
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'flex-end',
+            padding: '4px 10px',
+            borderRadius: 8,
+            border: speed.moving
+              ? '1px solid rgba(94, 234, 212, 0.45)'
+              : '1px solid rgba(130, 138, 132, 0.35)',
+            background: speed.moving ? 'rgba(4, 48, 42, 0.55)' : 'rgba(20, 24, 22, 0.65)',
+            minWidth: isCompact ? 52 : 58,
+          }}
+        >
+          <span
+            style={{
+              fontFamily: 'var(--font-mono, monospace)',
+              fontSize: isCompact ? fontSm : fontMd,
+              fontWeight: 800,
+              letterSpacing: '0.04em',
+              color: speed.moving ? '#7dffa8' : '#9ea7a0',
+              lineHeight: 1.1,
+            }}
+          >
+            {speed.primary}
+          </span>
+          <span
+            style={{
+              fontSize: Math.max(9, fontSm - 2),
+              color: '#7a827a',
+              letterSpacing: '0.08em',
+              lineHeight: 1.2,
+            }}
+          >
+            {gpsUi === 'locked' ? speed.secondary : 'GPS…'}
+          </span>
+        </div>
         <button
           type="button"
           onClick={locateMe}

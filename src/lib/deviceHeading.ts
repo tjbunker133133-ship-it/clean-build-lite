@@ -45,13 +45,30 @@ export function shouldPublishHeading(
   next: number,
   nowMs: number,
   lastPublishMs: number,
-  minDeltaDeg = 6,
-  minIntervalMs = 320,
+  minDeltaDeg = 4,
+  minIntervalMs = 240,
 ): boolean {
   if (last == null) return true
   const elapsed = nowMs - lastPublishMs
   if (elapsed < minIntervalMs) return false
   return Math.abs(headingDelta(last, next)) >= minDeltaDeg
+}
+
+/** iOS 13+ requires a user gesture before compass events fire. */
+export async function requestDeviceOrientationPermission(): Promise<
+  'granted' | 'denied' | 'unsupported'
+> {
+  if (typeof window === 'undefined') return 'unsupported'
+  const ctor = DeviceOrientationEvent as typeof DeviceOrientationEvent & {
+    requestPermission?: () => Promise<'granted' | 'denied'>
+  }
+  if (typeof ctor.requestPermission !== 'function') return 'unsupported'
+  try {
+    const result = await ctor.requestPermission()
+    return result === 'granted' ? 'granted' : 'denied'
+  } catch {
+    return 'denied'
+  }
 }
 
 export function resolveOrientationHeading(event: DeviceOrientationEvent): number | null {

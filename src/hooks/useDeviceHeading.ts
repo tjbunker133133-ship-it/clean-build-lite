@@ -15,8 +15,8 @@ export type DeviceHeadingState = {
   cardinal: string
 }
 
-const SMOOTH_FACTOR = 0.28
-const OUTLIER_DEG = 35
+const SMOOTH_FACTOR = 0.38
+const OUTLIER_DEG = 48
 
 export function useDeviceHeading(): DeviceHeadingState {
   const [heading, setHeading] = useState<number | null>(null)

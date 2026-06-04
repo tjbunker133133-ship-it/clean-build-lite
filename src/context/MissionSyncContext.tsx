@@ -629,10 +629,18 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       return
     }
     try {
+      const minted = coord.ensureObserverToken()
+      if (minted && minted !== observerTokenRef.current) {
+        setObserverToken(minted)
+        const saved = loadMissionSession()
+        if (saved && saved.missionId === missionId) {
+          saveMissionSession({ ...saved, observerToken: minted, updatedAt: Date.now() })
+        }
+      }
       const { encoded, peerId } = await coord.createObserverOffer()
       setPendingObserverOfferEncoded(encoded)
       void copyMissionBundle(encoded)
-      const token = observerTokenRef.current
+      const token = observerTokenRef.current || minted
       if (token && observerSignalingAvailable) {
         void publishObserverSignal(missionId, token, {
           kind: 'offer',
@@ -820,20 +828,23 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     setPendingOfferEncoded(encoded)
     setPendingAnswerEncoded(null)
     const code = joinCodeFromToken(joinTokenRef.current)
-    void copyMissionBundle(encoded)
     if (await nativeAdvertisePayload(code, encoded)) {
       setSignalingTransport('wifi-lan')
       notify(
         'info',
-        `Link search: Wi‑Fi + Bluetooth/Nearby · code ${code} · bundle copied`,
+        `Teammate code ${code} — searching Wi‑Fi + Nearby. Share join link if auto-link fails.`,
       )
     } else {
       setSignalingTransport('share')
+      const { shareMissionBundle, shareBundleResultMessage } = await import('../lib/missionSync/shareBundle')
+      const result = await shareMissionBundle(encoded, {
+        title: 'Signal One — join mission',
+        alsoCopy: false,
+      })
       notify(
         'info',
-        packetFitsCompactQr(encoded)
-          ? 'Bundle copied — Share join link or show QR'
-          : 'Bundle copied — Share join link (too large for QR)',
+        shareBundleResultMessage(result, 'join') +
+          (packetFitsCompactQr(encoded) ? ' QR code is below.' : ' Bundle is large — use Share, not QR.'),
       )
     }
   }, [notify])
@@ -1221,11 +1232,18 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     }
     if (!saved.joinToken) return
     sessionCoordinatorReadyRef.current = true
+    let observerToken = saved.observerToken ?? ''
+    if (!observerToken) {
+      observerToken = createMissionIds().observerToken
+      setObserverToken(observerToken)
+      saveMissionSession({ ...saved, observerToken, updatedAt: Date.now() })
+      notify('info', 'Monitor token added for this mission — you can share remote watch links now.')
+    }
     const coord = new MissionSyncCoordinator({
       missionId: saved.missionId,
       missionName: saved.missionName,
       joinToken: saved.joinToken,
-      observerToken: saved.observerToken,
+      observerToken,
       hostDeviceId: saved.hostDeviceId ?? saved.deviceId,
       hostCallsign: callsign,
       role: 'member',

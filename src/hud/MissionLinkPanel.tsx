@@ -3,6 +3,7 @@ import HudPanel from './HudPanel'
 import { useMissionSync } from '../context/MissionSyncContext'
 import {
   readMissionBundleFromClipboard,
+  shareBundleResultMessage,
   shareMissionBundle,
 } from '../lib/missionSync/shareBundle'
 import { formatJoinCode, isValidJoinCodeInput } from '../lib/missionSync/joinCode'
@@ -102,6 +103,7 @@ export default function MissionLinkPanel() {
   const [monitorToken, setMonitorToken] = useState('')
   const [pasteObserverAnswer, setPasteObserverAnswer] = useState('')
   const [lanSearching, setLanSearching] = useState(false)
+  const [linkHelp, setLinkHelp] = useState<string | null>(null)
 
   const fieldPeers = useMemo(
     () => sync.peers.filter((p) => p.linkRole === 'member'),
@@ -163,32 +165,45 @@ export default function MissionLinkPanel() {
     if (lanSearching && sync.phase === 'connected') setLanSearching(false)
   }, [lanSearching, sync.phase])
 
-  const shareBundle = useCallback(async (text: string | null, label: string) => {
-    if (!text) return
-    const result = await shareMissionBundle(text, {
-      title: label,
-      alsoCopy: true,
-      filename: label.includes('Answer') ? 'signal-one-mission-answer.txt' : 'signal-one-mission-join.txt',
-    })
-    if (result === 'shared') sync.dismissNotice()
-  }, [sync])
+  const shareBundle = useCallback(
+    async (
+      text: string | null,
+      label: string,
+      kind: 'join' | 'answer' | 'monitor' | 'invite' = 'join',
+    ) => {
+      if (!text?.trim()) {
+        setLinkHelp('Nothing to share yet — start a mission or tap Prepare link for next teammate.')
+        return
+      }
+      const result = await shareMissionBundle(text, {
+        title: label,
+        alsoCopy: false,
+        filename: label.includes('Answer') ? 'signal-one-mission-answer.txt' : 'signal-one-mission-join.txt',
+      })
+      setLinkHelp(shareBundleResultMessage(result, kind))
+      if (result === 'shared') sync.dismissNotice()
+    },
+    [sync],
+  )
 
-  const pasteBundleFromClipboard = useCallback(
+  const tryClipboardIntoBox = useCallback(
     async (target: 'host' | 'answer') => {
       const raw = await readMissionBundleFromClipboard()
       if (!raw) {
-        window.prompt('Paste mission bundle here:', '')
+        setLinkHelp(
+          'Paste manually: long-press the text box above, tap Paste, then tap the green Join/Complete button. (We do not read your clipboard without that.)',
+        )
         return
       }
       if (target === 'host') {
         setPasteHost(raw)
-        await sync.startJoinMission(raw)
+        setLinkHelp('Bundle pasted — tap Join from bundle.')
       } else {
         setPasteAnswer(raw)
-        await sync.applyJoinerAnswer(raw)
+        setLinkHelp('Answer pasted — tap Complete link.')
       }
     },
-    [sync],
+    [],
   )
 
   const runScan = useCallback(
@@ -227,8 +242,38 @@ export default function MissionLinkPanel() {
       <div style={{ display: 'flex', flexDirection: 'column', gap: touchGapMd(isMobile), fontSize: fontSm }}>
         {!sync.supported ? (
           <p style={{ color: '#fbbf24', margin: 0, lineHeight: 1.45 }}>
-            WebRTC unavailable — use Android Chrome or the Play app.
+            Mission Link needs a modern browser (Chrome, Edge, or the Android field app). Safari on
+            iPhone can join via paste — sharing uses the text boxes below.
           </p>
+        ) : null}
+
+        {!inMission ? (
+          <div
+            style={{
+              display: 'grid',
+              gap: 8,
+              padding: '10px 12px',
+              borderRadius: 10,
+              border: '1px solid rgba(94, 234, 212, 0.35)',
+              background: 'rgba(4, 48, 42, 0.35)',
+            }}
+          >
+            <div style={{ color: '#a7f3d0', fontWeight: 800, fontSize: 12, letterSpacing: '0.08em' }}>
+              QUICK START
+            </div>
+            <button
+              type="button"
+              style={{ ...btnStyle(true), width: '100%' }}
+              disabled={!sync.supported}
+              onClick={() => void sync.startMission(missionNameInput)}
+            >
+              1 · Start field mission (host)
+            </button>
+            <p style={{ color: '#64748b', margin: 0, fontSize: '0.88em', lineHeight: 1.4 }}>
+              Same Wi‑Fi hotspot for everyone. Host shares the mission code or join link; teammates
+              never need cell data for the link text.
+            </p>
+          </div>
         ) : null}
 
         <p style={{ color: '#94a3b8', margin: 0, lineHeight: 1.5 }}>
@@ -293,6 +338,21 @@ export default function MissionLinkPanel() {
             }}
           >
             {sync.lastNotice.message}
+          </div>
+        ) : null}
+        {linkHelp ? (
+          <div
+            style={{
+              padding: '8px 10px',
+              borderRadius: 8,
+              border: '1px solid rgba(56, 189, 248, 0.35)',
+              background: 'rgba(8, 47, 73, 0.45)',
+              color: '#bae6fd',
+              lineHeight: 1.45,
+              fontSize: '0.92em',
+            }}
+          >
+            {linkHelp}
           </div>
         ) : null}
 
@@ -390,23 +450,24 @@ export default function MissionLinkPanel() {
                   fontSize: 11,
                 }}
               />
+              <p style={{ color: '#64748b', margin: '8px 0 0', fontSize: '0.88em', lineHeight: 1.45 }}>
+                Paste the host&apos;s link text into the box (long-press → Paste). No clipboard
+                permission popup.
+              </p>
               <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
                 <button
                   type="button"
-                  style={btnStyle()}
-                  onClick={() => void pasteBundleFromClipboard('host')}
-                >
-                  Paste from clipboard
-                </button>
-                <button
-                  type="button"
-                  style={btnStyle()}
+                  style={{ ...btnStyle(true), flex: '1 1 140px' }}
+                  disabled={!pasteHost.trim()}
                   onClick={() => void sync.startJoinMission(pasteHost.trim())}
                 >
                   Join from bundle
                 </button>
                 <button type="button" style={btnStyle()} disabled={scanning} onClick={() => void runScan('host-offer')}>
                   {scanning ? 'Scanning…' : 'Scan join QR'}
+                </button>
+                <button type="button" style={btnStyle()} onClick={() => void tryClipboardIntoBox('host')}>
+                  Try auto-paste
                 </button>
               </div>
             </StepCard>
@@ -582,10 +643,10 @@ export default function MissionLinkPanel() {
                       type="button"
                       style={btnStyle()}
                       onClick={() =>
-                        void shareBundle(sync.pendingOfferEncoded, 'Signal One — join mission (copy)')
+                        void shareBundle(sync.pendingOfferEncoded, 'Signal One — join mission', 'join')
                       }
                     >
-                      Copy again
+                      Copy link text
                     </button>
                   </div>
                 </div>
@@ -635,8 +696,8 @@ export default function MissionLinkPanel() {
                   >
                     Share answer
                   </button>
-                  <button type="button" style={btnStyle()} onClick={() => void pasteBundleFromClipboard('answer')}>
-                    Paste answer
+                  <button type="button" style={btnStyle()} onClick={() => void tryClipboardIntoBox('answer')}>
+                    Try auto-paste
                   </button>
                 </div>
               </StepCard>

@@ -6,7 +6,8 @@ import { useTrailInspect } from '../hooks/useTrailInspect'
 import { getCorridorOfflineSummary } from '../lib/corridorPrefetch'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 import TrailInspectCard from './TrailInspectCard'
-import MissionSyncStatusChip from './MissionSyncStatusChip'
+import FieldStatusRail from './FieldStatusRail'
+import { mapBannerTopCss } from './hudLayout'
 import { touchFontSm, touchMinTarget } from './tokens'
 
 export default function NavigationHud() {
@@ -27,49 +28,14 @@ export default function NavigationHud() {
       : nav.offRouteAdvisory ??
         (corridor.approachingEdge ? 'Approaching offline map edge' : nav.corridorAlert)
 
-  const offlineMapLabel = corridor.prefetching
-    ? 'Caching offline map…'
-    : offlineMap.ready
-      ? `Offline map ready · ${offlineMap.tilesLoaded} tiles`
-      : typeof navigator !== 'undefined' && !navigator.onLine
-        ? 'Offline — no corridor tiles cached'
-        : null
-
   return (
     <>
-      <MissionSyncStatusChip />
-      {offlineMapLabel ? (
-        <div
-          style={{
-            position: 'absolute',
-            top: 'calc(env(safe-area-inset-top, 0px) + 88px)',
-            left: '50%',
-            transform: 'translateX(-50%)',
-            zIndex: 205,
-            pointerEvents: 'none',
-            padding: '4px 12px',
-            borderRadius: 999,
-            background: offlineMap.ready
-              ? 'rgba(4, 48, 42, 0.88)'
-              : 'rgba(40, 32, 8, 0.88)',
-            border: offlineMap.ready
-              ? '1px solid rgba(94, 234, 212, 0.45)'
-              : '1px solid rgba(251, 191, 36, 0.45)',
-            color: offlineMap.ready ? '#a7f3d0' : '#fde68a',
-            fontSize: '0.72rem',
-            fontWeight: 700,
-            letterSpacing: '0.04em',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {offlineMapLabel}
-        </div>
-      ) : null}
+      <FieldStatusRail />
       {hasNext && (
         <div
           style={{
             position: 'absolute',
-            top: 'calc(env(safe-area-inset-top, 0px) + 56px)',
+            top: mapBannerTopCss(),
             left: '50%',
             transform: 'translateX(-50%)',
             zIndex: 210,
@@ -181,7 +147,7 @@ export default function NavigationHud() {
         <div
           style={{
             position: 'absolute',
-            top: 'calc(env(safe-area-inset-top, 0px) + 56px)',
+            top: mapBannerTopCss(),
             left: '50%',
             transform: 'translateX(-50%)',
             zIndex: 216,

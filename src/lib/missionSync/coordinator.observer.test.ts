@@ -3,6 +3,22 @@ import { MissionSyncCoordinator } from './coordinator'
 import { isObserverOffer } from './linkRole'
 
 describe('MissionSyncCoordinator observer', () => {
+  it('mints observer token when missing on restored missions', () => {
+    const coord = new MissionSyncCoordinator({
+      missionId: 'm1',
+      missionName: 'Test',
+      joinToken: 'join123',
+      hostDeviceId: 'host1',
+      hostCallsign: 'Alpha',
+      role: 'member',
+      callbacks: {},
+    })
+    expect(coord.observerToken).toBe('')
+    const token = coord.ensureObserverToken()
+    expect(token.length).toBeGreaterThan(8)
+    expect(coord.observerToken).toBe(token)
+  })
+
   it('observer offer packet shape uses separate token and linkRole', async () => {
     const coord = new MissionSyncCoordinator({
       missionId: 'm1',
