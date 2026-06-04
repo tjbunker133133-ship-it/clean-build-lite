@@ -549,6 +549,18 @@ export default function MapCanvas() {
   }, [mapStatus])
 
   useEffect(() => {
+    if (activeLayer !== 'outdoor' || !mapRef.current) return
+    const sync = snapAssistSyncRef.current
+    if (typeof sync !== 'function') return
+    const t1 = window.setTimeout(sync, 80)
+    const t2 = window.setTimeout(sync, 600)
+    return () => {
+      window.clearTimeout(t1)
+      window.clearTimeout(t2)
+    }
+  }, [activeLayer, mapReady])
+
+  useEffect(() => {
     installMapLayerDiagHook(() => {
       const map = mapRef.current
       let styleLoaded = false

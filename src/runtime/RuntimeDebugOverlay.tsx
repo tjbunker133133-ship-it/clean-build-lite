@@ -6,6 +6,8 @@ import {
   type RuntimeSnapshot,
 } from './runtimeSnapshot'
 import { buildEnvAudit, logEnvAuditOnce } from './envAudit'
+import { useMissionSync } from '../context/MissionSyncContext'
+import { filterTeammatePresence } from '../lib/missionSync/presence'
 
 /**
  * Toggleable in-app runtime overlay.
@@ -117,6 +119,24 @@ function Row({ k, v, color }: { k: string; v: React.ReactNode; color?: string })
       <span style={{ color: 'rgba(160,180,170,0.85)' }}>{k}</span>
       <span style={{ color: color ?? 'rgba(220,230,220,0.94)', textAlign: 'right' }}>{v}</span>
     </div>
+  )
+}
+
+function MissionMeshSection() {
+  const sync = useMissionSync()
+  const teammates = filterTeammatePresence(sync.teamPresence, sync.deviceId)
+  const fieldPeers = sync.peers.filter((p) => p.linkRole === 'member').length
+  const live = fieldPeers > 0 || teammates.length > 0
+  return (
+    <Section title="mission mesh">
+      <Row k="phase" v={sync.phase} color={live ? '#7dff8a' : '#ffd76b'} />
+      <Row k="role" v={sync.role} />
+      <Row k="webrtc-peers" v={String(fieldPeers)} />
+      <Row k="presence" v={String(teammates.length)} />
+      <Row k="auto-apply-wp" v={String(sync.autoApply)} />
+      <Row k="last-sync" v={sync.lastSyncAt ? new Date(sync.lastSyncAt).toLocaleTimeString() : '—'} />
+      <Row k="transport" v={sync.signalingTransport} />
+    </Section>
   )
 }
 
@@ -374,6 +394,8 @@ function Body({ snap, onClose }: { snap: RuntimeSnapshot; onClose: () => void })
         <Row k="pending-sw-update" v={String(snap.runtimeContinuity.pendingSWUpdate)} />
         <Row k="gesture-active" v={String(snap.runtimeContinuity.gestureActive)} />
       </Section>
+
+      <MissionMeshSection />
 
       <Section title="network">
         <Row k="online" v={String(snap.network.online)} color={snap.network.online ? '#7dff8a' : '#ffd76b'} />

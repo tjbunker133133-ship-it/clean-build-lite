@@ -15,6 +15,7 @@ import {
   restoreArchivedWaypoint,
   statusForNewWaypoint,
 } from '../lib/waypointNavigation'
+import { emitWaypointRemoved } from '../lib/missionSync/waypointSyncEvents'
 
 const DEAD_MAN_DURATION = 300
 const APP_STORAGE_KEY = 'tactical_hud_app_state_v1'
@@ -267,6 +268,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const removeWaypoint = useCallback((id: string) => {
     dispatch({ type: 'REMOVE_WAYPOINT', payload: id })
+    emitWaypointRemoved(id)
   }, [])
 
   const selectWaypoint = useCallback((id: string | null) => {

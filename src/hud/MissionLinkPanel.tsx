@@ -116,6 +116,8 @@ export default function MissionLinkPanel() {
   )
   const linked = sync.peers.length > 0
   const fieldLinked = fieldPeers.length > 0
+  const teammateOnMap = filterTeammatePresence(sync.teamPresence, sync.deviceId).length > 0
+  const meshLive = fieldLinked || teammateOnMap
   const inMission = sync.role !== 'idle'
   const activeEncoded = sync.pendingOfferEncoded ?? sync.pendingAnswerEncoded
   const isObserver = sync.role === 'observer'
@@ -134,16 +136,37 @@ export default function MissionLinkPanel() {
       if (sync.phase === 'connecting') return 'Waiting for field lead…'
       return 'Monitor mode — read-only'
     }
-    if (sync.phase === 'connected') {
+    if (sync.phase === 'connected' || meshLive) {
       const obs = sync.observerCount > 0 ? ` · ${sync.observerCount} observer(s)` : ''
-      return `Linked · ${sync.peers.filter((p) => p.linkRole === 'member').length} teammate(s)${obs}`
+      const n = Math.max(
+        sync.peers.filter((p) => p.linkRole === 'member').length,
+        teammateOnMap ? 1 : 0,
+      )
+      return fieldLinked
+        ? `Linked · ${n} teammate(s)${obs}`
+        : `Mesh live · teammate on map${obs}`
     }
     if (sync.phase === 'awaiting-joiner') return 'Waiting for teammate to join'
     if (sync.phase === 'awaiting-host-answer') return 'Connecting to mission host…'
     if (sync.phase === 'connecting') return 'Joining mission…'
-    if (inMission) return 'Mission active — not linked yet'
+    if (inMission) return 'Mission active — finishing link…'
     return 'Not in a mission'
-  }, [sync.phase, sync.peers, sync.observerCount, sync.missionName, sync.monitorLive, sync.monitorTransport, sync.monitorTargetCallsign, inMission, isObserver])
+  }, [
+    sync.phase,
+    sync.peers,
+    sync.teamPresence,
+    sync.deviceId,
+    sync.observerCount,
+    sync.missionName,
+    sync.monitorLive,
+    sync.monitorTransport,
+    sync.monitorTargetCallsign,
+    inMission,
+    isObserver,
+    meshLive,
+    fieldLinked,
+    teammateOnMap,
+  ])
 
   useEffect(() => {
     setMissionNameInput(sync.missionName)

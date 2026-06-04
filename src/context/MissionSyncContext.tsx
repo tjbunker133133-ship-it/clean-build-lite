@@ -16,7 +16,14 @@ import {
   MissionSyncCoordinator,
   createMissionIds,
 } from '../lib/missionSync/coordinator'
-import { mergeMissionWaypoints } from '../lib/missionSync/merge'
+import {
+  mergeMissionWaypoints,
+  peerSnapshotStateFrom,
+  reconcilePeerSnapshotRemovals,
+  type PeerSnapshotState,
+} from '../lib/missionSync/merge'
+import { WAYPOINT_REMOVED_EVENT } from '../lib/missionSync/waypointSyncEvents'
+import { filterTeammatePresence } from '../lib/missionSync/presence'
 import {
   applyMissionCorridorHint,
   buildMissionCorridorHint,
@@ -263,8 +270,12 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
   const joinCodeJoinInFlightRef = useRef(false)
   const lastJoinCodeOfferRef = useRef('')
   const lastJoinCodeInputRef = useRef('')
+  const locallySuppressedWaypointIdsRef = useRef<Set<string>>(new Set())
+  const peerSnapshotStateRef = useRef<Map<string, PeerSnapshotState>>(new Map())
+  const prevWaypointIdsRef = useRef<Set<string>>(new Set())
   const pendingOfferEncodedRef = useRef<string | null>(null)
   const applyJoinAnswerRef = useRef<(encoded: string) => Promise<void>>(async () => {})
+  const createJoinOfferRef = useRef<() => Promise<void>>(async () => {})
   const observerChannelRef = useRef<ObserverMonitorChannel | null>(null)
   const waitingForMonitorOfferRef = useRef(false)
   const relayDedupeRef = useRef(new SyncWireDedupe())
@@ -375,11 +386,22 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       if (snapshot.missionName && snapshot.missionName !== missionName) {
         setMissionName(snapshot.missionName)
       }
-      const { merged, added, updated, archived } = mergeMissionWaypoints(
+      const prevPeer = peerSnapshotStateRef.current.get(snapshot.sourceDeviceId) ?? null
+      const { local: afterRemoval, removed: peerRemoved } = reconcilePeerSnapshotRemovals(
         waypoints,
-        snapshot.waypoints,
+        snapshot,
+        prevPeer,
       )
-      const wpChanged = added > 0 || updated > 0 || archived > 0
+      const { merged, added, updated, archived } = mergeMissionWaypoints(
+        afterRemoval,
+        snapshot.waypoints,
+        { suppressedIds: locallySuppressedWaypointIdsRef.current },
+      )
+      peerSnapshotStateRef.current.set(snapshot.sourceDeviceId, peerSnapshotStateFrom(snapshot))
+      for (const wp of snapshot.waypoints) {
+        if (wp.status === 'archived') locallySuppressedWaypointIdsRef.current.add(wp.id)
+      }
+      const wpChanged = added > 0 || updated > 0 || archived > 0 || peerRemoved > 0
       const snapChanged =
         snapshot.snapToTrailEnabled !== undefined &&
         snapshot.snapToTrailEnabled !== snapToTrailEnabled
@@ -397,6 +419,7 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
           if (added > 0) parts.push(`+${added} new`)
           if (updated > 0) parts.push(`${updated} updated`)
           if (archived > 0) parts.push(`${archived} archived`)
+          if (peerRemoved > 0) parts.push(`${peerRemoved} removed`)
           if (snapChanged) parts.push('trail mode synced')
           notify('success', `Team sync from ${snapshot.sourceCallsign}: ${parts.join(', ')}`)
         } else if (wpChanged) {
@@ -721,6 +744,9 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     setMonitorHostDeviceId(null)
     setMonitorTargetCallsign('Operator')
     saveMissionSession(null)
+    locallySuppressedWaypointIdsRef.current.clear()
+    peerSnapshotStateRef.current.clear()
+    prevWaypointIdsRef.current.clear()
     notify('info', wasObserver ? 'Mission monitor ended' : 'Mission link ended')
   }, [notify, role, setObserverToken, stopJoinCodeDiscovery, disposeHostJoinCodeRoom])
 
@@ -1081,7 +1107,13 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       }
       const answer = packet as MissionAnswerPacket
       const isObs = answerLinkRole(answer) === 'observer'
-      await coord.applyJoinAnswer(answer)
+      try {
+        await coord.applyJoinAnswer(answer)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Join answer failed'
+        notify('warn', `Could not finish teammate link — ${msg}. Tap Link another teammate.`)
+        return
+      }
       if (isObs) {
         setPendingObserverOfferEncoded(null)
       } else {
@@ -1104,6 +1136,10 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     applyJoinAnswerRef.current = applyJoinAnswer
   }, [applyJoinAnswer])
+
+  useEffect(() => {
+    createJoinOfferRef.current = createJoinOffer
+  }, [createJoinOffer])
 
   const applyObserverAnswer = applyJoinAnswer
 
@@ -1525,6 +1561,36 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
   }, [phase, pendingAnswerEncoded, deviceId])
 
   useEffect(() => {
+    if (!missionId || role !== 'member') return
+    const onRemoved = (ev: Event) => {
+      const id = (ev as CustomEvent<{ id: string }>).detail?.id
+      if (id) locallySuppressedWaypointIdsRef.current.add(id)
+      pushSnapshotNow()
+    }
+    window.addEventListener(WAYPOINT_REMOVED_EVENT, onRemoved)
+    return () => window.removeEventListener(WAYPOINT_REMOVED_EVENT, onRemoved)
+  }, [missionId, role, pushSnapshotNow])
+
+  useEffect(() => {
+    const ids = new Set(waypoints.map((w) => w.id))
+    for (const id of prevWaypointIdsRef.current) {
+      if (!ids.has(id)) locallySuppressedWaypointIdsRef.current.add(id)
+    }
+    prevWaypointIdsRef.current = ids
+  }, [waypoints])
+
+  useEffect(() => {
+    if (role !== 'member' || !missionId) return
+    const coord = coordinatorRef.current
+    if (!coord) return
+    const fieldLinks = coord.connectedPeers.filter((p) => p.linkRole === 'member').length
+    if (fieldLinks > 0 && phase !== 'connected') {
+      setPeers(coord.connectedPeers)
+      setPhase('connected')
+    }
+  }, [role, missionId, phase, peers.length])
+
+  useEffect(() => {
     const saved = loadMissionSession()
     if (!saved || saved.deviceId !== deviceId) return
     setMissionName(saved.missionName)
@@ -1586,7 +1652,14 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       callbacks: {},
     })
     wireCoordinator(coord)
-    notify('info', 'Mission restored — link a teammate to resume mesh sync')
+    if (isMissionHost) {
+      setPhase('awaiting-joiner')
+      notify('info', 'Mission restored — reopening join code for teammates')
+      void createJoinOfferRef.current()
+    } else {
+      setPhase('connecting')
+      notify('info', 'Mission restored — rejoin with mission code if mesh is quiet')
+    }
   }, [deviceId, setJoinToken, setObserverToken, callsign, wireCoordinator, notify, refreshCorridorStatus])
 
   const reconnectMesh = useCallback(async () => {

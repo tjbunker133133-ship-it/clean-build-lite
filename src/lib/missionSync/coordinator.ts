@@ -186,7 +186,13 @@ export class MissionSyncCoordinator {
     } else if (answer.joinToken !== this.joinToken) {
       throw new Error('Mission link token mismatch')
     }
-    const pending = this.pendingOffers.get(answer.hostPeerId)
+    let pending = this.pendingOffers.get(answer.hostPeerId)
+    if (!pending || pending.linkRole !== linkRole) {
+      const fallback = [...this.pendingOffers.values()]
+        .filter((p) => p.linkRole === linkRole)
+        .sort((a, b) => b.createdAt - a.createdAt)[0]
+      pending = fallback
+    }
     if (!pending || pending.linkRole !== linkRole) {
       throw new Error('No pending join slot for this answer')
     }
