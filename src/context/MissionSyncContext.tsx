@@ -56,6 +56,7 @@ import {
 import {
   isJoinCodeSignalingAvailable,
   joinCodeSignalingHint,
+  publishJoinCodeAnswerWithRetry,
 } from '../lib/missionSync/missionJoinSignaling'
 import { MissionJoinCodeChannel } from '../lib/missionSync/missionJoinCodeChannel'
 import {
@@ -142,6 +143,8 @@ export type MissionSyncContextValue = {
   teamBursts: MissionBurst[]
   sendTeamCheckIn: (note?: string) => void
   sendTeamBurst: (text: string) => boolean
+  /** True while browser code-room join is active (request-offer pings). */
+  joinCodeSearching: boolean
   discoverMissionOnLan: (codeInput: string) => Promise<boolean>
   /** Join from encoded offer; returns answer bundle when successful. */
   joinMissionFromOffer: (encodedOffer: string) => Promise<string | null>
@@ -256,7 +259,10 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
   const joinCodeDiscoverPingRef = useRef<number | null>(null)
   const joinCodeDiscoverTimeoutRef = useRef<number | null>(null)
   const joinCodeDiscoveringRef = useRef(false)
+  const [joinCodeSearching, setJoinCodeSearching] = useState(false)
+  const joinCodeJoinInFlightRef = useRef(false)
   const lastJoinCodeOfferRef = useRef('')
+  const lastJoinCodeInputRef = useRef('')
   const pendingOfferEncodedRef = useRef<string | null>(null)
   const applyJoinAnswerRef = useRef<(encoded: string) => Promise<void>>(async () => {})
   const observerChannelRef = useRef<ObserverMonitorChannel | null>(null)
@@ -633,6 +639,7 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
 
   const stopJoinCodeDiscovery = useCallback(() => {
     joinCodeDiscoveringRef.current = false
+    setJoinCodeSearching(false)
     if (joinCodeDiscoverPingRef.current != null) {
       window.clearInterval(joinCodeDiscoverPingRef.current)
       joinCodeDiscoverPingRef.current = null
@@ -1337,31 +1344,41 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
 
       if (isJoinCodeSignalingAvailable()) {
         joinCodeDiscoveringRef.current = true
+        setJoinCodeSearching(true)
+        lastJoinCodeInputRef.current = normalized
         const channel = new MissionJoinCodeChannel(normalized)
         joinCodeDiscoverRoomRef.current = { normalized, channel }
         channel.connect({
           onOffer: (msg) => {
             if (!joinCodeDiscoveringRef.current || msg.fromDeviceId === deviceId) return
             if (msg.encoded === lastJoinCodeOfferRef.current) return
+            if (joinCodeJoinInFlightRef.current) return
             lastJoinCodeOfferRef.current = msg.encoded
+            joinCodeJoinInFlightRef.current = true
             void (async () => {
-              const answer = await joinMissionFromOffer(msg.encoded)
-              if (!answer) {
-                notify('warn', 'Could not complete join — ask host to keep Mission Link open.')
-                return
-              }
-              const sentCode = await channel.publish({
-                kind: 'answer',
-                encoded: answer,
-                fromDeviceId: deviceId,
-                at: Date.now(),
-              })
-              if (sentCode) {
-                setSignalingTransport('share')
-                notify('success', `Linked to mission ${code} — you are on the team mesh.`)
-                stopJoinCodeDiscovery()
-              } else {
-                notify('warn', 'Join almost done — host may need to tap Join again on your tablet.')
+              try {
+                const answer = await joinMissionFromOffer(msg.encoded)
+                if (!answer) {
+                  notify('warn', 'Could not complete join — ask host to keep Mission Link open.')
+                  return
+                }
+                const sentCode = await publishJoinCodeAnswerWithRetry({
+                  code: normalized,
+                  encoded: answer,
+                  fromDeviceId: deviceId,
+                })
+                if (sentCode) {
+                  setSignalingTransport('share')
+                  notify('success', `Linked to mission ${code} — finishing secure link…`)
+                  stopJoinCodeDiscovery()
+                } else {
+                  notify(
+                    'warn',
+                    'Host did not receive your join — keep Mission Link open on both devices; retrying…',
+                  )
+                }
+              } finally {
+                joinCodeJoinInFlightRef.current = false
               }
             })()
           },
@@ -1375,7 +1392,7 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
           })
         }
         void pingHost()
-        joinCodeDiscoverPingRef.current = window.setInterval(pingHost, 2_000)
+        joinCodeDiscoverPingRef.current = window.setInterval(pingHost, 1_500)
         joinCodeDiscoverTimeoutRef.current = window.setTimeout(() => {
           if (!joinCodeDiscoveringRef.current) return
           notify(
@@ -1478,9 +1495,34 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     void publishJoinOfferToCodeRoom(pendingOfferEncoded)
     const id = window.setInterval(() => {
       void publishJoinOfferToCodeRoom(pendingOfferEncoded)
-    }, 8_000)
+    }, 5_000)
     return () => window.clearInterval(id)
   }, [isFieldMember, pendingOfferEncoded, phase, publishJoinOfferToCodeRoom])
+
+  useEffect(() => {
+    if (phase !== 'awaiting-host-answer' || !pendingAnswerEncoded) return
+    const code = lastJoinCodeInputRef.current
+    if (code.length !== 6) return
+    let cancelled = false
+    const pushAnswer = () => {
+      if (cancelled) return
+      void publishJoinCodeAnswerWithRetry(
+        { code, encoded: pendingAnswerEncoded, fromDeviceId: deviceId },
+        2,
+      )
+    }
+    pushAnswer()
+    const id = window.setInterval(pushAnswer, 3_000)
+    const stop = window.setTimeout(() => {
+      cancelled = true
+      window.clearInterval(id)
+    }, 45_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+      window.clearTimeout(stop)
+    }
+  }, [phase, pendingAnswerEncoded, deviceId])
 
   useEffect(() => {
     const saved = loadMissionSession()
@@ -1594,6 +1636,7 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       teamBursts: filterRecentBursts(teamBursts),
       sendTeamCheckIn,
       sendTeamBurst,
+      joinCodeSearching,
       discoverMissionOnLan,
       joinMissionFromOffer,
       startMission,
@@ -1648,6 +1691,7 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       teamBursts,
       sendTeamCheckIn,
       sendTeamBurst,
+      joinCodeSearching,
       discoverMissionOnLan,
       joinMissionFromOffer,
       lastSyncAt,

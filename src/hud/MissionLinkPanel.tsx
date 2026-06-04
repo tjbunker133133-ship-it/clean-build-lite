@@ -103,7 +103,6 @@ export default function MissionLinkPanel() {
   const [monitorMissionId, setMonitorMissionId] = useState('')
   const [monitorToken, setMonitorToken] = useState('')
   const [pasteObserverAnswer, setPasteObserverAnswer] = useState('')
-  const [lanSearching, setLanSearching] = useState(false)
   const [linkHelp, setLinkHelp] = useState<string | null>(null)
 
   const fieldPeers = useMemo(
@@ -180,9 +179,10 @@ export default function MissionLinkPanel() {
     sync.pendingObserverOfferEncoded,
   ])
 
-  useEffect(() => {
-    if (lanSearching && sync.phase === 'connected') setLanSearching(false)
-  }, [lanSearching, sync.phase])
+  const codeJoinBusy =
+    sync.joinCodeSearching ||
+    sync.phase === 'awaiting-host-answer' ||
+    sync.phase === 'connecting'
 
   const shareBundle = useCallback(
     async (
@@ -244,12 +244,7 @@ export default function MissionLinkPanel() {
   )
 
   const runLanJoin = useCallback(async () => {
-    setLanSearching(true)
-    try {
-      await sync.discoverMissionOnLan(joinCodeInput)
-    } finally {
-      window.setTimeout(() => setLanSearching(false), 12_000)
-    }
+    await sync.discoverMissionOnLan(joinCodeInput)
   }, [sync, joinCodeInput])
 
   const joinCodePreview = isValidJoinCodeInput(joinCodeInput)
@@ -457,18 +452,25 @@ export default function MissionLinkPanel() {
                   textAlign: 'center',
                 }}
               />
-              {joinCodePreview ? (
+              {joinCodePreview && !codeJoinBusy ? (
+                <div style={{ color: '#94a3b8', fontSize: '0.88em', marginTop: 6, textAlign: 'center' }}>
+                  Code entered: <strong style={{ color: '#5eead4' }}>{joinCodePreview}</strong> — tap Join below
+                </div>
+              ) : null}
+              {codeJoinBusy ? (
                 <div style={{ color: '#5eead4', fontSize: '0.88em', marginTop: 6, textAlign: 'center', fontWeight: 700 }}>
-                  Ready to join {joinCodePreview}
+                  {sync.phase === 'connected'
+                    ? `Linked · ${formatJoinCode(joinCodeInput)}`
+                    : `Connecting to ${joinCodePreview ?? formatJoinCode(joinCodeInput)}…`}
                 </div>
               ) : null}
               <button
                 type="button"
                 style={{ ...btnStyle(true), width: '100%', marginTop: 10 }}
-                disabled={!isValidJoinCodeInput(joinCodeInput) || lanSearching || !codeJoinReady}
+                disabled={!isValidJoinCodeInput(joinCodeInput) || codeJoinBusy || !codeJoinReady}
                 onClick={() => void runLanJoin()}
               >
-                {lanSearching
+                {codeJoinBusy
                   ? 'Connecting…'
                   : codeJoinReady
                     ? 'Join with mission code'

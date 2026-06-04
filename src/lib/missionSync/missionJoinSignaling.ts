@@ -54,6 +54,26 @@ export async function publishJoinCodeAnswer(args: {
   }
 }
 
+/** Fresh channel per attempt — discovery room may be torn down before answer is sent. */
+export async function publishJoinCodeAnswerWithRetry(
+  args: {
+    code: string
+    encoded: string
+    fromDeviceId: string
+  },
+  attempts = 4,
+): Promise<boolean> {
+  const normalized = normalizeJoinCodeInput(args.code)
+  if (normalized.length !== 6) return false
+  for (let i = 0; i < attempts; i += 1) {
+    if (await publishJoinCodeAnswer(args)) return true
+    if (i < attempts - 1) {
+      await new Promise((r) => setTimeout(r, 600 + i * 400))
+    }
+  }
+  return false
+}
+
 export function subscribeJoinCodeRoom(
   codeInput: string,
   handlers: {
