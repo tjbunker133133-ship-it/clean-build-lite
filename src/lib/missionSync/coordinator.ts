@@ -156,13 +156,15 @@ export class MissionSyncCoordinator {
     session.createOutboundChannel()
     const sdp = await session.createOffer()
     this.pendingOffers.set(peerId, { session, linkRole, createdAt: Date.now() })
+    const meshRelayToken = this.ensureObserverToken()
     const packet: MissionOfferPacket = {
       t: 'mission-offer',
       v: MISSION_SYNC_PROTOCOL_VERSION,
       missionId: this.missionId,
       missionName: this.missionName,
       joinToken: linkRole === 'member' ? this.joinToken : '',
-      observerToken: linkRole === 'observer' ? this.observerToken : undefined,
+      /** Shared by field teammates + watchers for Supabase mesh relay (internet fallback). */
+      observerToken: meshRelayToken,
       linkRole,
       hostDeviceId: this.hostDeviceId,
       hostCallsign: this.hostCallsign,

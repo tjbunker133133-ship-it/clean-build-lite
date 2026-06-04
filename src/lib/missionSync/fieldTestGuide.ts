@@ -3,8 +3,9 @@
 export const FIELD_WALK_WATCHER_STEPS = [
   'Phone: Start field mission (you carry GPS on the walk).',
   'Phone: Share live map link → open on home tablet (one tap, no paste).',
-  'Optional: same Wi‑Fi — Share join link for a teammate tablet (mesh).',
-  'Walk with cell: watcher keeps your map via internet relay (tablet can stay on home Wi‑Fi).',
+  'Optional: same Wi‑Fi / Bluetooth — Share join link for a teammate tablet (local mesh first).',
+  'Walk with cell: mission stays linked over internet relay when Wi‑Fi/BT drops (both need service).',
+  'Watcher sees every field device on the map (phone + teammate tablets).',
 ] as const
 
 export function fieldWalkWatcherSummary(observerCount: number, meshPeers: number): string {

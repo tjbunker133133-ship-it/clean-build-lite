@@ -242,8 +242,11 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
   const isFieldMember = role === 'member'
   const isObserver = role === 'observer'
   const observerSignalingAvailable = isObserverSignalingAvailable()
-  const monitorRelayActive =
-    isFieldMember && Boolean(observerTokenState) && observerSignalingAvailable
+  /** Supabase mission channel — local P2P first; internet relay when mesh peers drop. */
+  const missionRelayActive =
+    Boolean(missionId && observerTokenState && observerSignalingAvailable) &&
+    (isFieldMember || isObserver)
+  const monitorRelayActive = isFieldMember && missionRelayActive
   const observerCount = useMemo(
     () => peers.filter((p) => p.linkRole === 'observer').length,
     [peers],
@@ -506,6 +509,16 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
               setPhase('connected')
             } else if (isObserver && observerSignalingAvailable) {
               setPhase('connecting')
+            } else if (
+              isFieldMember &&
+              missionRelayActive &&
+              (Date.now() - relayLastAtRef.current < 45_000 || observerSignalingAvailable)
+            ) {
+              setPhase('connected')
+              notify(
+                'info',
+                'Direct mesh link dropped — mission sync continues over internet relay when online.',
+              )
             } else {
               setPhase('awaiting-joiner')
             }
@@ -537,24 +550,31 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
             return
           }
           if (
-            coordinatorRef.current?.role === 'observer' &&
-            (msg.includes('failed') || msg.includes('ice'))
+            (msg.includes('failed') || msg.includes('ice')) &&
+            (coordinatorRef.current?.role === 'observer' ||
+              (isFieldMember && missionRelayActive))
           ) {
             if (Date.now() - relayLastAtRef.current < 45_000 || observerSignalingAvailable) {
-              setMonitorTransport((prev) => (prev === 'direct' ? 'relay' : prev))
+              if (coordinatorRef.current?.role === 'observer') {
+                setMonitorTransport((prev) => (prev === 'direct' ? 'relay' : prev))
+              }
               setPhase('connected')
               notify(
                 'info',
-                'Direct monitor link dropped — still receiving updates over internet relay.',
+                coordinatorRef.current?.role === 'observer'
+                  ? 'Direct monitor link dropped — still receiving updates over internet relay.'
+                  : 'Direct teammate link dropped — mission stays on internet relay when online.',
               )
               return
             }
-            setPhase('failed')
-            notify(
-              'warn',
-              'Monitor link failed — check cell/Wi‑Fi, or ask field lead to resend monitor bundle.',
-            )
-            return
+            if (coordinatorRef.current?.role === 'observer') {
+              setPhase('failed')
+              notify(
+                'warn',
+                'Monitor link failed — check cell/Wi‑Fi, or ask field lead to resend monitor bundle.',
+              )
+              return
+            }
           }
           setPhase('failed')
           notify('warn', msg)
@@ -574,7 +594,10 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       buildSnapshot,
       attachFieldMonitorRelay,
       isObserver,
+      isFieldMember,
+      missionRelayActive,
       observerSignalingAvailable,
+      peers,
     ],
   )
 
@@ -982,6 +1005,7 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       }
       endMission()
       setJoinToken(offer.joinToken)
+      if (offer.observerToken) setObserverToken(offer.observerToken)
       setMissionId(offer.missionId)
       setMissionName(offer.missionName)
       setRole('member')
@@ -990,6 +1014,7 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
         missionId: offer.missionId,
         missionName: offer.missionName,
         joinToken: offer.joinToken,
+        observerToken: offer.observerToken ?? '',
         hostDeviceId: offer.hostDeviceId,
         hostCallsign: offer.hostCallsign,
         role: 'member',
@@ -1007,6 +1032,7 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
         role: 'member',
         deviceId,
         joinToken: offer.joinToken,
+        observerToken: offer.observerToken,
         hostDeviceId: offer.hostDeviceId,
         updatedAt: Date.now(),
       })
@@ -1047,7 +1073,8 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
         void applyJoinAnswer(msg.encoded)
       },
       onRelay: (wire, fromDeviceId) => {
-        if (!isObserver || fromDeviceId === deviceId) return
+        if (fromDeviceId === deviceId) return
+        if (!isObserver && !isFieldMember) return
         handleRelayWire(wire)
       },
     })
@@ -1276,11 +1303,21 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     if (!saved.joinToken) return
     sessionCoordinatorReadyRef.current = true
     let observerToken = saved.observerToken ?? ''
+    const isMissionHost = !saved.hostDeviceId || saved.hostDeviceId === saved.deviceId
     if (!observerToken) {
-      observerToken = createMissionIds().observerToken
+      if (isMissionHost) {
+        observerToken = createMissionIds().observerToken
+        setObserverToken(observerToken)
+        saveMissionSession({ ...saved, observerToken, updatedAt: Date.now() })
+        notify('info', 'Monitor token added for this mission — you can share remote watch links now.')
+      } else {
+        notify(
+          'warn',
+          'Ask mission lead for a fresh join link to restore internet mesh when you leave Wi‑Fi.',
+        )
+      }
+    } else {
       setObserverToken(observerToken)
-      saveMissionSession({ ...saved, observerToken, updatedAt: Date.now() })
-      notify('info', 'Monitor token added for this mission — you can share remote watch links now.')
     }
     const coord = new MissionSyncCoordinator({
       missionId: saved.missionId,

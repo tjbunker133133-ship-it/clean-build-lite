@@ -4,6 +4,8 @@ import {
   isValidEmail,
   markTacticalSetupComplete,
   removeTacticalContact,
+  tacticalProfilePersisted,
+  tacticalProfileStorageWritable,
   updateTacticalContactAlertChannel,
   type TacticalProfile,
 } from '../lib/tacticalProfile'
@@ -31,7 +33,9 @@ export default function TacticalProfileEditor({ compact = false, onSaved }: Prop
     alert_channel: 'both' as AlertChannel,
   })
   const [error, setError] = useState<string | null>(null)
+  const [savedOk, setSavedOk] = useState(false)
   const [busy, setBusy] = useState(false)
+  const storageWritable = tacticalProfileStorageWritable()
 
   const isMobile = getDeviceProfile().interactionMode === 'mobile'
   const fontSm = touchFontSm(isMobile)
@@ -52,6 +56,13 @@ export default function TacticalProfileEditor({ compact = false, onSaved }: Prop
 
   const saveIdentity = () => {
     setError(null)
+    setSavedOk(false)
+    if (!storageWritable) {
+      setError(
+        'Could not save on this device — turn off Private Browsing, allow site storage in Safari settings, then try again.',
+      )
+      return
+    }
     const display_name = draft.display_name.trim()
     const reply_to_email = draft.reply_to_email.trim()
     if (!display_name) {
@@ -66,13 +77,20 @@ export default function TacticalProfileEditor({ compact = false, onSaved }: Prop
       setError('Reply-to email format is invalid.')
       return
     }
-    save({
+    const next = save({
       display_name,
       reply_to_email,
       phone: draft.phone.trim(),
       setup_complete: true,
     })
     markTacticalSetupComplete(true)
+    if (!tacticalProfilePersisted(next)) {
+      setError(
+        'Save did not stick — check Safari storage (Settings → Safari → Advanced) or exit Private mode, then tap SAVE IDENTITY again.',
+      )
+      return
+    }
+    setSavedOk(true)
     onSaved?.()
   }
 
@@ -80,7 +98,14 @@ export default function TacticalProfileEditor({ compact = false, onSaved }: Prop
     if (busy) return
     setBusy(true)
     setError(null)
-    const { error: addErr } = addTacticalContact({
+    if (!storageWritable) {
+      setBusy(false)
+      setError(
+        'Could not save contact — allow site storage (Safari) or exit Private Browsing, then try again.',
+      )
+      return
+    }
+    const { error: addErr, profile: afterAdd } = addTacticalContact({
       name: contactForm.name,
       email: contactForm.email,
       phone: contactForm.phone,
@@ -91,6 +116,11 @@ export default function TacticalProfileEditor({ compact = false, onSaved }: Prop
       setError(addErr)
       return
     }
+    if (!tacticalProfilePersisted(afterAdd)) {
+      setError('Contact did not save — check device storage settings and try again.')
+      return
+    }
+    setSavedOk(true)
     setContactForm({ name: '', email: '', phone: '', alert_channel: 'both' })
     onSaved?.()
   }
@@ -181,6 +211,15 @@ export default function TacticalProfileEditor({ compact = false, onSaved }: Prop
       >
         SAVE IDENTITY
       </button>
+      {savedOk && (
+        <div style={{ fontSize: fontSm, color: '#7dff8a', fontWeight: 700 }}>Saved on this device.</div>
+      )}
+      {!storageWritable && (
+        <div style={{ fontSize: fontSm, color: '#ffd166', lineHeight: 1.4 }}>
+          Storage blocked — common on iPhone Private Browsing. Use normal Safari or install to Home Screen, then save
+          again.
+        </div>
+      )}
 
       <div style={{ fontSize: fontSm, color: '#9ea7a0', letterSpacing: '0.08em', marginTop: 4 }}>
         EMERGENCY CONTACTS (SHARED)

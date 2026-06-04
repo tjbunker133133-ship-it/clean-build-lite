@@ -88,6 +88,36 @@ function safeSet(key: string, value: string): void {
   }
 }
 
+/** True when a write round-trips (iOS private mode / quota often fails silently). */
+export function tacticalProfileStorageWritable(): boolean {
+  if (typeof localStorage === 'undefined') return false
+  const probe = `${TACTICAL_PROFILE_STORAGE_KEY}__probe`
+  try {
+    localStorage.setItem(probe, '1')
+    const ok = localStorage.getItem(probe) === '1'
+    localStorage.removeItem(probe)
+    return ok
+  } catch {
+    return false
+  }
+}
+
+export function tacticalProfilePersisted(profile: TacticalProfile): boolean {
+  const raw = safeGet(TACTICAL_PROFILE_STORAGE_KEY)
+  if (!raw) return false
+  try {
+    const loaded = normalizeProfile(JSON.parse(raw))
+    return (
+      loaded.display_name === profile.display_name &&
+      loaded.reply_to_email === profile.reply_to_email &&
+      loaded.phone === profile.phone &&
+      loaded.contacts.length === profile.contacts.length
+    )
+  } catch {
+    return false
+  }
+}
+
 function normalizeContact(raw: unknown): TacticalContact | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
   const o = raw as Record<string, unknown>

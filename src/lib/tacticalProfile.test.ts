@@ -9,6 +9,8 @@ import {
   migrateTacticalProfileIfNeeded,
   rescueContactsFromProfile,
   saveTacticalProfile,
+  tacticalProfilePersisted,
+  tacticalProfileStorageWritable,
 } from './tacticalProfile'
 
 const store = new Map<string, string>()
@@ -62,6 +64,18 @@ describe('assessTacticalProfile', () => {
 })
 
 describe('persistence', () => {
+  it('reports storage writable in normal localStorage', () => {
+    expect(tacticalProfileStorageWritable()).toBe(true)
+  })
+
+  it('detects failed persist after save', () => {
+    const profile = saveTacticalProfile({
+      display_name: 'Field Op',
+      reply_to_email: 'op@example.com',
+    })
+    expect(tacticalProfilePersisted(profile)).toBe(true)
+  })
+
   it('round-trips profile through localStorage', () => {
     saveTacticalProfile({
       display_name: 'Field Op',
