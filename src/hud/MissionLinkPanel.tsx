@@ -147,19 +147,35 @@ export default function MissionLinkPanel() {
     setMissionNameInput(sync.missionName)
   }, [sync.missionName])
 
+  const qrEncoded =
+    activeEncoded ??
+    (sync.pendingObserverOfferFitsQr ? sync.pendingObserverOfferEncoded : null)
+
   useEffect(() => {
     let cancelled = false
-    if (!activeEncoded || !(sync.pendingOfferFitsQr || sync.pendingAnswerFitsQr)) {
+    const enc = qrEncoded
+    const fits =
+      enc === activeEncoded
+        ? sync.pendingOfferFitsQr || sync.pendingAnswerFitsQr
+        : sync.pendingObserverOfferFitsQr
+    if (!enc || !fits) {
       setQrUrl(null)
       return
     }
-    void missionPacketToQrDataUrl(activeEncoded).then((url) => {
+    void missionPacketToQrDataUrl(enc).then((url) => {
       if (!cancelled) setQrUrl(url)
     })
     return () => {
       cancelled = true
     }
-  }, [activeEncoded, sync.pendingOfferFitsQr, sync.pendingAnswerFitsQr])
+  }, [
+    qrEncoded,
+    activeEncoded,
+    sync.pendingOfferFitsQr,
+    sync.pendingAnswerFitsQr,
+    sync.pendingObserverOfferFitsQr,
+    sync.pendingObserverOfferEncoded,
+  ])
 
   useEffect(() => {
     if (lanSearching && sync.phase === 'connected') setLanSearching(false)
@@ -472,22 +488,25 @@ export default function MissionLinkPanel() {
               </div>
             </StepCard>
 
-            <StepCard step={2} title="Watch someone hike or ride" active>
+            <StepCard step={2} title="Watch someone (live map link)" active>
               <p style={{ color: '#94a3b8', margin: 0, lineHeight: 1.45, fontSize: '0.92em' }}>
-                They text you a <strong style={{ color: '#cbd5e1' }}>monitor invite</strong> from their
-                app. You see their live GPS on <strong style={{ color: '#cbd5e1' }}>your map</strong> — no
-                ongoing texts, everything stays in Signal One.
+                They tap <strong style={{ color: '#cbd5e1' }}>Share live map link</strong> and text you one
+                link. Open it in Messages — Signal One connects and shows their GPS on{' '}
+                <strong style={{ color: '#cbd5e1' }}>your map</strong>. No copy/paste.
               </p>
-              {sync.observerSignalingAvailable ? (
-                <>
-                  <div style={{ marginTop: 10, display: 'grid', gap: 8 }}>
-                    <div style={{ color: '#64748b', fontSize: '0.85em', fontWeight: 700 }}>
-                      Recommended — paste from their text message
-                    </div>
+              <p style={{ color: '#7dffa8', margin: '10px 0 0', fontSize: '0.85em', lineHeight: 1.45 }}>
+                Already got a link? Tap it again or reopen the HUD — connection starts automatically.
+              </p>
+              <details style={{ marginTop: 12 }}>
+                <summary style={{ color: '#94a3b8', cursor: 'pointer', fontSize: '0.9em' }}>
+                  Advanced — paste link or technical bundle
+                </summary>
+                {sync.observerSignalingAvailable ? (
+                  <div style={{ marginTop: 8, display: 'grid', gap: 8 }}>
                     <input
                       value={monitorMissionId}
                       onChange={(e) => setMonitorMissionId(e.target.value)}
-                      placeholder="Mission ID"
+                      placeholder="Mission ID (only if link failed)"
                       style={{
                         width: '100%',
                         padding: 8,
@@ -502,7 +521,7 @@ export default function MissionLinkPanel() {
                     <input
                       value={monitorToken}
                       onChange={(e) => setMonitorToken(e.target.value)}
-                      placeholder="Monitor token"
+                      placeholder="Watch token (only if link failed)"
                       style={{
                         width: '100%',
                         padding: 8,
@@ -516,30 +535,17 @@ export default function MissionLinkPanel() {
                     />
                     <button
                       type="button"
-                      style={{ ...btnStyle(true), width: '100%' }}
+                      style={{ ...btnStyle(), width: '100%' }}
                       onClick={() => void sync.monitorMissionFromToken(monitorMissionId, monitorToken)}
                     >
-                      Start watching on map
+                      Connect with ID + token
                     </button>
                   </div>
-                  <p style={{ color: '#64748b', margin: '10px 0 0', fontSize: '0.85em', lineHeight: 1.45 }}>
-                    Then ask them to tap <strong style={{ color: '#94a3b8' }}>Create monitor link</strong> on
-                    their phone. Map follow starts automatically when GPS arrives.
-                  </p>
-                </>
-              ) : (
-                <p style={{ color: '#fbbf24', margin: '8px 0 0', fontSize: '0.85em' }}>
-                  Auto-connect needs Supabase in this build — use monitor bundle below instead.
-                </p>
-              )}
-              <details style={{ marginTop: 12 }}>
-                <summary style={{ color: '#94a3b8', cursor: 'pointer', fontSize: '0.9em' }}>
-                  Or paste full monitor bundle
-                </summary>
+                ) : null}
                 <textarea
                   value={pasteMonitor}
                   onChange={(e) => setPasteMonitor(e.target.value)}
-                  placeholder="Paste monitor bundle…"
+                  placeholder="Paste technical monitor bundle…"
                   rows={3}
                   style={{
                     width: '100%',
@@ -790,38 +796,79 @@ export default function MissionLinkPanel() {
         {isFieldMember && inMission ? (
           <StepCard step={4} title="Let someone watch you" active>
             <p style={{ color: '#94a3b8', margin: 0, lineHeight: 1.45, fontSize: '0.92em' }}>
-              Share a monitor invite so a parent or friend sees your live GPS on their map — anywhere on the
-              internet, read-only.
+              Send one <strong style={{ color: '#cbd5e1' }}>live map link</strong> — parent or friend taps it
+              and sees your GPS on their phone (read-only, anywhere with signal).
             </p>
             <button
               type="button"
               style={{ ...btnStyle(true), width: '100%', marginTop: 10 }}
               onClick={() => void sync.shareMonitorInvite()}
             >
-              Share monitor invite
+              Share live map link
             </button>
             <p style={{ color: '#64748b', margin: '8px 0 0', fontSize: '0.85em', lineHeight: 1.45 }}>
-              They tap <strong style={{ color: '#94a3b8' }}>Start watching on map</strong>, then you tap the
-              button below when they are ready.
+              Creates the watch session and opens your share sheet (Messages, etc.). They only tap the link —
+              you do not need a second step.
             </p>
-            <button
-              type="button"
-              style={{ ...btnStyle(), width: '100%', marginTop: 10 }}
-              onClick={() => void sync.createObserverInvite()}
-            >
-              Create monitor link
-            </button>
-            {sync.pendingObserverOfferEncoded ? (
+            {sync.pendingObserverOfferEncoded && sync.pendingObserverOfferFitsQr && qrUrl ? (
+              <div style={{ marginTop: 12, display: 'grid', gap: 8, justifyItems: 'center' }}>
+                <span style={{ color: '#94a3b8', fontSize: '0.85em' }}>Or let them scan this QR</span>
+                <img src={qrUrl} alt="Watch me QR" style={{ width: 180, height: 180 }} />
+              </div>
+            ) : null}
+            <details style={{ marginTop: 12 }}>
+              <summary style={{ color: '#94a3b8', cursor: 'pointer', fontSize: '0.9em' }}>
+                Advanced — technical bundle
+              </summary>
               <button
                 type="button"
                 style={{ ...btnStyle(), width: '100%', marginTop: 8 }}
-                onClick={() =>
-                  void shareBundle(sync.pendingObserverOfferEncoded, 'Signal One — mission monitor')
-                }
+                onClick={() => void sync.createObserverInvite()}
               >
-                Share technical bundle (advanced)
+                Copy technical bundle
               </button>
-            ) : null}
+              {sync.pendingObserverOfferEncoded ? (
+                <button
+                  type="button"
+                  style={{ ...btnStyle(), width: '100%', marginTop: 8 }}
+                  onClick={() =>
+                    void shareBundle(sync.pendingObserverOfferEncoded, 'Signal One — mission monitor', 'monitor')
+                  }
+                >
+                  Share bundle file
+                </button>
+              ) : null}
+              {sync.pendingObserverOfferEncoded ? (
+                <div style={{ marginTop: 12 }}>
+                  <p style={{ color: '#94a3b8', margin: '0 0 8px', fontSize: '0.9em', lineHeight: 1.45 }}>
+                    If link auto-connect fails, paste observer answer bundle:
+                  </p>
+                  <textarea
+                    value={pasteObserverAnswer}
+                    onChange={(e) => setPasteObserverAnswer(e.target.value)}
+                    placeholder="Paste monitor answer bundle…"
+                    rows={2}
+                    style={{
+                      width: '100%',
+                      padding: 8,
+                      borderRadius: 8,
+                      border: '1px solid #334155',
+                      background: '#0f172a',
+                      color: '#e2e8f0',
+                      fontFamily: 'ui-monospace, monospace',
+                      fontSize: 11,
+                    }}
+                  />
+                  <button
+                    type="button"
+                    style={{ ...btnStyle(true), width: '100%', marginTop: 8 }}
+                    onClick={() => void sync.applyObserverAnswer(pasteObserverAnswer.trim())}
+                  >
+                    Complete monitor link
+                  </button>
+                </div>
+              ) : null}
+            </details>
             {sync.observerCount > 0 ? (
               <p style={{ color: '#86efac', margin: '8px 0 0', fontSize: '0.9em' }}>
                 {sync.observerCount} watcher(s) live on map
@@ -831,36 +878,6 @@ export default function MissionLinkPanel() {
               <p style={{ color: '#64748b', margin: '10px 0 0', fontSize: '0.85em', lineHeight: 1.45 }}>
                 Tip: TURN in production improves direct links; internet relay works without it.
               </p>
-            ) : null}
-            {sync.pendingObserverOfferEncoded ? (
-              <div style={{ marginTop: 12 }}>
-                <p style={{ color: '#94a3b8', margin: '0 0 8px', fontSize: '0.9em', lineHeight: 1.45 }}>
-                  If internet signaling is off, paste the observer&apos;s answer bundle here:
-                </p>
-                <textarea
-                  value={pasteObserverAnswer}
-                  onChange={(e) => setPasteObserverAnswer(e.target.value)}
-                  placeholder="Paste monitor answer bundle…"
-                  rows={2}
-                  style={{
-                    width: '100%',
-                    padding: 8,
-                    borderRadius: 8,
-                    border: '1px solid #334155',
-                    background: '#0f172a',
-                    color: '#e2e8f0',
-                    fontFamily: 'ui-monospace, monospace',
-                    fontSize: 11,
-                  }}
-                />
-                <button
-                  type="button"
-                  style={{ ...btnStyle(true), width: '100%', marginTop: 8 }}
-                  onClick={() => void sync.applyObserverAnswer(pasteObserverAnswer.trim())}
-                >
-                  Complete monitor link
-                </button>
-              </div>
             ) : null}
           </StepCard>
         ) : null}

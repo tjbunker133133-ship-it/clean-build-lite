@@ -56,17 +56,27 @@ export function subscribeObserverSignals(
   return ch.connect(handlers)
 }
 
+/** @deprecated Prefer buildWatchMeInviteText + buildWatchMeUrl — kept for offline bundle share. */
 export function buildMonitorInviteText(args: {
   missionName: string
   missionId: string
   observerToken: string
+  watchUrl?: string
 }): string {
+  if (args.watchUrl) {
+    return [
+      `Signal One — watch ${args.missionName}`,
+      '',
+      'Tap this link on your phone (no copy/paste):',
+      args.watchUrl,
+    ].join('\n')
+  }
   return [
     'Signal One — Mission Monitor',
     `Mission: ${args.missionName}`,
     `ID: ${args.missionId}`,
     `Monitor token: ${args.observerToken}`,
     '',
-    'In the app: Mission Link → Monitor mission → paste token or monitor bundle.',
+    'Advanced: Mission Link → paste token (link share is preferred).',
   ].join('\n')
 }

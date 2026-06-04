@@ -69,8 +69,12 @@ import {
   isObserverSignalingAvailable,
   publishObserverSignal,
   ObserverMonitorChannel,
-  buildMonitorInviteText,
 } from '../lib/missionSync/observerSignaling'
+import {
+  buildWatchMeInviteText,
+  buildWatchMeUrl,
+  watchOfferFitsQr,
+} from '../lib/missionSync/monitorInviteUrl'
 import { SyncWireDedupe } from '../lib/missionSync/wireDedupe'
 import type { SyncWireMessage } from '../lib/missionSync/types'
 import { isMissionTurnConfigured, MISSION_TURN_SETUP_HINT } from '../lib/missionSync/turnConfig'
@@ -78,6 +82,12 @@ import { copyMissionBundle, shareMissionBundle } from '../lib/missionSync/shareB
 import { isMissionSyncSupported } from '../lib/missionSync/webrtc'
 import { isMonitorSessionLive } from '../lib/missionSync/monitorLive'
 import { pickMonitoredPresence } from '../lib/missionSync/monitorUx'
+import { captureMonitorJoinFromLocation } from '../lib/missionSync/pendingMonitorJoin'
+import MonitorJoinBootstrap from '../hud/MonitorJoinBootstrap'
+
+if (typeof window !== 'undefined') {
+  captureMonitorJoinFromLocation(window.location.search)
+}
 
 export type MissionSyncNotice = {
   level: 'info' | 'success' | 'warn'
@@ -136,6 +146,7 @@ export type MissionSyncContextValue = {
   observerToken: string | null
   observerCount: number
   pendingObserverOfferEncoded: string | null
+  pendingObserverOfferFitsQr: boolean
   observerSignalingAvailable: boolean
   createObserverInvite: () => Promise<void>
   monitorMissionFromOffer: (encodedOffer: string) => Promise<string | null>
@@ -598,35 +609,11 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
 
   const endMonitor = endMission
 
-  const shareMonitorInvite = useCallback(async () => {
-    if (!isFieldMember || !missionId || !observerTokenRef.current) {
-      notify('warn', 'Start a field mission first')
-      return
-    }
-    const text = buildMonitorInviteText({
-      missionId,
-      missionName,
-      observerToken: observerTokenRef.current,
-    })
-    const result = await shareMissionBundle(text, {
-      title: 'Signal One — watch my mission',
-      alsoCopy: true,
-      filename: 'signal-one-monitor-invite.txt',
-    })
-    if (result === 'shared') {
-      notify('success', 'Monitor invite sent — watcher opens Mission Link → Wait for monitor link')
-    } else if (result === 'copied') {
-      notify('success', 'Monitor invite copied — text or email it to who is watching')
-    } else {
-      notify('info', 'Monitor invite saved — send it to who is watching')
-    }
-  }, [isFieldMember, missionId, missionName, notify])
-
-  const createObserverInvite = useCallback(async () => {
+  const ensureObserverOfferEncoded = useCallback(async (): Promise<string | null> => {
     const coord = coordinatorRef.current
     if (!coord || role !== 'member' || !missionId) {
       notify('warn', 'Start a field mission first')
-      return
+      return null
     }
     try {
       const minted = coord.ensureObserverToken()
@@ -639,7 +626,6 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       }
       const { encoded, peerId } = await coord.createObserverOffer()
       setPendingObserverOfferEncoded(encoded)
-      void copyMissionBundle(encoded)
       const token = observerTokenRef.current || minted
       if (token && observerSignalingAvailable) {
         void publishObserverSignal(missionId, token, {
@@ -650,19 +636,66 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
           at: Date.now(),
         })
       }
-      notify(
-        'success',
-        observerSignalingAvailable
-          ? 'Monitor link ready — share bundle or monitor token (internet signaling on)'
-          : 'Monitor link copied — send to remote observer (paste bundle)',
-      )
       if (!isMissionTurnConfigured()) {
         notify('info', MISSION_TURN_SETUP_HINT)
       }
+      return encoded
     } catch (err) {
-      notify('warn', err instanceof Error ? err.message : 'Could not create monitor link')
+      notify('warn', err instanceof Error ? err.message : 'Could not create watch link')
+      return null
     }
-  }, [role, missionId, deviceId, notify, observerSignalingAvailable])
+  }, [role, missionId, deviceId, notify, observerSignalingAvailable, setObserverToken])
+
+  const shareMonitorInvite = useCallback(async () => {
+    if (!isFieldMember || !missionId) {
+      notify('warn', 'Start a field mission first')
+      return
+    }
+    const encoded = await ensureObserverOfferEncoded()
+    if (!encoded) return
+
+    const url = buildWatchMeUrl({
+      encodedOffer: encoded,
+      missionId,
+      observerToken: observerTokenRef.current ?? undefined,
+      missionName,
+    })
+    const text = buildWatchMeInviteText({
+      operatorLabel: callsign?.trim() || missionName,
+      url,
+    })
+    const result = await shareMissionBundle(text, {
+      title: 'Watch my live map — Signal One',
+      alsoCopy: true,
+      filename: 'signal-one-watch-me.txt',
+    })
+    if (result === 'shared') {
+      notify('success', 'Live map link sent — they tap it in Messages (no paste)')
+    } else if (result === 'copied') {
+      notify('success', 'Live map link copied — text it to who is watching')
+    } else {
+      notify('info', 'Live map link ready — send the message to your watcher')
+    }
+  }, [
+    isFieldMember,
+    missionId,
+    missionName,
+    callsign,
+    notify,
+    ensureObserverOfferEncoded,
+  ])
+
+  const createObserverInvite = useCallback(async () => {
+    const encoded = await ensureObserverOfferEncoded()
+    if (!encoded) return
+    void copyMissionBundle(encoded)
+    notify(
+      'success',
+      observerSignalingAvailable
+        ? 'Watch link ready — use Share live map link (recommended)'
+        : 'Technical bundle copied — use only if link share fails',
+    )
+  }, [ensureObserverOfferEncoded, notify, observerSignalingAvailable])
 
   const acceptMonitorOfferEncoded = useCallback(
     async (encodedOffer: string): Promise<string | null> => {
@@ -814,7 +847,7 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       })
       notify(
         'info',
-        'Waiting for field lead to tap Create monitor link — updates arrive over internet relay meanwhile.',
+        'Waiting for live map from the field — keep HUD open. They should use Share live map link first.',
       )
     },
     [supported, observerSignalingAvailable, endMission, deviceId, notify, setObserverToken],
@@ -1312,6 +1345,9 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       observerToken,
       observerCount,
       pendingObserverOfferEncoded,
+      pendingObserverOfferFitsQr: pendingObserverOfferEncoded
+        ? watchOfferFitsQr(pendingObserverOfferEncoded)
+        : false,
       observerSignalingAvailable,
       createObserverInvite,
       monitorMissionFromOffer,
@@ -1375,7 +1411,12 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     ],
   )
 
-  return <MissionSyncContext.Provider value={value}>{children}</MissionSyncContext.Provider>
+  return (
+    <MissionSyncContext.Provider value={value}>
+      <MonitorJoinBootstrap />
+      {children}
+    </MissionSyncContext.Provider>
+  )
 }
 
 export function useMissionSync(): MissionSyncContextValue {

@@ -8,7 +8,7 @@ import { getDeviceProfile } from '../runtime/deviceProfile'
 /** Content height inside TopBar (excludes safe-area padding). */
 export function topBarContentHeightPx(): number {
   const p = getDeviceProfile()
-  return p.width < 720 || p.isCoarsePointer ? 62 : 54
+  return p.width < 720 || p.isCoarsePointer ? 78 : 58
 }
 
 /** Space reserved below the physical top edge before dock lanes start. */

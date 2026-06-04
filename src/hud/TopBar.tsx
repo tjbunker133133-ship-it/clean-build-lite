@@ -42,7 +42,7 @@ export default function TopBar() {
   const tapMin = touchMinTarget(isMobile)
   const isCompact = profile.width < 720 || profile.isCoarsePointer
   const hasFix = gps.lat != null && gps.lng != null
-  const dialSize = isCompact ? 52 : 56
+  const dialSize = isCompact ? 54 : 58
   const barHeight = topBarContentHeightPx()
 
   const enableCompass = useCallback(async () => {
@@ -91,6 +91,7 @@ export default function TopBar() {
         borderBottom: '1px solid rgba(199, 206, 198, 0.2)',
         backdropFilter: isMobile ? undefined : 'blur(12px)',
         boxShadow: '0 4px 24px rgba(0, 0, 0, 0.32)',
+        overflow: 'visible',
       }}
     >
       <div
@@ -182,7 +183,7 @@ export default function TopBar() {
         )}
       </div>
 
-      <div style={{ justifySelf: 'center', paddingBottom: 2 }}>
+      <div style={{ justifySelf: 'center', paddingBottom: 4, overflow: 'visible' }}>
         <CompassDial
           heading={heading}
           status={status}

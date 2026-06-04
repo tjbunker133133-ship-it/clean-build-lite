@@ -11,15 +11,15 @@ type CompassDialProps = {
 
 const ACTIVE = '#7dffa8'
 const TICK = '#5eead4'
-const MUTED = '#6b756e'
-const NORTH = '#e8fff0'
-const CARD = 'rgba(8, 14, 12, 0.92)'
+const MUTED = '#8a948c'
+const NORTH = '#f0fff4'
+const CARD = 'rgba(6, 10, 9, 0.96)'
 
 export default function CompassDial({
   heading,
   status,
   cardinal,
-  size = 48,
+  size = 56,
   onRequestPermission,
 }: CompassDialProps) {
   const active = status === 'active' && heading != null
@@ -39,7 +39,8 @@ export default function CompassDial({
   const degreeLabel =
     active && heading != null ? `${Math.round(heading)}°` : status === 'level' ? 'LEVEL' : '—'
 
-  const inner = size - 8
+  const inner = size - 10
+  const labelSize = Math.max(13, Math.round(size * 0.28))
 
   return (
     <button
@@ -52,13 +53,14 @@ export default function CompassDial({
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
-        gap: 2,
+        gap: 4,
         padding: 0,
         border: 'none',
         background: 'transparent',
         cursor: needsPermission ? 'pointer' : 'default',
         flexShrink: 0,
         minWidth: size,
+        overflow: 'visible',
       }}
     >
       <div
@@ -69,26 +71,26 @@ export default function CompassDial({
           background: CARD,
           border: `2px solid ${ringColor}`,
           boxShadow: active
-            ? '0 0 0 1px rgba(125,255,138,0.25), 0 4px 14px rgba(0,0,0,0.45)'
-            : '0 2px 10px rgba(0,0,0,0.35)',
+            ? '0 0 0 1px rgba(125,255,138,0.35), 0 6px 18px rgba(0,0,0,0.55)'
+            : '0 2px 12px rgba(0,0,0,0.45)',
           position: 'relative',
           overflow: 'hidden',
         }}
       >
-        {/* Fixed lubber line (heading reference at top of phone) */}
         <div
           aria-hidden
           style={{
             position: 'absolute',
-            top: 3,
+            top: 2,
             left: '50%',
             transform: 'translateX(-50%)',
             width: 0,
             height: 0,
-            borderLeft: '5px solid transparent',
-            borderRight: '5px solid transparent',
-            borderBottom: `8px solid ${active ? NORTH : MUTED}`,
-            zIndex: 3,
+            borderLeft: '6px solid transparent',
+            borderRight: '6px solid transparent',
+            borderBottom: `9px solid ${active ? NORTH : MUTED}`,
+            zIndex: 4,
+            filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.8))',
           }}
         />
 
@@ -99,12 +101,12 @@ export default function CompassDial({
           aria-hidden
           style={{
             display: 'block',
-            margin: 4,
+            margin: 5,
             transform: `rotate(${rotation}deg)`,
-            transition: active ? 'transform 280ms ease-out' : undefined,
+            transition: active ? 'transform 520ms ease-out' : undefined,
           }}
         >
-          <circle cx="24" cy="24" r="21" fill="rgba(125,255,138,0.04)" stroke="rgba(125,255,138,0.2)" strokeWidth="0.6" />
+          <circle cx="24" cy="24" r="21" fill="rgba(125,255,138,0.05)" stroke="rgba(125,255,138,0.25)" strokeWidth="0.8" />
           {Array.from({ length: 12 }, (_, i) => i * 30).map((deg) => (
             <line
               key={deg}
@@ -114,51 +116,66 @@ export default function CompassDial({
               y2={deg % 90 === 0 ? 10 : 9}
               stroke={deg === 0 ? NORTH : TICK}
               strokeWidth={deg % 90 === 0 ? 1.6 : 0.8}
-              opacity={deg === 0 ? 1 : 0.7}
+              opacity={deg === 0 ? 1 : 0.75}
               transform={`rotate(${deg} 24 24)`}
             />
           ))}
-          <text x="24" y="14" textAnchor="middle" fontSize="7" fontWeight="800" fill={NORTH} fontFamily="system-ui">
+          <text x="24" y="13" textAnchor="middle" fontSize="7" fontWeight="800" fill={NORTH} fontFamily="system-ui">
             N
           </text>
-          <text x="24" y="44" textAnchor="middle" fontSize="6" fontWeight="700" fill={TICK} opacity="0.85" fontFamily="system-ui">
+          <text x="24" y="44" textAnchor="middle" fontSize="6" fontWeight="700" fill={TICK} opacity="0.9" fontFamily="system-ui">
             S
           </text>
-          <text x="8" y="27" textAnchor="middle" fontSize="6" fontWeight="700" fill={TICK} opacity="0.85" fontFamily="system-ui">
+          <text x="8" y="27" textAnchor="middle" fontSize="6" fontWeight="700" fill={TICK} opacity="0.9" fontFamily="system-ui">
             W
           </text>
-          <text x="40" y="27" textAnchor="middle" fontSize="6" fontWeight="700" fill={TICK} opacity="0.85" fontFamily="system-ui">
+          <text x="40" y="27" textAnchor="middle" fontSize="6" fontWeight="700" fill={TICK} opacity="0.9" fontFamily="system-ui">
             E
           </text>
           <circle cx="24" cy="24" r="1.5" fill={active ? TICK : MUTED} />
-          {status === 'level' && (
-            <text x="24" y="28" textAnchor="middle" fontSize="5" fill="#9ca89f" fontFamily="system-ui">
-              TILT
-            </text>
-          )}
         </svg>
+
+        <div
+          aria-hidden
+          style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'grid',
+            placeItems: 'center',
+            pointerEvents: 'none',
+            zIndex: 5,
+          }}
+        >
+          <span
+            style={{
+              fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+              fontSize: labelSize,
+              fontWeight: 800,
+              letterSpacing: '0.04em',
+              color: active ? NORTH : '#c5cdc6',
+              textShadow: '0 1px 3px rgba(0,0,0,0.95), 0 0 8px rgba(0,0,0,0.75)',
+              lineHeight: 1,
+              marginTop: 4,
+            }}
+          >
+            {degreeLabel}
+          </span>
+        </div>
       </div>
-      <span
-        style={{
-          fontFamily: 'var(--font-mono, monospace)',
-          fontSize: Math.max(11, size * 0.26),
-          fontWeight: 800,
-          letterSpacing: '0.06em',
-          color: active ? NORTH : '#9ea7a0',
-          lineHeight: 1,
-        }}
-      >
-        {degreeLabel}
-      </span>
       <span
         aria-hidden
         style={{
           fontFamily: 'var(--font-ui, system-ui)',
-          fontSize: Math.max(9, size * 0.2),
-          fontWeight: 700,
-          letterSpacing: '0.14em',
+          fontSize: Math.max(10, size * 0.22),
+          fontWeight: 800,
+          letterSpacing: '0.16em',
           color: active ? TICK : MUTED,
-          lineHeight: 1,
+          lineHeight: 1.2,
+          padding: '2px 8px',
+          borderRadius: 4,
+          background: 'rgba(6, 10, 9, 0.92)',
+          border: `1px solid ${active ? 'rgba(125,255,138,0.35)' : 'rgba(199,206,198,0.15)'}`,
+          textShadow: '0 1px 2px rgba(0,0,0,0.9)',
         }}
       >
         {cardinal}

@@ -5,6 +5,7 @@ import {
   headingToCardinal,
   isCompassTiltUnreliable,
   normalizeHeading,
+  quantizeHeading,
   resolveOrientationHeading,
   shouldPublishHeading,
   smoothHeading,
@@ -35,6 +36,11 @@ describe('deviceHeading', () => {
     expect(isCompassTiltUnreliable(10, 0)).toBe(true)
     expect(isCompassTiltUnreliable(80, 10)).toBe(false)
     expect(isCompassTiltUnreliable(90, 75)).toBe(true)
+  })
+
+  it('quantizes heading for stable readout', () => {
+    expect(quantizeHeading(91, 3)).toBe(90)
+    expect(quantizeHeading(359, 3)).toBe(0)
   })
 
   it('throttles small frequent updates', () => {

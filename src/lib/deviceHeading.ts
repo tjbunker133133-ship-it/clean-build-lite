@@ -45,13 +45,19 @@ export function shouldPublishHeading(
   next: number,
   nowMs: number,
   lastPublishMs: number,
-  minDeltaDeg = 4,
-  minIntervalMs = 240,
+  minDeltaDeg = 8,
+  minIntervalMs = 420,
 ): boolean {
   if (last == null) return true
   const elapsed = nowMs - lastPublishMs
   if (elapsed < minIntervalMs) return false
   return Math.abs(headingDelta(last, next)) >= minDeltaDeg
+}
+
+/** Display step — reduces flicker on magnetometer noise (field phones). */
+export function quantizeHeading(deg: number, step = 3): number {
+  if (!Number.isFinite(deg)) return 0
+  return normalizeHeading(Math.round(deg / step) * step)
 }
 
 /** iOS 13+ requires a user gesture before compass events fire. */

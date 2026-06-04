@@ -3,6 +3,7 @@ import {
   type CompassStatus,
   headingToCardinal,
   isCompassTiltUnreliable,
+  quantizeHeading,
   resolveOrientationHeading,
   shouldPublishHeading,
   smoothHeading,
@@ -15,22 +16,22 @@ export type DeviceHeadingState = {
   cardinal: string
 }
 
-const SMOOTH_FACTOR = 0.38
+/** Lower = steadier dial (less twitch on Android magnetometer). */
+const SMOOTH_FACTOR = 0.14
 
 export function useDeviceHeading(): DeviceHeadingState {
   const [heading, setHeading] = useState<number | null>(null)
   const [status, setStatus] = useState<CompassStatus>('unavailable')
   const displayRef = useRef<number | null>(null)
-  const lastRawRef = useRef<number | null>(null)
   const lastPublishRef = useRef(0)
   const gotReadingRef = useRef(false)
+  const tiltRef = useRef(false)
 
   useEffect(() => {
     if (typeof window === 'undefined') return
     let mounted = true
     let fallbackTimer: number | null = null
     const isIOS = getDeviceProfile().isIOS
-    /** After earth-relative absolute events, ignore relative alpha (prevents 180° flips). */
     let preferAbsoluteOnly = false
 
     const applyStatus = (next: CompassStatus) => {
@@ -40,8 +41,9 @@ export function useDeviceHeading(): DeviceHeadingState {
 
     const publishDisplay = (value: number) => {
       if (!mounted) return
-      displayRef.current = value
-      setHeading(value)
+      const quantized = quantizeHeading(value, 3)
+      displayRef.current = quantized
+      setHeading(quantized)
       gotReadingRef.current = true
       applyStatus('active')
     }
@@ -49,17 +51,23 @@ export function useDeviceHeading(): DeviceHeadingState {
     const ingestOrientation = (event: DeviceOrientationEvent) => {
       if (!isIOS && preferAbsoluteOnly && event.absolute !== true) return
 
-      if (isCompassTiltUnreliable(event.beta, event.gamma)) {
-        applyStatus('level')
+      const tilted = isCompassTiltUnreliable(event.beta, event.gamma)
+      if (tilted) {
+        if (!tiltRef.current) {
+          tiltRef.current = true
+          applyStatus('level')
+        }
         return
+      }
+      if (tiltRef.current) {
+        tiltRef.current = false
+        if (displayRef.current != null) applyStatus('active')
       }
 
       const raw = resolveOrientationHeading(event)
       if (raw == null) return
 
       if (event.absolute === true) preferAbsoluteOnly = true
-
-      lastRawRef.current = raw
 
       const display = displayRef.current
       const smoothed = display == null ? raw : smoothHeading(display, raw, SMOOTH_FACTOR)
@@ -88,7 +96,7 @@ export function useDeviceHeading(): DeviceHeadingState {
       if (!mounted || gotReadingRef.current) return
       applyStatus('unavailable')
       setHeading(null)
-    }, 2000)
+    }, 2500)
 
     return () => {
       mounted = false
