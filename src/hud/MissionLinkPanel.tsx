@@ -12,6 +12,7 @@ import { missionPacketToQrDataUrl, scanMissionPacketFromCamera } from '../lib/mi
 import { isMissionTurnConfigured } from '../lib/missionSync/turnConfig'
 import { FIELD_WALK_WATCHER_STEPS, fieldWalkWatcherSummary } from '../lib/missionSync/fieldTestGuide'
 import { formatPresenceAge, monitorTransportLabel } from '../lib/missionSync/monitorUx'
+import MissionTeamComms from './MissionTeamComms'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 import { touchFontSm, touchGapMd, touchGapSm, touchMinTarget } from './tokens'
 
@@ -96,7 +97,6 @@ export default function MissionLinkPanel() {
   const [pasteHost, setPasteHost] = useState('')
   const [pasteAnswer, setPasteAnswer] = useState('')
   const [joinCodeInput, setJoinCodeInput] = useState('')
-  const [burstText, setBurstText] = useState('')
   const [qrUrl, setQrUrl] = useState<string | null>(null)
   const [scanning, setScanning] = useState(false)
   const [pasteMonitor, setPasteMonitor] = useState('')
@@ -775,8 +775,8 @@ export default function MissionLinkPanel() {
           </>
         ) : null}
 
-        {linked ? (
-          <StepCard step={3} title="Connections" done active>
+        {linked || sync.teamCommsReady || sync.role === 'observer' ? (
+          <StepCard step={3} title="Team comms" done={sync.teamCommsReady} active>
             {fieldLinked ? (
               <>
                 <div style={{ color: '#94a3b8', marginBottom: 6, fontSize: '0.88em', fontWeight: 700 }}>
@@ -790,56 +790,37 @@ export default function MissionLinkPanel() {
                     </li>
                   ))}
                 </ul>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: touchGapSm(isMobile) }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: touchGapSm(isMobile), marginBottom: 12 }}>
                   <button type="button" style={btnStyle(true)} onClick={() => void sync.createJoinOffer()}>
                     Link another teammate
                   </button>
                   <button type="button" style={btnStyle()} onClick={() => sync.pushSnapshotNow()}>
                     Push my waypoints now
                   </button>
-                  <button type="button" style={btnStyle(true)} onClick={() => sync.sendTeamCheckIn()}>
-                    Send check-in OK
-                  </button>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <input
-                      value={burstText}
-                      onChange={(e) => setBurstText(e.target.value)}
-                      placeholder="Short team message…"
-                      maxLength={120}
-                      style={{
-                        flex: 1,
-                        padding: '8px 10px',
-                        borderRadius: 8,
-                        border: '1px solid #334155',
-                        background: '#0f172a',
-                        color: '#f8fafc',
-                      }}
-                    />
-                    <button
-                      type="button"
-                      style={btnStyle(true)}
-                      onClick={() => {
-                        if (sync.sendTeamBurst(burstText)) setBurstText('')
-                      }}
-                    >
-                      Send
-                    </button>
-                  </div>
                 </div>
               </>
-            ) : (
-              <p style={{ color: '#64748b', margin: 0, lineHeight: 1.45, fontSize: '0.92em' }}>
+            ) : sync.role !== 'observer' ? (
+              <p style={{ color: '#64748b', margin: '0 0 12px', lineHeight: 1.45, fontSize: '0.92em' }}>
                 No field teammates linked yet — use mission code or join bundle above.
               </p>
-            )}
+            ) : null}
+            <MissionTeamComms isObserver={sync.role === 'observer'} />
             {monitorPeers.length > 0 ? (
-              <p style={{ color: '#94a3b8', margin: fieldLinked ? '12px 0 0' : '8px 0 0', fontSize: '0.88em' }}>
+              <p style={{ color: '#94a3b8', margin: '12px 0 0', fontSize: '0.88em' }}>
                 Watchers:{' '}
                 <strong style={{ color: '#bae6fd' }}>
                   {monitorPeers.map((p) => p.callsign?.trim() || 'Watcher').join(', ')}
                 </strong>
               </p>
             ) : null}
+          </StepCard>
+        ) : null}
+
+        {linked && !sync.teamCommsReady && sync.role === 'member' ? (
+          <StepCard step={3} title="Connections" active>
+            <p style={{ color: '#64748b', margin: 0, lineHeight: 1.45, fontSize: '0.92em' }}>
+              Mission is on — link a teammate to open mesh comms and waypoint sync.
+            </p>
           </StepCard>
         ) : null}
 

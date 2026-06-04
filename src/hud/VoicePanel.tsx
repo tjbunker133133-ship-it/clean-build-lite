@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import HudPanel from './HudPanel'
 import { requestMicrophonePermission } from '../lib/devicePermissions'
 import { useHudCommands, type CommandSource } from '../hooks/useHudCommands'
+import { tryHandleMissionCommsVoice } from '../lib/missionSync/missionCommsVoiceBridge'
 import {
   recordWakeWordGatePassed,
   updatePermission,
@@ -127,6 +128,14 @@ const QUICK_COMMAND_GROUPS: Array<{
     items: [
       { label: 'Check-In Panel', cmd: 'check in panel' },
       { label: 'Mission Link', cmd: 'mission panel' },
+      { label: 'Team Check-In', cmd: 'team check in' },
+    ],
+  },
+  {
+    group: 'Mission mesh',
+    items: [
+      { label: 'Message team…', cmd: 'team message regroup here' },
+      { label: 'Voice note…', cmd: 'voice message team' },
     ],
   },
   {
@@ -607,6 +616,11 @@ export default function VoicePanel() {
     }
     pendingWakeUntilRef.current = performance.now() + activeProfile.wakeContinuationMs
     for (const p of parts) {
+      const mission = await tryHandleMissionCommsVoice(p)
+      if (mission) {
+        report(mission.feedback, mission.ok)
+        continue
+      }
       await dispatchAndReport(p, 'voice', `${WAKE_WORD} ${p}`)
     }
     if (armedRef.current) updateVoiceState('listening')

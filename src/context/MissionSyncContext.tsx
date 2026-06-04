@@ -10,6 +10,7 @@ import React, {
 } from 'react'
 import { useAppContext } from './AppContext'
 import { useGPS } from '../hooks/useGPS'
+import { useTravelSpeed } from '../hooks/useTravelSpeed'
 import { useTacticalProfile } from '../hooks/useTacticalProfile'
 import { decodeMissionPacket, packetFitsCompactQr } from '../lib/missionSync/codec'
 import {
@@ -40,10 +41,45 @@ import {
   filterRecentBursts,
   filterFreshCheckIns,
 } from '../lib/missionSync/comms'
+import { playTeamCommsChirp } from '../lib/missionSync/teamCommsChirp'
+import { buildStabilizedTeamPresence } from '../lib/missionSync/presencePublish'
+import {
+  speakInboundTeamMessage,
+  speakMissionCommsPhrase,
+} from '../lib/missionSync/missionVoiceMessage'
+import {
+  createIdleMissionCommsFlow,
+  matchInboundHearConfirm,
+  reduceMissionCommsFlow,
+  type MissionCommsFlowState,
+} from '../lib/missionSync/missionCommsVoiceFlow'
+import { setMissionCommsVoiceHandler } from '../lib/missionSync/missionCommsVoiceBridge'
+import {
+  loadMissionCommsPrefs,
+  saveMissionCommsPrefs,
+  type MissionCommsPrefs,
+} from '../lib/missionSync/missionCommsPrefs'
+import { emitHaptic } from '../runtime/haptics'
+import {
+  burstTargetsLocalDevice,
+  formatBurstLine,
+  formatBurstTargetLabel,
+  resolveMissionPeerByCallsign,
+  type TeamBurstTarget,
+} from '../lib/missionSync/teamComms'
+import {
+  blobToBase64,
+  buildVoiceClip,
+  playVoiceClip,
+  VOICE_CLIP_MIN_INTERVAL_MS,
+  voiceClipTargetsLocalDevice,
+  type VoiceRecordResult,
+} from '../lib/missionSync/teamVoiceClip'
 import type {
   ConnectedPeer,
   MissionAnswerPacket,
   MissionBurst,
+  MissionVoiceClip,
   MissionCheckIn,
   MissionOfferPacket,
   MissionCorridorHint,
@@ -148,8 +184,30 @@ export type MissionSyncContextValue = {
   reconnectMesh: () => Promise<void>
   teamCheckIns: MissionCheckIn[]
   teamBursts: MissionBurst[]
+  /** True when mesh or monitor relay can carry team text (works offline on LAN). */
+  teamCommsReady: boolean
+  /** Latest inbound burst for HUD toast (directed messages prioritized). */
+  lastInboundTeamBurst: MissionBurst | null
+  dismissTeamCommsAlert: () => void
+  /** Set when user taps a teammate on the map (opens quick message sheet). */
+  activeCommsTarget: { deviceId: string; callsign: string } | null
+  openCommsForTeammate: (deviceId: string, callsign: string) => void
+  clearActiveCommsTarget: () => void
   sendTeamCheckIn: (note?: string) => void
-  sendTeamBurst: (text: string) => boolean
+  sendTeamBurst: (text: string, toCallsign?: string) => boolean
+  sendVoiceClipBlob: (capture: VoiceRecordResult, toCallsign?: string) => Promise<boolean>
+  /** True after host shares live map link this mission (controls watcher pill). */
+  watchLinkShared: boolean
+  missionCommsPrefs: MissionCommsPrefs
+  setMissionCommsPrefs: (patch: Partial<MissionCommsPrefs>) => void
+  /** Hands-free flow phase for UI status. */
+  missionCommsFlowPhase: MissionCommsFlowState['phase']
+  /** Inbound message waiting for accept-before-TTS. */
+  pendingInboundBurst: MissionBurst | null
+  confirmInboundMessage: () => void
+  skipInboundMessage: () => void
+  /** After hold-to-speak STT — requires voice accept before send. */
+  queueOutboundConfirm: (body: string, toCallsign?: string) => void
   /** True while browser code-room join is active (request-offer pings). */
   joinCodeSearching: boolean
   discoverMissionOnLan: (codeInput: string) => Promise<boolean>
@@ -197,6 +255,7 @@ const CORRIDOR_HINT_DEBOUNCE_MS = 4_000
 export function MissionSyncProvider({ children }: { children: ReactNode }) {
   const { state, setWaypoints, setSnapToTrail } = useAppContext()
   const gps = useGPS()
+  const travelSpeed = useTravelSpeed(gps.lat, gps.lng, gps.locationState === 'granted', gps.accuracy)
   const { profile } = useTacticalProfile()
   const waypoints = state.waypoints
   const waypointsRef = useRef(waypoints)
@@ -216,6 +275,11 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
   const [pendingAnswerEncoded, setPendingAnswerEncoded] = useState<string | null>(null)
   const [teamCheckIns, setTeamCheckIns] = useState<MissionCheckIn[]>([])
   const [teamBursts, setTeamBursts] = useState<MissionBurst[]>([])
+  const [lastInboundTeamBurst, setLastInboundTeamBurst] = useState<MissionBurst | null>(null)
+  const [activeCommsTarget, setActiveCommsTarget] = useState<{
+    deviceId: string
+    callsign: string
+  } | null>(null)
   const [nativeLink, setNativeLink] = useState<NativeLinkPlatform>({
     available: false,
     platform: 'web',
@@ -255,6 +319,15 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
   const sessionCoordinatorReadyRef = useRef(false)
   const lastCheckInAtRef = useRef(0)
   const lastBurstAtRef = useRef(0)
+  const lastVoiceAtRef = useRef(0)
+  const lastPublishedPresenceRef = useRef<TeamPresence | null>(null)
+  const [watchLinkShared, setWatchLinkShared] = useState(false)
+  const [missionCommsPrefs, setMissionCommsPrefsState] = useState<MissionCommsPrefs>(() =>
+    loadMissionCommsPrefs(),
+  )
+  const [pendingInboundBurst, setPendingInboundBurst] = useState<MissionBurst | null>(null)
+  const missionCommsFlowRef = useRef<MissionCommsFlowState>(createIdleMissionCommsFlow())
+  const [missionCommsFlowPhase, setMissionCommsFlowPhase] = useState<MissionCommsFlowState['phase']>('idle')
   const lastNativePayloadRef = useRef('')
   const teamPresenceRef = useRef<TeamPresence[]>([])
   teamPresenceRef.current = teamPresence
@@ -465,6 +538,114 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     setLastSyncAt(Date.now())
   }, [buildSnapshot])
 
+  const ingestInboundBurst = useCallback(
+    (burst: MissionBurst) => {
+      if (burst.deviceId === deviceId) return
+      setTeamBursts((prev) => filterRecentBursts([...prev, burst]))
+      const directed = Boolean(burst.toDeviceId)
+      const forMe = burstTargetsLocalDevice(burst, deviceId)
+      const watching = role === 'observer'
+      const arrow = formatBurstTargetLabel(burst)
+      const line = formatBurstLine(burst, deviceId)
+      const shouldAlert = forMe || watching || !directed
+      if (shouldAlert) {
+        playTeamCommsChirp(directed)
+        emitHaptic('teamMessage')
+        setLastInboundTeamBurst(burst)
+        if (missionCommsPrefs.inboundConfirm) {
+          setPendingInboundBurst(burst)
+          notify(forMe ? 'success' : 'info', `Message from ${burst.callsign} — say accept to listen`)
+          void speakMissionCommsPhrase(
+            `Message from ${burst.callsign}. Say accept to listen, or skip.`,
+          )
+        } else {
+          notify(forMe ? 'success' : 'info', directed ? `Team message ${arrow ?? ''}: ${burst.text}`.trim() : line)
+          void speakInboundTeamMessage(burst.callsign, burst.text)
+        }
+        return
+      }
+      if (!directed) notify('info', line)
+    },
+    [deviceId, notify, role, missionCommsPrefs.inboundConfirm],
+  )
+
+  const ingestInboundVoiceClip = useCallback(
+    (clip: MissionVoiceClip) => {
+      if (clip.deviceId === deviceId) return
+      const forMe = voiceClipTargetsLocalDevice(clip, deviceId)
+      const watching = role === 'observer'
+      const who = clip.callsign
+      const dur = `${Math.max(1, Math.round(clip.durationMs / 1000))}s`
+      if (forMe || watching || !clip.toDeviceId) {
+        playTeamCommsChirp(true)
+        playVoiceClip(clip)
+        notify('success', `Voice from ${who} (${dur})`)
+      } else if (!clip.toDeviceId) {
+        notify('info', `Voice from ${who} (${dur})`)
+      }
+    },
+    [deviceId, notify, role],
+  )
+
+  const dismissTeamCommsAlert = useCallback(() => setLastInboundTeamBurst(null), [])
+
+  const confirmInboundMessage = useCallback(() => {
+    const b = pendingInboundBurst
+    if (!b) return
+    setPendingInboundBurst(null)
+    void speakInboundTeamMessage(b.callsign, b.text)
+  }, [pendingInboundBurst])
+
+  const skipInboundMessage = useCallback(() => {
+    setPendingInboundBurst(null)
+    void speakMissionCommsPhrase('Skipped.')
+  }, [])
+
+  const setMissionCommsPrefs = useCallback((patch: Partial<MissionCommsPrefs>) => {
+    setMissionCommsPrefsState((prev) => saveMissionCommsPrefs({ ...prev, ...patch }))
+  }, [])
+
+  const queueOutboundConfirm = useCallback(
+    (body: string, toCallsign?: string) => {
+      const linked = coordinatorRef.current?.connectedPeers ?? peers
+      let target: { label: string; callsign?: string } = { label: 'whole mission' }
+      const trimmed = toCallsign?.trim()
+      if (trimmed) {
+        const peer = resolveMissionPeerByCallsign(linked, trimmed)
+        if (!peer) {
+          void speakMissionCommsPhrase(`No linked member matches ${trimmed}.`)
+          return
+        }
+        target = { label: peer.callsign, callsign: peer.callsign }
+      }
+      const clean = body.trim()
+      if (!clean) return
+      missionCommsFlowRef.current = {
+        phase: 'confirm_send',
+        target,
+        body: clean,
+      }
+      setMissionCommsFlowPhase('confirm_send')
+      void speakMissionCommsPhrase(
+        `Send to ${target.label}: ${clean}. Say accept or cancel.`,
+      )
+    },
+    [peers],
+  )
+
+  const openCommsForTeammate = useCallback((deviceId: string, callsign: string) => {
+    const clean = callsign.trim() || 'Teammate'
+    setActiveCommsTarget({ deviceId, callsign: clean })
+  }, [])
+
+  const clearActiveCommsTarget = useCallback(() => setActiveCommsTarget(null), [])
+
+  const teamCommsReady = useMemo(() => {
+    if (role !== 'member' && role !== 'observer') return false
+    const coord = coordinatorRef.current
+    return (coord?.peerCount ?? 0) > 0 || monitorRelayActive
+  }, [role, peers, monitorRelayActive])
+
   const handleRelayWire = useCallback(
     (msg: SyncWireMessage) => {
       if (!relayDedupeRef.current.accept(msg)) return
@@ -496,14 +677,12 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
         setTeamCheckIns((prev) => filterFreshCheckIns([...prev, msg.payload]))
         notify('info', `${msg.payload.callsign} check-in OK${msg.payload.note ? `: ${msg.payload.note}` : ''}`)
       }
-      if (msg.type === 'burst' && msg.payload.deviceId !== deviceId) {
-        setTeamBursts((prev) => filterRecentBursts([...prev, msg.payload]))
-        notify('info', `${msg.payload.callsign}: ${msg.payload.text}`)
-      }
+      if (msg.type === 'burst') ingestInboundBurst(msg.payload)
+      if (msg.type === 'voice-clip') ingestInboundVoiceClip(msg.payload)
       if (msg.type === 'corridor-hint') handleRemoteCorridorHint(msg.payload)
       setLastSyncAt(Date.now())
     },
-    [applyRemoteSnapshot, deviceId, handleRemoteCorridorHint, notify, isObserver],
+    [applyRemoteSnapshot, deviceId, handleRemoteCorridorHint, isObserver, ingestInboundBurst],
   )
 
   const attachFieldMonitorRelay = useCallback(
@@ -603,11 +782,8 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
           setTeamCheckIns((prev) => filterFreshCheckIns([...prev, c]))
           notify('info', `${c.callsign} check-in OK${c.note ? `: ${c.note}` : ''}`)
         },
-        onBurst: (b) => {
-          if (b.deviceId === deviceId) return
-          setTeamBursts((prev) => filterRecentBursts([...prev, b]))
-          notify('info', `${b.callsign}: ${b.text}`)
-        },
+        onBurst: (b) => ingestInboundBurst(b),
+        onVoiceClip: (clip) => ingestInboundVoiceClip(clip),
         onCorridorHint: (hint) => handleRemoteCorridorHint(hint),
         onError: (msg) => {
           if (msg.includes('disconnected') || msg.includes('peer-disconnected')) {
@@ -663,6 +839,8 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       missionRelayActive,
       observerSignalingAvailable,
       peers,
+      ingestInboundBurst,
+      ingestInboundVoiceClip,
     ],
   )
 
@@ -735,6 +913,13 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     setTeamPresence([])
     setTeamCheckIns([])
     setTeamBursts([])
+    setLastInboundTeamBurst(null)
+    setActiveCommsTarget(null)
+    setWatchLinkShared(false)
+    lastPublishedPresenceRef.current = null
+    setPendingInboundBurst(null)
+    missionCommsFlowRef.current = createIdleMissionCommsFlow()
+    setMissionCommsFlowPhase('idle')
     setPendingOfferEncoded(null)
     setPendingAnswerEncoded(null)
     setPendingObserverOfferEncoded(null)
@@ -823,6 +1008,7 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       alsoCopy: true,
       filename: 'signal-one-watch-me.txt',
     })
+    setWatchLinkShared(true)
     if (result === 'shared') {
       notify('success', 'Live map link sent — they tap it in Messages (no paste)')
     } else if (result === 'copied') {
@@ -1290,16 +1476,45 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     if (!coord || !isFieldMember) return
     if (coord.peerCount === 0 && !monitorRelayActive) return
     if (gps.lat == null || gps.lng == null) return
-    const presence: TeamPresence = {
+
+    const last = lastPublishedPresenceRef.current
+    let headingDeg: number | undefined
+    if (last?.lat != null && last?.lng != null) {
+      const toRad = (d: number) => (d * Math.PI) / 180
+      const toDeg = (r: number) => (r * 180) / Math.PI
+      const y = Math.sin(toRad(gps.lng - last.lng)) * Math.cos(toRad(gps.lat))
+      const x =
+        Math.cos(toRad(last.lat)) * Math.sin(toRad(gps.lat)) -
+        Math.sin(toRad(last.lat)) * Math.cos(toRad(gps.lat)) * Math.cos(toRad(gps.lng - last.lng))
+      headingDeg = (toDeg(Math.atan2(y, x)) + 360) % 360
+    }
+
+    const presence = buildStabilizedTeamPresence({
       deviceId,
       callsign,
       lat: gps.lat,
       lng: gps.lng,
       accuracy: gps.accuracy,
-      updatedAt: Date.now(),
-    }
+      elevationM: gps.elevation ?? undefined,
+      speedMph: travelSpeed.sample?.mph,
+      speedMps: travelSpeed.sample?.speedMps ?? null,
+      headingDeg,
+      lastPublished: last,
+    })
+    lastPublishedPresenceRef.current = presence
     coord.sendPresence(presence)
-  }, [deviceId, callsign, gps.lat, gps.lng, gps.accuracy, isFieldMember, monitorRelayActive])
+  }, [
+    deviceId,
+    callsign,
+    gps.lat,
+    gps.lng,
+    gps.accuracy,
+    gps.elevation,
+    travelSpeed.sample?.mph,
+    travelSpeed.sample?.speedMps,
+    isFieldMember,
+    monitorRelayActive,
+  ])
 
   useEffect(() => {
     if (!isFieldMember || (peers.length === 0 && !monitorRelayActive)) return
@@ -1348,22 +1563,184 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
   )
 
   const sendTeamBurst = useCallback(
-    (text: string): boolean => {
+    (text: string, toCallsign?: string): boolean => {
       const coord = coordinatorRef.current
-      if (!coord || !isFieldMember) return false
-      if (coord.peerCount === 0 && !monitorRelayActive) return false
+      if (!coord || (role !== 'member' && role !== 'observer')) return false
+      const linked = coord.connectedPeers
+      if (linked.length === 0 && !monitorRelayActive) {
+        notify('warn', 'No mission link yet — join mesh or wait for relay')
+        return false
+      }
       const now = Date.now()
       if (now - lastBurstAtRef.current < BURST_MIN_INTERVAL_MS) {
         notify('warn', 'Message cooldown — wait a few seconds')
         return false
       }
-      const payload = buildBurst(deviceId, callsign, text)
+      let target: TeamBurstTarget | undefined
+      const trimmedTarget = toCallsign?.trim()
+      if (trimmedTarget) {
+        const peer = resolveMissionPeerByCallsign(linked, trimmedTarget)
+        if (!peer) {
+          notify('warn', `No linked mission member matches "${trimmedTarget}"`)
+          return false
+        }
+        target = {
+          scope: 'direct',
+          peerId: peer.peerId,
+          deviceId: peer.deviceId,
+          callsign: peer.callsign,
+        }
+      }
+      const payload = buildBurst(deviceId, callsign, text, target)
       if (!payload) return false
       lastBurstAtRef.current = now
-      coord.sendBurst(payload)
+      if (target?.scope === 'direct') {
+        coord.sendBurstToPeer(target.peerId, payload)
+      } else {
+        coord.sendBurst(payload)
+      }
+      setTeamBursts((prev) => filterRecentBursts([...prev, payload]))
+      const label =
+        target?.scope === 'direct'
+          ? `Message sent to ${target.callsign}`
+          : 'Message sent to whole mission'
+      notify('success', label)
       return true
     },
-    [deviceId, callsign, isFieldMember, monitorRelayActive, notify],
+    [deviceId, callsign, role, monitorRelayActive, notify],
+  )
+
+  const handleMissionCommsVoice = useCallback(
+    async (phrase: string): Promise<{ handled: boolean; ok: boolean; feedback: string }> => {
+      if (!missionCommsPrefs.handsFree) {
+        return { handled: false, ok: false, feedback: '' }
+      }
+      if (role === 'idle') {
+        return { handled: false, ok: false, feedback: '' }
+      }
+
+      const inboundAction = matchInboundHearConfirm(phrase)
+      if (pendingInboundBurst && inboundAction === 'accept') {
+        confirmInboundMessage()
+        return { handled: true, ok: true, feedback: 'Playing message.' }
+      }
+      if (pendingInboundBurst && inboundAction === 'skip') {
+        skipInboundMessage()
+        return { handled: true, ok: true, feedback: 'Skipped.' }
+      }
+
+      const linked = coordinatorRef.current?.connectedPeers ?? peers
+      const { state, effects } = reduceMissionCommsFlow(
+        missionCommsFlowRef.current,
+        phrase,
+        linked,
+      )
+      missionCommsFlowRef.current = state
+      setMissionCommsFlowPhase(state.phase)
+
+      if (effects.length === 0 && state.phase === 'idle') {
+        return { handled: false, ok: false, feedback: '' }
+      }
+
+      let feedback = 'OK.'
+      for (const effect of effects) {
+        if (effect.type === 'speak') {
+          feedback = effect.text
+          await speakMissionCommsPhrase(effect.text)
+        }
+        if (effect.type === 'cancel') {
+          missionCommsFlowRef.current = createIdleMissionCommsFlow()
+          setMissionCommsFlowPhase('idle')
+        }
+        if (effect.type === 'confirm_send') {
+          if (!teamCommsReady) {
+            feedback = 'No mission link yet.'
+            await speakMissionCommsPhrase(feedback)
+            missionCommsFlowRef.current = createIdleMissionCommsFlow()
+            setMissionCommsFlowPhase('idle')
+            return { handled: true, ok: false, feedback }
+          }
+          const sent = sendTeamBurst(effect.body, effect.target.callsign)
+          if (sent) {
+            emitHaptic('teamMessageSent')
+            feedback = `Sent to ${effect.target.label}.`
+            await speakMissionCommsPhrase(feedback)
+          } else {
+            feedback = 'Message not sent.'
+            await speakMissionCommsPhrase(feedback)
+          }
+          missionCommsFlowRef.current = createIdleMissionCommsFlow()
+          setMissionCommsFlowPhase('idle')
+        }
+      }
+      return { handled: true, ok: true, feedback }
+    },
+    [
+      missionCommsPrefs.handsFree,
+      role,
+      peers,
+      pendingInboundBurst,
+      confirmInboundMessage,
+      skipInboundMessage,
+      teamCommsReady,
+      sendTeamBurst,
+    ],
+  )
+
+  useEffect(() => {
+    setMissionCommsVoiceHandler(handleMissionCommsVoice)
+    return () => setMissionCommsVoiceHandler(null)
+  }, [handleMissionCommsVoice])
+
+  const sendVoiceClipBlob = useCallback(
+    async (capture: VoiceRecordResult, toCallsign?: string): Promise<boolean> => {
+      const coord = coordinatorRef.current
+      if (!coord || (role !== 'member' && role !== 'observer')) return false
+      const linked = coord.connectedPeers
+      if (linked.length === 0 && !monitorRelayActive) {
+        notify('warn', 'No mission link — voice needs mesh or relay')
+        return false
+      }
+      const now = Date.now()
+      if (now - lastVoiceAtRef.current < VOICE_CLIP_MIN_INTERVAL_MS) {
+        notify('warn', 'Voice cooldown — wait a few seconds')
+        return false
+      }
+      let target: TeamBurstTarget | undefined
+      const trimmedTarget = toCallsign?.trim()
+      if (trimmedTarget) {
+        const peer = resolveMissionPeerByCallsign(linked, trimmedTarget)
+        if (!peer) {
+          notify('warn', `No linked member matches "${trimmedTarget}"`)
+          return false
+        }
+        target = {
+          scope: 'direct',
+          peerId: peer.peerId,
+          deviceId: peer.deviceId,
+          callsign: peer.callsign,
+        }
+      }
+      const b64 = await blobToBase64(capture.blob)
+      const clip = buildVoiceClip(deviceId, callsign, b64, capture.durationMs, target)
+      if (!clip) {
+        notify('warn', 'Voice clip too long — keep it under 12 seconds')
+        return false
+      }
+      lastVoiceAtRef.current = now
+      if (target?.scope === 'direct') {
+        coord.sendVoiceClipToPeer(target.peerId, clip)
+      } else {
+        coord.sendVoiceClip(clip)
+      }
+      const label =
+        target?.scope === 'direct'
+          ? `Voice sent to ${target.callsign}`
+          : 'Voice sent to whole mission'
+      notify('success', label)
+      return true
+    },
+    [deviceId, callsign, role, monitorRelayActive, notify],
   )
 
   const discoverMissionOnLan = useCallback(
@@ -1618,6 +1995,7 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     if (saved.observerToken) setObserverToken(saved.observerToken)
     setPhase('idle')
     refreshCorridorStatus()
+    if (saved.role === 'member' && saved.observerToken) setWatchLinkShared(true)
 
     if (sessionCoordinatorReadyRef.current) return
     if (saved.role === 'observer') {
@@ -1725,8 +2103,23 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       reconnectMesh,
       teamCheckIns: filterFreshCheckIns(teamCheckIns),
       teamBursts: filterRecentBursts(teamBursts),
+      teamCommsReady,
+      lastInboundTeamBurst,
+      dismissTeamCommsAlert,
+      activeCommsTarget,
+      openCommsForTeammate,
+      clearActiveCommsTarget,
       sendTeamCheckIn,
       sendTeamBurst,
+      sendVoiceClipBlob,
+      watchLinkShared,
+      missionCommsPrefs,
+      setMissionCommsPrefs,
+      missionCommsFlowPhase,
+      pendingInboundBurst,
+      confirmInboundMessage,
+      skipInboundMessage,
+      queueOutboundConfirm,
       joinCodeSearching,
       discoverMissionOnLan,
       joinMissionFromOffer,
@@ -1780,8 +2173,23 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       observerSignalingAvailable,
       teamCheckIns,
       teamBursts,
+      teamCommsReady,
+      lastInboundTeamBurst,
+      dismissTeamCommsAlert,
+      activeCommsTarget,
+      openCommsForTeammate,
+      clearActiveCommsTarget,
       sendTeamCheckIn,
       sendTeamBurst,
+      sendVoiceClipBlob,
+      watchLinkShared,
+      missionCommsPrefs,
+      setMissionCommsPrefs,
+      missionCommsFlowPhase,
+      pendingInboundBurst,
+      confirmInboundMessage,
+      skipInboundMessage,
+      queueOutboundConfirm,
       joinCodeSearching,
       discoverMissionOnLan,
       joinMissionFromOffer,

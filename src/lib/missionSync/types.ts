@@ -47,6 +47,10 @@ export type TeamPresence = {
   lng: number | null
   accuracy: number | null
   updatedAt: number
+  /** Shared on mesh for teammate situational readout (optional). */
+  speedMph?: number
+  headingDeg?: number
+  elevationM?: number
 }
 
 export type MissionCheckIn = {
@@ -61,6 +65,21 @@ export type MissionBurst = {
   callsign: string
   text: string
   sentAt: number
+  /** When set, primary alert is for this device; still relayed on mission relay. */
+  toDeviceId?: string
+  toCallsign?: string
+}
+
+/** Short recorded voice note over mesh data channel (not live PTT). */
+export type MissionVoiceClip = {
+  deviceId: string
+  callsign: string
+  sentAt: number
+  durationMs: number
+  mime: string
+  audioB64: string
+  toDeviceId?: string
+  toCallsign?: string
 }
 
 export type SyncWireMessage =
@@ -68,6 +87,7 @@ export type SyncWireMessage =
   | { type: 'presence'; payload: TeamPresence }
   | { type: 'checkin'; payload: MissionCheckIn }
   | { type: 'burst'; payload: MissionBurst }
+  | { type: 'voice-clip'; payload: MissionVoiceClip }
   | { type: 'corridor-hint'; payload: MissionCorridorHint }
   | { type: 'ping'; deviceId: string; sentAt: number }
 

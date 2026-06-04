@@ -3,6 +3,7 @@ import * as maplibregl from 'maplibre-gl'
 import { useMapContext } from '../context/MapContext'
 import { useMissionSync } from '../context/MissionSyncContext'
 import { filterTeammatePresence } from '../lib/missionSync/presence'
+import { dispatchTeammateTap } from '../lib/missionSync/teamCommsBridge'
 
 const TEAM_COLORS = ['#38bdf8', '#a78bfa', '#fbbf24', '#34d399', '#fb7185', '#22d3ee']
 
@@ -17,7 +18,9 @@ function createTeammateMarkerEl(callsign: string, color: string, accuracyM: numb
   root.style.position = 'relative'
   root.style.width = '22px'
   root.style.height = '22px'
-  root.style.pointerEvents = 'none'
+  root.style.pointerEvents = 'auto'
+  root.style.cursor = 'pointer'
+  root.title = `Message ${callsign}`
 
   const ring = document.createElement('div')
   ring.style.width = '20px'
@@ -108,6 +111,10 @@ export default function TeamPresenceLayer() {
         continue
       }
       const el = createTeammateMarkerEl(t.callsign, color, t.accuracy)
+      el.addEventListener('click', (ev) => {
+        ev.stopPropagation()
+        dispatchTeammateTap({ deviceId: t.deviceId, callsign: t.callsign })
+      })
       const marker = new maplibregl.Marker({
         element: el,
         anchor: 'center',

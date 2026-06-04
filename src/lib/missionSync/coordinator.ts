@@ -7,6 +7,7 @@ import type {
   MissionBurst,
   MissionCheckIn,
   MissionCorridorHint,
+  MissionVoiceClip,
   MissionLinkRole,
   MissionOfferPacket,
   MissionSnapshot,
@@ -27,6 +28,7 @@ export type CoordinatorCallbacks = {
   onPresence?: (presence: TeamPresence, fromPeerId: string) => void
   onCheckIn?: (checkIn: MissionCheckIn, fromPeerId: string) => void
   onBurst?: (burst: MissionBurst, fromPeerId: string) => void
+  onVoiceClip?: (clip: MissionVoiceClip, fromPeerId: string) => void
   onCorridorHint?: (hint: MissionCorridorHint, fromPeerId: string) => void
   onError?: (message: string) => void
 }
@@ -106,6 +108,15 @@ export class MissionSyncCoordinator {
 
   get canPublish(): boolean {
     return this.role === 'member'
+  }
+
+  private canSendWire(msg: SyncWireMessage): boolean {
+    if (msg.type === 'ping') return true
+    if (this.role === 'member') return true
+    if (this.role === 'observer') {
+      return msg.type === 'burst' || msg.type === 'voice-clip' || msg.type === 'checkin'
+    }
+    return false
   }
 
   /** Field teammate link — one pending member slot; LAN ICE profile. */
@@ -284,7 +295,7 @@ export class MissionSyncCoordinator {
   }
 
   broadcast(msg: SyncWireMessage, exceptPeerId?: string): void {
-    if (!this.canPublish && msg.type !== 'ping') return
+    if (!this.canSendWire(msg)) return
     for (const [id, entry] of this.peers) {
       if (exceptPeerId && id === exceptPeerId) continue
       entry.session.send(msg)
@@ -292,12 +303,13 @@ export class MissionSyncCoordinator {
   }
 
   sendToPeer(peerId: string, msg: SyncWireMessage): void {
-    if (!this.canPublish && msg.type !== 'ping') return
+    if (!this.canSendWire(msg)) return
     this.peers.get(peerId)?.session.send(msg)
   }
 
   private emitOutboundRelay(msg: SyncWireMessage): void {
-    if (!this.canPublish || msg.type === 'ping') return
+    if (!this.canSendWire(msg) || msg.type === 'ping') return
+    if (this.role === 'observer' && msg.type !== 'burst' && msg.type !== 'voice-clip') return
     this.outboundRelay?.(msg)
   }
 
@@ -335,6 +347,32 @@ export class MissionSyncCoordinator {
     const msg: SyncWireMessage = { type: 'burst', payload: burst }
     this.emitOutboundRelay(msg)
     this.broadcast(msg, exceptPeerId)
+  }
+
+  /** Directed field message — one teammate + mission relay (watchers). */
+  sendBurstToPeer(peerId: string, burst: MissionBurst): void {
+    const msg: SyncWireMessage = { type: 'burst', payload: burst }
+    this.emitOutboundRelay(msg)
+    this.sendToPeer(peerId, msg)
+  }
+
+  sendBurstToPeers(peerIds: string[], burst: MissionBurst): void {
+    const msg: SyncWireMessage = { type: 'burst', payload: burst }
+    this.emitOutboundRelay(msg)
+    const unique = [...new Set(peerIds)]
+    for (const id of unique) this.sendToPeer(id, msg)
+  }
+
+  sendVoiceClip(clip: MissionVoiceClip, exceptPeerId?: string): void {
+    const msg: SyncWireMessage = { type: 'voice-clip', payload: clip }
+    this.emitOutboundRelay(msg)
+    this.broadcast(msg, exceptPeerId)
+  }
+
+  sendVoiceClipToPeer(peerId: string, clip: MissionVoiceClip): void {
+    const msg: SyncWireMessage = { type: 'voice-clip', payload: clip }
+    this.emitOutboundRelay(msg)
+    this.sendToPeer(peerId, msg)
   }
 
   sendCorridorHint(hint: MissionCorridorHint, exceptPeerId?: string): void {
@@ -400,7 +438,12 @@ export class MissionSyncCoordinator {
 
   private handleWireMessage(msg: SyncWireMessage, fromPeerId: string): void {
     const fromRole = this.peerLinkRole(fromPeerId)
-    if (fromRole === 'observer' && msg.type !== 'ping') {
+    if (
+      fromRole === 'observer' &&
+      msg.type !== 'ping' &&
+      msg.type !== 'burst' &&
+      msg.type !== 'voice-clip'
+    ) {
       return
     }
 
@@ -422,6 +465,11 @@ export class MissionSyncCoordinator {
     }
     if (msg.type === 'burst') {
       this.callbacks.onBurst?.(msg.payload, fromPeerId)
+      this.broadcast(msg, fromPeerId)
+      return
+    }
+    if (msg.type === 'voice-clip') {
+      this.callbacks.onVoiceClip?.(msg.payload, fromPeerId)
       this.broadcast(msg, fromPeerId)
       return
     }

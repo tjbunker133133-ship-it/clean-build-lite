@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAppContext } from '../context/AppContext'
+import { useMissionSync } from '../context/MissionSyncContext'
+import { parseTeamMessageVoice } from '../lib/missionSync/teamComms'
+import { tryHandleMissionCommsVoice } from '../lib/missionSync/missionCommsVoiceBridge'
 import { useCockpit } from '../context/CockpitContext'
 import { useOverlayContext } from '../context/OverlayContext'
 import { useMapContext } from '../context/MapContext'
@@ -74,7 +77,11 @@ export type CommandDescriptor = {
   paletteVisible?: boolean
   /** Optional grouping label for palette/directory. */
   group?: string
-  run: (ctx: { source: CommandSource }) => Promise<CommandResult> | CommandResult
+  run: (ctx: {
+    source: CommandSource
+    /** Full phrase heard (voice) or typed command line. */
+    rawTranscript?: string
+  }) => Promise<CommandResult> | CommandResult
 }
 
 function normalize(input: string): string {
@@ -108,6 +115,7 @@ export function useHudCommands(): {
   const { setScreenHue, resetLayout, raisePanel, updatePanel } = useCockpit()
   const { setEnabled: setOverlayEnabled } = useOverlayContext()
   const panelData = usePanelData()
+  const missionSync = useMissionSync()
 
   const raiseLayersPanel = useCallback(() => {
     updatePanel('layers', { docked: false, minimized: false })
@@ -796,6 +804,23 @@ export function useHudCommands(): {
         },
       },
       {
+        id: 'team check in',
+        label: 'Send team check-in OK',
+        aliases: ['team checkin', 'send team check in', 'mesh check in'],
+        paletteVisible: true,
+        group: 'Mission',
+        run: () => {
+          if (missionSync.role !== 'member') {
+            return fail('Start or join a field mission first.')
+          }
+          if (!missionSync.teamCommsReady) {
+            return fail('Link a teammate on the mission mesh first.')
+          }
+          missionSync.sendTeamCheckIn()
+          return ok('Team check-in sent.')
+        },
+      },
+      {
         id: 'wearables panel',
         label: 'Open wearables panel',
         aliases: ['open wearables', 'wearables', 'companion devices', 'smartwatch panel'],
@@ -985,6 +1010,7 @@ export function useHudCommands(): {
     state.waypoints,
     state.snapToTrailEnabled,
     updatePanel,
+    missionSync,
   ])
 
   const dispatch = useCallback(
@@ -1032,6 +1058,46 @@ export function useHudCommands(): {
         return finalize(fail('Empty command.'), { id: null, alias: null }, 'empty')
       }
 
+      const missionVoice = await tryHandleMissionCommsVoice(norm)
+      if (missionVoice) {
+        markCommandResolving(execId, 'team message')
+        if (missionVoice.ok) reportCommandSuccess(execId, { verification: 'unverified_ok', message: 'ok' })
+        else reportCommandFailure(execId, 'invalid_state', missionVoice.feedback)
+        return finalize(
+          missionVoice.ok ? ok(missionVoice.feedback) : fail(missionVoice.feedback),
+          { id: 'team message', alias: 'team message' },
+          missionVoice.ok ? 'ok' : 'handler-fail',
+        )
+      }
+
+      const teamParsed = parseTeamMessageVoice(norm, heard)
+      if (teamParsed) {
+        markCommandResolving(execId, 'team message')
+        if (missionSync.role === 'idle') {
+          reportCommandRejected(execId, 'invalid_state', 'Mission not active.')
+          return finalize(
+            fail('Start or join a mission to send team messages.'),
+            { id: 'team message', alias: 'team message' },
+            'handler-fail',
+          )
+        }
+        if (!missionSync.teamCommsReady) {
+          reportCommandRejected(execId, 'invalid_state', 'Mesh not ready.')
+          return finalize(
+            fail('Link a teammate first — mesh messages work offline on the same Wi‑Fi.'),
+            { id: 'team message', alias: 'team message' },
+            'handler-fail',
+          )
+        }
+        missionSync.queueOutboundConfirm(teamParsed.text, teamParsed.callsign)
+        reportCommandSuccess(execId, { verification: 'unverified_ok', message: 'queued' })
+        return finalize(
+          ok('Say accept to send, or cancel.'),
+          { id: 'team message', alias: 'team message' },
+          'ok',
+        )
+      }
+
       let matchedAlias: string | null = null
       const found = commands.find((c) => {
         if (c.id === norm) {
@@ -1061,7 +1127,7 @@ export function useHudCommands(): {
 
       try {
         traceAction(`command:${found.id}`, 'async_start', { source, alias: matchedAlias })
-        const result = await found.run({ source })
+        const result = await found.run({ source, rawTranscript: heard })
 
         if (!result.ok) {
           // Handler-reported failure: classify reason from message.
@@ -1155,7 +1221,7 @@ export function useHudCommands(): {
         )
       }
     },
-    [commands],
+    [commands, missionSync, raisePanel, updatePanel],
   )
 
   return { commands, dispatch }

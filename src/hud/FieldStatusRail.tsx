@@ -4,6 +4,7 @@ import { getCorridorOfflineSummary } from '../lib/corridorPrefetch'
 import { useCorridorOffline } from '../hooks/useCorridorOffline'
 import { useNavigationMonitor } from '../hooks/useNavigationMonitor'
 import { monitorTransportLabel } from '../lib/missionSync/monitorUx'
+import { formatBurstLine } from '../lib/missionSync/teamComms'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 import { fieldStatusRailBottomCss } from './hudLayout'
 import { touchFontSm } from './tokens'
@@ -51,6 +52,16 @@ export default function FieldStatusRail() {
         id: 'nav',
         label: compactNavAdvisory(navAdvisory),
         tone: 'nav',
+      })
+    }
+
+    if (sync.lastInboundTeamBurst) {
+      const b = sync.lastInboundTeamBurst
+      list.push({
+        id: 'team-comms',
+        label: `Msg · ${formatBurstLine(b, sync.deviceId)}`,
+        live: true,
+        tone: 'mesh',
       })
     }
 

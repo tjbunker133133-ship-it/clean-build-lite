@@ -14,4 +14,15 @@ describe('mission comms', () => {
     expect(b?.text).toBe('meet at saddle')
     expect(b?.callsign).toBe('Alpha')
   })
+
+  it('builds directed burst payload', () => {
+    const b = buildBurst('dev1', 'Alpha', 'hold', {
+      scope: 'direct',
+      peerId: 'p1',
+      deviceId: 'd2',
+      callsign: 'Bravo',
+    })
+    expect(b?.toDeviceId).toBe('d2')
+    expect(b?.toCallsign).toBe('Bravo')
+  })
 })

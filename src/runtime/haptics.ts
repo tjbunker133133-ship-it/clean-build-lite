@@ -28,7 +28,13 @@ import { logInfo, logWarn } from './logger'
 
 // ---------- public types ----------
 
-export type HapticEventKind = 'wakeWord' | 'commandSuccess' | 'commandFailure' | 'criticalAlert'
+export type HapticEventKind =
+  | 'wakeWord'
+  | 'commandSuccess'
+  | 'commandFailure'
+  | 'criticalAlert'
+  | 'teamMessage'
+  | 'teamMessageSent'
 
 export type HapticSuppressedReason =
   | 'throttled'
@@ -58,11 +64,14 @@ const PULSE_MS: Record<Exclude<HapticEventKind, 'criticalAlert'>, number> = {
   wakeWord: 12,
   commandSuccess: 18,
   commandFailure: 40,
+  teamMessage: 60,
+  teamMessageSent: 22,
 }
 
 /** `criticalAlert` uses a multi-pulse pattern so it is unambiguously
  *  distinguishable from low-noise success/failure taps. */
 const CRITICAL_ALERT_PATTERN: ReadonlyArray<number> = [120, 80, 120]
+const TEAM_MESSAGE_PATTERN: ReadonlyArray<number> = [70, 45, 70]
 
 /** Per-event cooldowns (ms). Prevents re-fire on rapid SR partials or
  *  cascading failures. `criticalAlert` has a long cooldown so corridor
@@ -72,6 +81,8 @@ const COOLDOWN_MS: Record<HapticEventKind, number> = {
   commandSuccess: 250,
   commandFailure: 600,
   criticalAlert: 1500,
+  teamMessage: 800,
+  teamMessageSent: 400,
 }
 
 /** Global minimum spacing between any two pulses. `criticalAlert` is
@@ -100,6 +111,8 @@ const lastEventAt: Record<HapticEventKind, number | null> = {
   commandSuccess: null,
   commandFailure: null,
   criticalAlert: null,
+  teamMessage: null,
+  teamMessageSent: null,
 }
 
 // ---------- listener injection (runtimeSnapshot mirror) ----------
@@ -208,6 +221,8 @@ export function emitHaptic(kind: HapticEventKind, context?: string): boolean {
   try {
     if (isCritical) {
       navigator.vibrate(CRITICAL_ALERT_PATTERN as number[])
+    } else if (kind === 'teamMessage') {
+      navigator.vibrate(TEAM_MESSAGE_PATTERN as number[])
     } else {
       navigator.vibrate(PULSE_MS[kind as Exclude<HapticEventKind, 'criticalAlert'>])
     }

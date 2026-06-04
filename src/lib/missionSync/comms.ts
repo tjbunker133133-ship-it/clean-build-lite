@@ -1,4 +1,5 @@
 import type { MissionBurst, MissionCheckIn } from './types'
+import type { TeamBurstTarget } from './teamComms'
 
 export const BURST_MAX_CHARS = 120
 export const BURST_MIN_INTERVAL_MS = 3_000
@@ -30,15 +31,25 @@ export function buildCheckIn(
   }
 }
 
-export function buildBurst(deviceId: string, callsign: string, text: string): MissionBurst | null {
+export function buildBurst(
+  deviceId: string,
+  callsign: string,
+  text: string,
+  target?: TeamBurstTarget,
+): MissionBurst | null {
   const body = sanitizeBurstText(text)
   if (!body) return null
-  return {
+  const burst: MissionBurst = {
     deviceId,
     callsign,
     text: body,
     sentAt: Date.now(),
   }
+  if (target?.scope === 'direct') {
+    burst.toDeviceId = target.deviceId
+    burst.toCallsign = target.callsign
+  }
+  return burst
 }
 
 export function filterFreshCheckIns(items: MissionCheckIn[], nowMs = Date.now()): MissionCheckIn[] {
