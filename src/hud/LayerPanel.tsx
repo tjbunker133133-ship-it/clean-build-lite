@@ -5,6 +5,9 @@ import { useCockpit } from '../context/CockpitContext'
 import { useMapContext } from '../context/MapContext'
 import type { LayerType } from '../types'
 import type { ScreenHueMode } from '../types/cockpit'
+import { ENVIRONMENTAL_OVERLAY_CATALOG } from '../lib/environmentalOverlays/catalog'
+import { useOverlayContext } from '../context/OverlayContext'
+import { iosWebPushRequirementLine } from '../lib/iosFieldCapabilities'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 import { touchFontSm, touchGapMd, touchGapSm, touchMinTarget } from './tokens'
 
@@ -35,6 +38,7 @@ export default function LayerPanel() {
   const { prefs, setScreenHue, setDisplayTuning } = useCockpit()
   const activeHue = prefs.screen_hue
   const mapBusy = mapStatus === 'initial'
+  const { toggles, status, setEnabled, online } = useOverlayContext()
   const isMobile = getDeviceProfile().interactionMode === 'mobile'
   const fontSm = touchFontSm(isMobile)
   const gapSm = touchGapSm(isMobile)
@@ -78,7 +82,7 @@ export default function LayerPanel() {
       title="Map & display"
       initialPos={{ x: 16, y: 60 }}
       initialWidth={280}
-      minHeight={280}
+      minHeight={360}
     >
       <div style={{ display: 'grid', gap: gapMd }}>
         <section style={{ display: 'grid', gap: gapSm }}>
@@ -135,6 +139,89 @@ export default function LayerPanel() {
               )
             })}
           </div>
+        </section>
+
+        <section
+          style={{
+            display: 'grid',
+            gap: gapSm,
+            borderTop: '1px solid rgba(199,206,198,0.2)',
+            paddingTop: gapMd,
+          }}
+        >
+          <p style={sectionLabelStyle}>SITUATIONAL OVERLAYS</p>
+          <p style={{ margin: 0, fontSize: fontSm, color: '#8a948c', lineHeight: 1.4 }}>
+            Drawn over the basemap. Does not change Streets/Topo/Outdoor/Satellite. OSM layers cache
+            in this view for offline; raster layers need network.
+          </p>
+          {iosWebPushRequirementLine() ? (
+            <p style={{ margin: 0, fontSize: fontSm, color: '#9ea7a0', lineHeight: 1.4 }}>
+              {iosWebPushRequirementLine()}
+            </p>
+          ) : null}
+          {!online && (
+            <p style={{ margin: 0, fontSize: fontSm, color: '#ffd166' }}>
+              Offline — cached OSM overlays only where you fetched before.
+            </p>
+          )}
+          {ENVIRONMENTAL_OVERLAY_CATALOG.map((def) => {
+            const st = status[def.id]
+            const checked = toggles[def.id]
+            return (
+              <label
+                key={def.id}
+                data-no-drag
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'auto 1fr',
+                  gap: 8,
+                  alignItems: 'start',
+                  padding: '6px 4px',
+                  borderRadius: 6,
+                  border: '1px solid rgba(199,206,198,0.12)',
+                  background: checked ? 'rgba(199,206,198,0.08)' : 'transparent',
+                  cursor: 'pointer',
+                  minHeight: tapMin,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={(e) => setEnabled(def.id, e.target.checked)}
+                  style={{ marginTop: 4, accentColor: '#7dff8a' }}
+                />
+                <span style={{ display: 'grid', gap: 2 }}>
+                  <span style={{ fontSize: fontSm, color: '#c7cec6', fontWeight: 700 }}>
+                    {def.label}
+                  </span>
+                  <span style={{ fontSize: fontSm, color: '#9ea7a0' }}>{def.hint}</span>
+                  {st?.loading && (
+                    <span style={{ fontSize: fontSm, color: '#9ea7a0' }}>Loading…</span>
+                  )}
+                  {st?.fromCache && (
+                    <span style={{ fontSize: fontSm, color: '#ffd166' }}>Cached / stale</span>
+                  )}
+                  {st?.error && (
+                    <span style={{ fontSize: fontSm, color: '#ff9aac' }}>{st.error}</span>
+                  )}
+                  {def.signupUrl && !checked && (
+                    <a
+                      href={def.signupUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{ fontSize: fontSm, color: '#7dff8a' }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      Get free MAP_KEY (NASA FIRMS)
+                    </a>
+                  )}
+                </span>
+              </label>
+            )
+          })}
+          <p style={{ margin: 0, fontSize: 11, color: '#7a827a', lineHeight: 1.35 }}>
+            Data: NASA FIRMS, USGS, USFS, BLM, OpenStreetMap. Planning aids only — verify locally.
+          </p>
         </section>
 
         <section

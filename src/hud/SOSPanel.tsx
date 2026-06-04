@@ -8,12 +8,11 @@ import { registerHudAudioStopListener, stopAllHudAudio } from '../runtime/voiceA
 import { getDeviceProfile } from '../runtime/deviceProfile'
 import { buildRescuePacket, rescuePacketDevLogSummary } from '../lib/rescue/buildRescuePacket'
 import {
-  buildRescueDispatchHeaders,
   classifyRescueDispatchKey,
   hasRescueDispatchAuth,
-  logRescueDispatchTrace,
-  parseRescueDispatchFailure,
 } from '../lib/rescue/rescueDispatch'
+import { postRescuePacket } from '../lib/rescue/postRescuePacket'
+import { formatRescuePushSuffix } from '../lib/rescue/postRescuePush'
 import { getRescueEligibility } from '../lib/rescue/eligibility'
 import { useTacticalProfile } from '../hooks/useTacticalProfile'
 import { traceAction } from '../runtime/actionTrace'
@@ -84,7 +83,7 @@ function sleep(ms: number) {
 // Removed obsolete localStorage contact fallbacks (`titanium_saved_contacts`,
 // `emergency_contacts_saved`, `titanium_route_contacts`,
 // `current_route_contacts`). The dispatch path is now backend-truth-only via
-// `buildRescuePacket()` → `fetchEmergencyContacts()`.
+// `buildRescuePacket()` → device-local tactical profile contacts.
 
 export default function SOSPanel() {
   // CONTRACT-SENSITIVE (subscriptions): both calls are intentional. They
@@ -655,30 +654,24 @@ export default function SOSPanel() {
         dispatchKeyKind,
         signed: Boolean(packet.signature),
       })
-      logRescueDispatchTrace({
-        triggerLabel: 'SOS',
-        endpoint,
-        triggerType: packet.triggerType,
-        hasOperator: Boolean(packet.operator),
-        signed: Boolean(packet.signature),
-      })
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: buildRescueDispatchHeaders(),
-        body: JSON.stringify(packet),
-        signal: ac.signal,
-      })
-      if (res.ok) {
-        safeSetStatus(`SOS SENT TO ${contactCount} CONTACTS`)
-        traceAction('sos_dispatch', 'async_complete', { status: res.status, contactCount })
-      } else {
-        const fail = await parseRescueDispatchFailure(res, 'SOS')
-        safeSetStatus(fail.operatorMessage)
+      const result = await postRescuePacket(packet, endpoint, 'SOS', ac.signal)
+      if (result.ok) {
+        safeSetStatus(`SOS SENT TO ${contactCount} CONTACTS${formatRescuePushSuffix(result.push)}`)
+        traceAction('sos_dispatch', 'async_complete', {
+          status: result.status,
+          contactCount,
+          pushSent: result.push?.ok ? result.push.sentCount ?? 0 : 0,
+        })
+      } else if (result.reason === 'http_error') {
+        safeSetStatus(result.failure.operatorMessage)
         traceAction('sos_dispatch', 'failure', {
           reason: 'http_error',
-          status: fail.status,
-          code: fail.code,
+          status: result.failure.status,
+          code: result.failure.code,
         })
+      } else {
+        safeSetStatus('SOS SEND FAILED (NETWORK)')
+        traceAction('sos_dispatch', 'failure', { reason: 'network_error' })
       }
     } catch (e: unknown) {
       if ((e as { name?: string })?.name === 'AbortError') return

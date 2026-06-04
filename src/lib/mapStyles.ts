@@ -48,6 +48,16 @@ export function maptilerBasemapsConfigured(): boolean {
   return Boolean(maptilerKey())
 }
 
+/**
+ * Android field HUD: Outdoor direct raster matches corridor prefetch tile URLs.
+ * Vector outdoor uses different tile URLs and breaks offline corridor reuse.
+ */
+export function shouldUseOutdoorFieldRasterBasemap(): boolean {
+  const p = getDeviceProfile()
+  if (!p.isAndroid) return false
+  return p.isPWA || p.isStandalone || p.interactionMode === 'mobile'
+}
+
 /** MapTiler terrain-rgb TileJSON — uses VITE_MAPTILER_KEY. */
 export function maptilerTerrainRgbTileJson(): string {
   const key = maptilerKey()
@@ -212,6 +222,10 @@ export function resolveBasemapStyle(layer: MapStyleKey): {
   style: string | StyleSpecification
   delivery: BasemapDelivery
 } {
+  if (layer === 'outdoor' && shouldUseOutdoorFieldRasterBasemap()) {
+    const direct = getMapTilerRasterDirectTilesStyle('outdoor')
+    if (direct) return { style: direct, delivery: 'maptiler-raster' }
+  }
   const vectorUrl = getStyleUrl(layer)
   if (vectorUrl) return { style: vectorUrl, delivery: 'vector' }
   const raster = getMapTilerRasterFallbackStyle(layer)

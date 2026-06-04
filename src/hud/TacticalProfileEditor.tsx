@@ -4,8 +4,10 @@ import {
   isValidEmail,
   markTacticalSetupComplete,
   removeTacticalContact,
+  updateTacticalContactAlertChannel,
   type TacticalProfile,
 } from '../lib/tacticalProfile'
+import { ALERT_CHANNEL_OPTIONS, type AlertChannel } from '../lib/alertChannel'
 import { useTacticalProfile } from '../hooks/useTacticalProfile'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 import { touchFontSm, touchFontMd, touchGapSm, touchMinTarget } from './tokens'
@@ -22,7 +24,12 @@ export default function TacticalProfileEditor({ compact = false, onSaved }: Prop
     reply_to_email: profile.reply_to_email,
     phone: profile.phone,
   }))
-  const [contactForm, setContactForm] = useState({ name: '', email: '', phone: '' })
+  const [contactForm, setContactForm] = useState({
+    name: '',
+    email: '',
+    phone: '',
+    alert_channel: 'both' as AlertChannel,
+  })
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -77,13 +84,14 @@ export default function TacticalProfileEditor({ compact = false, onSaved }: Prop
       name: contactForm.name,
       email: contactForm.email,
       phone: contactForm.phone,
+      alert_channel: contactForm.alert_channel,
     })
     setBusy(false)
     if (addErr) {
       setError(addErr)
       return
     }
-    setContactForm({ name: '', email: '', phone: '' })
+    setContactForm({ name: '', email: '', phone: '', alert_channel: 'both' })
     onSaved?.()
   }
 
@@ -150,7 +158,7 @@ export default function TacticalProfileEditor({ compact = false, onSaved }: Prop
             data-no-drag
             value={draft.phone}
             onChange={(e) => setDraft((d) => ({ ...d, phone: e.target.value }))}
-            placeholder="For future SMS"
+            placeholder="Optional phone (alerts use email + push)"
             style={inputStyle}
           />
         </label>
@@ -182,7 +190,13 @@ export default function TacticalProfileEditor({ compact = false, onSaved }: Prop
       ) : (
         <div style={{ display: 'grid', gap: 2 }}>
           {profile.contacts.map((c) => (
-            <ContactRow key={c.id} contact={c} busy={busy} onRemove={() => removeTacticalContact(c.id)} />
+            <ContactRow
+              key={c.id}
+              contact={c}
+              busy={busy}
+              onRemove={() => removeTacticalContact(c.id)}
+              onChannelChange={(ch) => updateTacticalContactAlertChannel(c.id, ch)}
+            />
           ))}
         </div>
       )}
@@ -208,13 +222,34 @@ export default function TacticalProfileEditor({ compact = false, onSaved }: Prop
         <input
           type="tel"
           data-no-drag
-          placeholder="Phone (optional)"
+          placeholder="Phone optional (email + push alerts)"
           value={contactForm.phone}
           onChange={(e) => setContactForm((f) => ({ ...f, phone: e.target.value }))}
           disabled={busy}
           style={inputStyle}
         />
       )}
+      <label style={{ display: 'grid', gap: 4, fontSize: fontSm, color: '#9ea7a0' }}>
+        Alert delivery
+        <select
+          data-no-drag
+          value={contactForm.alert_channel}
+          onChange={(e) =>
+            setContactForm((f) => ({
+              ...f,
+              alert_channel: e.target.value as AlertChannel,
+            }))
+          }
+          disabled={busy}
+          style={{ ...inputStyle, cursor: 'pointer' }}
+        >
+          {ALERT_CHANNEL_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+      </label>
       <button
         type="button"
         data-no-drag
@@ -243,12 +278,16 @@ function ContactRow({
   contact,
   busy,
   onRemove,
+  onChannelChange,
 }: {
   contact: TacticalProfile['contacts'][number]
   busy: boolean
   onRemove: () => void
+  onChannelChange: (ch: AlertChannel) => void
 }) {
   const valid = isValidEmail(contact.email)
+  const channelLabel =
+    ALERT_CHANNEL_OPTIONS.find((o) => o.value === contact.alert_channel)?.label ?? 'Email + push'
   return (
     <div
       style={{
@@ -268,6 +307,32 @@ function ContactRow({
           {contact.email}
           {contact.phone ? ` · ${contact.phone}` : ''}
         </div>
+        {valid && (
+          <select
+            data-no-drag
+            disabled={busy}
+            value={contact.alert_channel}
+            onChange={(e) => onChannelChange(e.target.value as AlertChannel)}
+            style={{
+              marginTop: 4,
+              fontSize: 11,
+              borderRadius: 4,
+              border: '1px solid rgba(199,206,198,0.25)',
+              background: 'rgba(10,12,13,0.8)',
+              color: '#b8c4b8',
+              padding: '2px 4px',
+            }}
+          >
+            {ALERT_CHANNEL_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        )}
+        {!valid && (
+          <div style={{ color: '#9ea7a0', fontSize: 11, marginTop: 2 }}>{channelLabel}</div>
+        )}
       </div>
       <button
         type="button"

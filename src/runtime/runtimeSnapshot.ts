@@ -156,6 +156,57 @@ export interface RuntimeContinuitySnapshot {
   recoveryCoordinatorState: RecoveryCoordinatorState
 }
 
+/** Trail snap + raw GPS diagnostics (Tier 2 observability). */
+export interface SnapGpsDiagnosticsSnapshot {
+  activeProvider: string
+  lastRawAccuracyM: number | null
+  lastGpsAgeMs: number | null
+  lastSnapConfidence: number | null
+  lastSnapDistanceM: number | null
+  lastProviderLatencyMs: number | null
+  rejectedPointCount: number
+  acceptedSnapCount: number
+  deferredSnapCount: number
+  lastRejectReasons: string[]
+  lastEventAt: number
+  pipelinePhase: string
+  recentEvents: Array<{ ts: number; kind: string; phase: string; msg: string }>
+  pipelineEnabled: boolean
+  validationEnabled: boolean
+  diagnosticsEnabled: boolean
+  fallbackCount: number
+  validationPassCount: number
+  validationFailCount: number
+  lastValidationOutcome: 'pass' | 'fail' | 'skipped' | '—'
+  lastFallbackUsed: boolean
+  rejectReasonHistogram: Record<string, number>
+}
+
+export const SNAP_GPS_DIAG_DEFAULT: SnapGpsDiagnosticsSnapshot = {
+  activeProvider: 'none',
+  lastRawAccuracyM: null,
+  lastGpsAgeMs: null,
+  lastSnapConfidence: null,
+  lastSnapDistanceM: null,
+  lastProviderLatencyMs: null,
+  rejectedPointCount: 0,
+  acceptedSnapCount: 0,
+  deferredSnapCount: 0,
+  lastRejectReasons: [],
+  lastEventAt: 0,
+  pipelinePhase: 'idle',
+  recentEvents: [],
+  pipelineEnabled: false,
+  validationEnabled: true,
+  diagnosticsEnabled: true,
+  fallbackCount: 0,
+  validationPassCount: 0,
+  validationFailCount: 0,
+  lastValidationOutcome: '—',
+  lastFallbackUsed: false,
+  rejectReasonHistogram: {},
+}
+
 export interface RuntimeSnapshot {
   buildId: string
   /** Alias for external consumers that expect buildHash naming. */
@@ -210,6 +261,8 @@ export interface RuntimeSnapshot {
    *  install is currently eligible. Updated on `beforeinstallprompt`,
    *  `appinstalled`, and `display-mode: standalone` matchMedia changes. */
   installMode: InstallMode
+  /** Snap pipeline + raw GPS diagnostics (`lib/snapTrack/snapDiagnostics.ts`). */
+  snapGps: SnapGpsDiagnosticsSnapshot
 }
 
 export type DeadManTimerState =
@@ -325,6 +378,7 @@ const snapshot: RuntimeSnapshot = {
   wakeWordDetectedAt: null,
   haptics: getHapticsSnapshot(),
   installMode: getInstallMode(),
+  snapGps: { ...SNAP_GPS_DIAG_DEFAULT },
 }
 
 function pushRolling<T>(arr: T[], item: T, max: number): T[] {
@@ -538,6 +592,18 @@ export function updateGpsRecoveryState(state: GpsRecoveryState): void {
     recoveryCoordinatorState: state === 'recovering' ? 'recovering' : snapshot.runtimeContinuity.recoveryCoordinatorState,
   }
   recordEvent('runtime', state === 'stale' ? 'WARN' : state === 'denied' ? 'CRITICAL' : 'INFO', `gps -> ${state}`)
+  notify()
+}
+
+export function updateSnapGpsDiagnostics(patch: Partial<SnapGpsDiagnosticsSnapshot>): void {
+  snapshot.snapGps = {
+    ...snapshot.snapGps,
+    ...patch,
+    recentEvents: patch.recentEvents ?? snapshot.snapGps.recentEvents,
+    lastRejectReasons: patch.lastRejectReasons ?? snapshot.snapGps.lastRejectReasons,
+    rejectReasonHistogram:
+      patch.rejectReasonHistogram ?? snapshot.snapGps.rejectReasonHistogram,
+  }
   notify()
 }
 

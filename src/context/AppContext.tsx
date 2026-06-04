@@ -22,7 +22,7 @@ const VALID_LAYERS = ['streets', 'topo', 'outdoor', 'satellite'] as const
 
 const initialState: AppState = {
   waypoints: [],
-  activeLayer: 'satellite',
+  activeLayer: 'outdoor',
   selectedWaypointId: null,
   pendingWaypointType: 'default',
   nextWaypointLabel: '',
@@ -33,7 +33,7 @@ const initialState: AppState = {
   snapToTrailEnabled: false,
   trailSnapAssistCapable: false,
   deadManTimeLeft: DEAD_MAN_DURATION,
-  deadManActive: true,
+  deadManActive: false,
 }
 
 export function appReducer(state: AppState, action: AppAction): AppState {
@@ -115,7 +115,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
     case 'SET_DEAD_MAN_TIME':
       return { ...state, deadManTimeLeft: action.payload }
     case 'RESET_DEAD_MAN':
-      return { ...state, deadManTimeLeft: DEAD_MAN_DURATION, deadManActive: true }
+      return { ...state, deadManTimeLeft: DEAD_MAN_DURATION, deadManActive: false }
     case 'SET_DEAD_MAN_ACTIVE':
       return { ...state, deadManActive: action.payload }
     default:

@@ -24,14 +24,19 @@ import {
   operatorMetaFromProfile,
   rescueContactsFromProfile,
 } from '../tacticalProfile'
+import { loadOrCreateAlertWatchToken } from '../push/alertWatchToken'
 
 export type RescueTriggerType = 'SOS' | 'DEADMAN' | 'CHECKIN'
+
+import type { AlertChannel } from '../alertChannel'
 
 export type RescueContactPair = {
   name: string
   email: string
-  /** Reserved for future SMS routing; included in email body when set. */
+  /** Reserved for future SMS routing; phone included in email body when set. Push replaces SMS in v1. */
   phone?: string
+  /** Per-contact delivery preference (defaults to both when omitted). */
+  alertChannel?: AlertChannel
 }
 
 export type RescueOperatorMeta = {
@@ -53,6 +58,8 @@ export type RescuePacket = {
   source: 'tactical-hud'
   /** Device-local operator identity for email personalization and Reply-To. */
   operator?: RescueOperatorMeta
+  /** Links push subscriptions for emergency contacts (Web Push v1). */
+  alertWatchToken?: string
   /**
    * HMAC-SHA256(canonicalJSON(rest), VITE_RESCUE_SIGNING_KEY), hex-encoded.
    * Optional in the type so a missing build-time key does not turn into a
@@ -285,6 +292,12 @@ export async function buildRescuePacket(
 
   const timestamp = new Date().toISOString()
   const coordinates = readLastKnownCoordinates()
+  let alertWatchToken: string | undefined
+  try {
+    alertWatchToken = loadOrCreateAlertWatchToken()
+  } catch {
+    alertWatchToken = undefined
+  }
   const base: Omit<RescuePacket, 'signature'> = {
     triggerType,
     timestamp,
@@ -292,6 +305,7 @@ export async function buildRescuePacket(
     contacts,
     source: 'tactical-hud',
     ...(operator ? { operator } : {}),
+    ...(alertWatchToken ? { alertWatchToken } : {}),
   }
 
   const packet = await signRescuePacketBody(base)

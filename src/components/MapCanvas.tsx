@@ -41,6 +41,7 @@ import {
   MIN_SNAP_ZOOM,
 } from '../lib/snapToTrail'
 import { computeTrailRoute, diagnoseTrailLeg } from '../lib/trailRoute'
+import { observeWaypointDropAfterCommit } from '../lib/snapTrack/waypointSnapBridge'
 import { hudObsMark, hudObsMeasure } from '../diag/hudObs'
 import { getDeviceProfile, isIosFieldHud } from '../runtime/deviceProfile'
 
@@ -63,6 +64,23 @@ function shouldUseTerrainSafeRasterBasemap(layer: MapStyleKey): boolean {
   if (isIosFieldHud()) return true
   if (isAppleWebKitMapSwitch() && !getDeviceProfile().isAndroid) return true
   return false
+}
+
+function applyOfflineCorridorBasemapIfNeeded(map: maplibregl.Map): void {
+  if (typeof navigator !== 'undefined' && navigator.onLine) return
+  if (!hasCorridorOutdoorCache()) return
+  const direct = getMapTilerRasterDirectTilesStyle('outdoor')
+  if (!direct) return
+  try {
+    const fp = mapStyleFingerprint(direct)
+    if (mapStyleFingerprint(map.getStyle()) !== fp) {
+      map.setStyle(direct, { diff: false })
+      mapLayerDiag('offline-corridor-raster-reapply', { layer: 'outdoor' })
+    }
+    nudgeMapRenderAfterStyleChange(map)
+  } catch {
+    /* ignore */
+  }
 }
 
 function resolveHudBasemapStyle(layer: MapStyleKey): ReturnType<typeof resolveBasemapStyle> {
@@ -995,14 +1013,36 @@ export default function MapCanvas() {
           return true
         }
 
+        const reportWaypointSnapObservation = (
+          tier1: Parameters<typeof observeWaypointDropAfterCommit>[0]['tier1'],
+        ) => {
+          const g = gpsRef.current
+          observeWaypointDropAfterCommit({
+            getMap: () => mapRef.current,
+            tapLat: lat,
+            tapLng: lng,
+            deviceGps:
+              g.lat != null && g.lng != null
+                ? {
+                    lat: g.lat,
+                    lng: g.lng,
+                    accuracy: g.accuracy,
+                    source: g.source,
+                  }
+                : undefined,
+            tier1,
+          })
+        }
+
         // CONTRACT-SENSITIVE (trail snap): when enabled on Outdoor, snap pin to
         // nearest rendered trail within MAX_SNAP_RADIUS_M. No candidate → raw drop
         // (same as snap OFF). Checkbox OFF skips this block entirely.
-        if (
+        const tier1SnapAttempted =
           snapToTrailEnabledRef.current &&
           activeLayerRef.current === 'outdoor' &&
           isSnapAvailable(map)
-        ) {
+
+        if (tier1SnapAttempted) {
           const cand = findNearestTrailCandidate(map, {
             lat,
             lng,
@@ -1011,7 +1051,7 @@ export default function MapCanvas() {
           if (cand) {
             clearTrailSnapPreview()
             lastDropAtRef.current = Date.now()
-            return commitWaypoint({
+            const placed = commitWaypoint({
               id: makeId(),
               lng: cand.snappedLng,
               lat: cand.snappedLat,
@@ -1023,6 +1063,20 @@ export default function MapCanvas() {
               type,
               createdAt: Date.now(),
             })
+            if (placed) {
+              reportWaypointSnapObservation({
+                committed: true,
+                source: 'snapped',
+                lat: cand.snappedLat,
+                lng: cand.snappedLng,
+                rawLat: lat,
+                rawLng: lng,
+                snapDistanceMeters: cand.distanceMeters,
+                tier1SnapAttempted: true,
+                tier1SnapAccepted: true,
+              })
+            }
+            return placed
           }
         }
 
@@ -1042,6 +1096,17 @@ export default function MapCanvas() {
         setDebugClickRef.current({ lat, lng })
         if (!keepArmedRef.current) setPendingType('default')
         if (clearLabelAfterDropRef.current && manualLabel) setNextWaypointLabel('')
+        reportWaypointSnapObservation({
+          committed: true,
+          source: 'raw',
+          lat,
+          lng,
+          rawLat: lat,
+          rawLng: lng,
+          snapDistanceMeters: null,
+          tier1SnapAttempted,
+          tier1SnapAccepted: false,
+        })
         return true
       }
 
@@ -1171,25 +1236,8 @@ export default function MapCanvas() {
       if (cancelled) return
       if (!map) return
       scheduleResize()
-      if (
-        typeof navigator !== 'undefined' &&
-        !navigator.onLine &&
-        activeLayerRef.current === 'outdoor' &&
-        hasCorridorOutdoorCache()
-      ) {
-        const direct = getMapTilerRasterDirectTilesStyle('outdoor')
-        if (direct) {
-          try {
-            const fp = mapStyleFingerprint(direct)
-            if (mapStyleFingerprint(map.getStyle()) !== fp) {
-              map.setStyle(direct, { diff: false })
-              currentStyleRef.current = fp
-              mapLayerDiag('visibility-offline-corridor-raster', { layer: 'outdoor' })
-            }
-          } catch {
-            /* ignore */
-          }
-        }
+      if (typeof navigator !== 'undefined' && !navigator.onLine && hasCorridorOutdoorCache()) {
+        applyOfflineCorridorBasemapIfNeeded(map)
       }
       nudgeMapRenderAfterStyleChange(map)
       mapLayerDiag('visibility-resume', { layer: activeLayerRef.current })
@@ -1203,7 +1251,12 @@ export default function MapCanvas() {
      * `persisted=true`) does NOT re-fire `style.load` / `styledata`, so a
      * stale `false` set during navigation away can stick.
      */
-    const onSnapAssistPageshow = () => {
+    const onSnapAssistPageshow = (ev: PageTransitionEvent) => {
+      if (!map || cancelled) return
+      if (ev.persisted || (typeof navigator !== 'undefined' && !navigator.onLine)) {
+        applyOfflineCorridorBasemapIfNeeded(map)
+        scheduleResize()
+      }
       const fn = snapAssistSyncRef.current
       if (typeof fn === 'function') fn()
     }

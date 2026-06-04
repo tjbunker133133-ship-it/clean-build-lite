@@ -43,6 +43,7 @@ import {
   isRecognitionOutputHeld,
   setRecognitionOutputHold,
   shouldBlockSpeechRecognition,
+  speechRecognitionBlockRemainingMs,
   speakHudPhrase,
   stopVoiceOutputOnly,
 } from '../runtime/voiceAudioArbitration'
@@ -97,23 +98,37 @@ function playChime() {
   }
 }
 
-/** Stubs shown in registry but not offered as live voice phrases. */
-const VOICE_STUB_COMMAND_IDS = new Set([
-  'fire',
-  'water',
-  'deadman',
-  'ai route',
-  'biometric',
-  'forage',
-  'lidar',
-  'ar',
-])
+/** Former voice stubs — now wired to live handlers in useHudCommands. */
+const VOICE_STUB_COMMAND_IDS = new Set<string>()
 
 const QUICK_COMMAND_GROUPS: Array<{
   group: string
   priority?: boolean
   items: Array<{ label: string; cmd: string }>
 }> = [
+  {
+    group: 'Safety',
+    priority: true,
+    items: [
+      { label: 'Deadman Status', cmd: 'deadman' },
+      { label: 'Open Deadman', cmd: 'deadman panel' },
+    ],
+  },
+  {
+    group: 'Environmental',
+    items: [
+      { label: 'Fire Brief', cmd: 'fire' },
+      { label: 'Water Brief', cmd: 'water' },
+      { label: 'Foraging Tip', cmd: 'forage' },
+    ],
+  },
+  {
+    group: 'Comms',
+    items: [
+      { label: 'Check-In Panel', cmd: 'check in panel' },
+      { label: 'Mission Link', cmd: 'mission panel' },
+    ],
+  },
   {
     group: 'SOS FAST ACCESS',
     priority: true,
@@ -149,6 +164,16 @@ const QUICK_COMMAND_GROUPS: Array<{
       { label: 'Topo', cmd: 'topo map' },
       { label: 'Outdoor', cmd: 'outdoor map' },
       { label: 'Satellite', cmd: 'satellite map' },
+    ],
+  },
+  {
+    group: 'Situational overlays',
+    items: [
+      { label: 'Map panel', cmd: 'map layers panel' },
+      { label: 'Fire map on', cmd: 'show fire map' },
+      { label: 'Fire map off', cmd: 'hide fire map' },
+      { label: 'Bike paths on', cmd: 'bike paths on' },
+      { label: 'All overlays off', cmd: 'hide all overlays' },
     ],
   },
   {
@@ -412,7 +437,9 @@ export default function VoicePanel() {
         const cooldownUntil = performance.now() + listenProfile.outputCooldownMs
         ignoreSrUntilRef.current = cooldownUntil
         armRecognitionIgnoreUntil(cooldownUntil)
-        if (armedRef.current) scheduleMicRestartRef.current(listenProfile.minRestartGapMs)
+        if (armedRef.current) {
+          scheduleMicRestartRef.current(listenProfile.outputCooldownMs + 300)
+        }
       }
     }
   }
@@ -612,7 +639,11 @@ export default function VoicePanel() {
     let watchdog: number | null = null
 
     const tryStartRecognition = () => {
-      if (!armedRef.current || shouldBlockSpeechRecognition()) return
+      if (!armedRef.current) return
+      if (shouldBlockSpeechRecognition()) {
+        scheduleMicRestart(speechRecognitionBlockRemainingMs() + 150)
+        return
+      }
       try {
         startedOnce = false
         rec.start()
@@ -634,17 +665,21 @@ export default function VoicePanel() {
 
     const scheduleMicRestart = (requestedDelay = listen.minRestartGapMs) => {
       if (!armedRef.current) return
-      if (shouldBlockSpeechRecognition()) return
+      const blockRemaining = speechRecognitionBlockRemainingMs()
       if (performance.now() < ignoreSrUntilRef.current) {
         const wait = ignoreSrUntilRef.current - performance.now() + 200
         requestedDelay = Math.max(requestedDelay, wait)
       }
+      requestedDelay = Math.max(requestedDelay, blockRemaining + 150)
       const elapsed = Date.now() - lastMicStartAtRef.current
       const delay = Math.max(0, requestedDelay - elapsed)
-      if (restartTimerRef.current != null) return
+      if (restartTimerRef.current != null) {
+        window.clearTimeout(restartTimerRef.current)
+        restartTimerRef.current = null
+      }
       restartTimerRef.current = window.setTimeout(() => {
         restartTimerRef.current = null
-        if (!armedRef.current || shouldBlockSpeechRecognition()) return
+        if (!armedRef.current) return
         tryStartRecognition()
       }, delay)
     }
@@ -1322,7 +1357,7 @@ export default function VoicePanel() {
               ))}
             </div>
             <div style={{ fontSize: labelPx(10), color: 'var(--cockpit-panel-subtle)', lineHeight: 1.45 }}>
-              Stubs (not live): fire, water, deadman, ai route, biometric, forage, lidar, ar.
+              Fire and water briefs use live weather. AI route, LiDAR, AR, and biometrics report build limits honestly.
             </div>
           </div>
         )}

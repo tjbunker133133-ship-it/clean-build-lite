@@ -5,6 +5,7 @@ import {
   registerHudAudioStopListener,
   setRecognitionOutputHold,
   shouldBlockSpeechRecognition,
+  speechRecognitionBlockRemainingMs,
   stopAllHudAudio,
 } from './voiceAudioArbitration'
 
@@ -22,9 +23,11 @@ describe('voiceAudioArbitration', () => {
     expect(shouldBlockSpeechRecognition()).toBe(false)
     setRecognitionOutputHold(true)
     expect(shouldBlockSpeechRecognition()).toBe(true)
+    expect(speechRecognitionBlockRemainingMs()).toBeGreaterThan(0)
     setRecognitionOutputHold(false)
     armRecognitionIgnoreUntil(5000)
     expect(shouldBlockSpeechRecognition()).toBe(true)
+    expect(speechRecognitionBlockRemainingMs()).toBeGreaterThan(0)
   })
 
   it('stopAll invokes registered listeners and clears speech gate', () => {

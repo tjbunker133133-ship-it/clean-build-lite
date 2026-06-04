@@ -11,6 +11,7 @@ import {
   distanceToActiveWaypoint,
   type ArrivalCandidate,
 } from '../lib/waypointNavigation'
+import { ingestNavigationGpsSample } from '../lib/snapTrack/snapDiagnostics'
 
 export type NavigationMonitorState = {
   activeDistanceMiles: number | null
@@ -115,7 +116,15 @@ export function useNavigationMonitor(): NavigationMonitorState {
       timestampMs: Date.now(),
     })
     setGpsConfidence(conf)
-  }, [gps.lat, gps.lng, gps.accuracy, waypoints, hasTrailGeometry, trailRoute.coordinates])
+
+    ingestNavigationGpsSample({
+      lat: gps.lat,
+      lng: gps.lng,
+      accuracy: gps.accuracy,
+      timestampMs: Date.now(),
+      source: gps.source,
+    })
+  }, [gps.lat, gps.lng, gps.accuracy, gps.source, waypoints, hasTrailGeometry, trailRoute.coordinates])
 
   return {
     activeDistanceMiles: activeNav?.miles ?? null,

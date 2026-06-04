@@ -4,3 +4,6 @@ project(':capacitor-android').projectDir = new File('../node_modules/@capacitor/
 
 include ':signal-one-capacitor-hud-mission-link'
 project(':signal-one-capacitor-hud-mission-link').projectDir = new File('../plugins/capacitor-hud-mission-link/android')
+
+include ':signal-one-capacitor-hud-health-connect'
+project(':signal-one-capacitor-hud-health-connect').projectDir = new File('../plugins/capacitor-hud-health-connect/android')

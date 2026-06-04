@@ -6,6 +6,7 @@ import {
   createEmptyTacticalProfile,
   isValidEmail,
   loadTacticalProfile,
+  migrateTacticalProfileIfNeeded,
   rescueContactsFromProfile,
   saveTacticalProfile,
 } from './tacticalProfile'
@@ -41,7 +42,7 @@ describe('assessTacticalProfile', () => {
       display_name: 'Alpha',
       reply_to_email: 'alpha@example.com',
       contacts: [
-        { id: '1', name: 'Bravo', email: 'bravo@example.com', phone: '' },
+        { id: '1', name: 'Bravo', email: 'bravo@example.com', phone: '', alert_channel: 'email' },
       ],
     })
     expect(ready.operationalReady).toBe(true)
@@ -53,7 +54,7 @@ describe('assessTacticalProfile', () => {
       ...createEmptyTacticalProfile(),
       display_name: 'Alpha',
       reply_to_email: 'alpha@example.com',
-      contacts: [{ id: '1', name: 'X', email: 'not-an-email', phone: '' }],
+      contacts: [{ id: '1', name: 'X', email: 'not-an-email', phone: '', alert_channel: 'email' }],
     })
     expect(bad.operationalReady).toBe(false)
     expect(bad.issues).toContain('invalid_contact_email')
@@ -86,12 +87,12 @@ describe('rescueContactsFromProfile', () => {
     const profile = {
       ...createEmptyTacticalProfile(),
       contacts: [
-        { id: '1', name: 'A', email: 'a@x.com', phone: '+15551212' },
-        { id: '2', name: '', email: 'invalid', phone: '' },
+        { id: '1', name: 'A', email: 'a@x.com', phone: '+15551212', alert_channel: 'email' as const },
+        { id: '2', name: '', email: 'invalid', phone: '', alert_channel: 'both' as const },
       ],
     }
     expect(rescueContactsFromProfile(profile)).toEqual([
-      { name: 'A', email: 'a@x.com', phone: '+15551212' },
+      { name: 'A', email: 'a@x.com', phone: '+15551212', alertChannel: 'email' },
     ])
   })
 })
@@ -100,5 +101,18 @@ describe('isValidEmail', () => {
   it('accepts common addresses', () => {
     expect(isValidEmail('user@example.com')).toBe(true)
     expect(isValidEmail('bad')).toBe(false)
+  })
+})
+
+describe('migrateTacticalProfileIfNeeded', () => {
+  it('imports legacy local contacts only — never shared Supabase rows', async () => {
+    localStorage.setItem(
+      'emergency_contacts_saved',
+      JSON.stringify([{ name: 'Legacy', email: 'legacy@example.com' }]),
+    )
+    await migrateTacticalProfileIfNeeded()
+    expect(loadTacticalProfile().contacts).toEqual([
+      expect.objectContaining({ name: 'Legacy', email: 'legacy@example.com' }),
+    ])
   })
 })

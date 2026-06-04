@@ -292,6 +292,78 @@ function Body({ snap, onClose }: { snap: RuntimeSnapshot; onClose: () => void })
         )}
       </Section>
 
+      <Section title="snap / GPS track">
+        <Row k="pipeline" v={String(snap.snapGps.pipelineEnabled)} />
+        <Row k="validation" v={String(snap.snapGps.validationEnabled)} />
+        <Row k="diagnostics" v={String(snap.snapGps.diagnosticsEnabled)} />
+        <Row k="provider" v={snap.snapGps.activeProvider} />
+        <Row k="phase" v={snap.snapGps.pipelinePhase} />
+        <Row k="validation-out" v={snap.snapGps.lastValidationOutcome} />
+        <Row
+          k="fallback"
+          v={String(snap.snapGps.lastFallbackUsed)}
+          color={snap.snapGps.lastFallbackUsed ? '#ffd76b' : undefined}
+        />
+        <Row
+          k="raw-accuracy"
+          v={snap.snapGps.lastRawAccuracyM != null ? `${snap.snapGps.lastRawAccuracyM.toFixed(0)} m` : '—'}
+        />
+        <Row
+          k="gps-age"
+          v={snap.snapGps.lastGpsAgeMs != null ? `${Math.round(snap.snapGps.lastGpsAgeMs)} ms` : '—'}
+        />
+        <Row
+          k="snap-distance"
+          v={snap.snapGps.lastSnapDistanceM != null ? `${snap.snapGps.lastSnapDistanceM.toFixed(1)} m` : '—'}
+        />
+        <Row
+          k="confidence"
+          v={snap.snapGps.lastSnapConfidence != null ? String(snap.snapGps.lastSnapConfidence) : '—'}
+        />
+        <Row
+          k="latency"
+          v={
+            snap.snapGps.lastProviderLatencyMs != null
+              ? `${Math.round(snap.snapGps.lastProviderLatencyMs)} ms`
+              : '—'
+          }
+        />
+        <Row k="accepted" v={String(snap.snapGps.acceptedSnapCount)} color="#7dff8a" />
+        <Row k="deferred" v={String(snap.snapGps.deferredSnapCount)} color="#ffd76b" />
+        <Row k="rejected" v={String(snap.snapGps.rejectedPointCount)} color="#ff6464" />
+        <Row k="fallback-total" v={String(snap.snapGps.fallbackCount)} color="#ffd76b" />
+        <Row k="val-pass" v={String(snap.snapGps.validationPassCount)} color="#7dff8a" />
+        <Row k="val-fail" v={String(snap.snapGps.validationFailCount)} color="#ff6464" />
+        {Object.keys(snap.snapGps.rejectReasonHistogram).length > 0 ? (
+          <div style={{ fontSize: 9.5, lineHeight: 1.35, opacity: 0.88 }}>
+            {Object.entries(snap.snapGps.rejectReasonHistogram)
+              .sort((a, b) => b[1] - a[1])
+              .slice(0, 6)
+              .map(([k, n]) => (
+                <div key={k}>
+                  {k}: {n}
+                </div>
+              ))}
+          </div>
+        ) : null}
+        {snap.snapGps.lastRejectReasons.length > 0 ? (
+          <Row k="last-reject" v={snap.snapGps.lastRejectReasons.join(', ')} color="#ffd76b" />
+        ) : null}
+        {snap.snapGps.recentEvents.length === 0 ? (
+          <div style={{ opacity: 0.6 }}>(no snap events — move GPS or drop waypoint)</div>
+        ) : (
+          snap.snapGps.recentEvents
+            .slice()
+            .reverse()
+            .slice(0, 6)
+            .map((e, i) => (
+              <div key={i} style={{ fontSize: 9.5, lineHeight: 1.3, opacity: 0.85 }}>
+                {new Date(e.ts).toLocaleTimeString()} · {e.kind}/{e.phase} · {e.msg}
+              </div>
+            ))
+        )}
+      </Section>
+
       <Section title="runtime continuity">
         <Row k="locked-mode" v={snap.runtimeContinuity.interactionModeLocked} />
         <Row k="lifecycle" v={snap.runtimeContinuity.appLifecycleState} />

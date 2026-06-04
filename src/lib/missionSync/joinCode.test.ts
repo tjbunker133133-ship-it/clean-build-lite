@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { joinCodeFromToken, joinCodesMatch, normalizeJoinCodeInput } from './joinCode'
+import { joinCodeFromToken, joinCodesMatch, normalizeJoinCodeInput, formatJoinCode, isValidJoinCodeInput } from './joinCode'
 
 describe('joinCode', () => {
   it('formats stable code from token', () => {
@@ -14,5 +14,11 @@ describe('joinCode', () => {
     const code = joinCodeFromToken(token)
     expect(joinCodesMatch(token, code)).toBe(true)
     expect(joinCodesMatch(token, normalizeJoinCodeInput(code))).toBe(true)
+  })
+
+  it('validates and formats user input', () => {
+    expect(isValidJoinCodeInput('ABC-123')).toBe(true)
+    expect(formatJoinCode('abc123')).toBe('ABC-123')
+    expect(isValidJoinCodeInput('AB')).toBe(false)
   })
 })

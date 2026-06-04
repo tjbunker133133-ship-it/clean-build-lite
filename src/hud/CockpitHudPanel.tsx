@@ -108,6 +108,7 @@ function dockBadge(panelId: string, title: string): { icon: string; abbr: string
   if (id === 'weather') return { icon: '⛅', abbr: 'WTH' }
   if (id === 'presets') return { icon: '⚙', abbr: 'PST' }
   if (id === 'checkin') return { icon: '✓', abbr: 'CHK' }
+  if (id === 'wearables') return { icon: '⌚', abbr: 'WEAR' }
   if (id === 'sos') return { icon: '🆘', abbr: 'SOS' }
   const compact = title
     .replace(/[^a-z0-9 ]/gi, '')

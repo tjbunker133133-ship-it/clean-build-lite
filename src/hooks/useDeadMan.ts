@@ -22,8 +22,10 @@ const MIN_DURATION_MIN = 15
 const MAX_DURATION_MIN = 48 * 60
 
 interface Stored {
-  expiresAt: number
-  extended: boolean
+  /** Explicit operator arm from Dead Man panel — required to resume after reload. */
+  armed?: boolean
+  expiresAt?: number
+  extended?: boolean
   durationMs?: number
 }
 
@@ -43,17 +45,18 @@ export function parseDeadManStorageRaw(raw: string | null): Stored | null {
   }
   if (!parsed || typeof parsed !== 'object') return null
   const o = parsed as Record<string, unknown>
+  const armed = o.armed === true
   const rawExp = o.expiresAt
-  let expiresAt: number
-  if (typeof rawExp === 'number' && Number.isFinite(rawExp)) {
-    expiresAt = rawExp
-  } else if (typeof rawExp === 'string' && rawExp.trim() !== '') {
-    const n = Number(rawExp)
-    if (!Number.isFinite(n)) return null
-    expiresAt = n
-  } else {
-    return null
+  let expiresAt: number | undefined
+  if (rawExp !== undefined && rawExp !== null) {
+    if (typeof rawExp === 'number' && Number.isFinite(rawExp)) {
+      expiresAt = rawExp
+    } else if (typeof rawExp === 'string' && rawExp.trim() !== '') {
+      const n = Number(rawExp)
+      if (Number.isFinite(n)) expiresAt = n
+    }
   }
+  if (armed && expiresAt === undefined) return null
   const extended = typeof o.extended === 'boolean' ? o.extended : false
   let durationMs: number | undefined
   if (o.durationMs !== undefined) {
@@ -63,7 +66,7 @@ export function parseDeadManStorageRaw(raw: string | null): Stored | null {
       durationMs = o.durationMs
     }
   }
-  return { expiresAt, extended, durationMs }
+  return { armed, expiresAt, extended, durationMs }
 }
 
 function load(): Stored | null {
@@ -77,8 +80,39 @@ function load(): Stored | null {
 function save(d: Stored) {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(d)) } catch {}
 }
-function clear() {
-  try { localStorage.removeItem(STORAGE_KEY) } catch {}
+function saveStandbyPrefs(durationMs: number) {
+  save({ armed: false, durationMs, extended: false })
+}
+
+function clampDurationMs(ms: number): number {
+  return Math.max(MIN_DURATION_MIN * 60_000, Math.min(MAX_DURATION_MIN * 60_000, ms))
+}
+
+/** Boot contract — exported for Vitest. Timer runs ONLY when explicitly armed. */
+export function resolveDeadManBootState(stored: Stored | null, nowMs = Date.now()) {
+  const durationMs =
+    typeof stored?.durationMs === 'number' && Number.isFinite(stored.durationMs)
+      ? clampDurationMs(stored.durationMs)
+      : FULL_MS
+  if (
+    stored?.armed === true &&
+    typeof stored.expiresAt === 'number' &&
+    Number.isFinite(stored.expiresAt) &&
+    stored.expiresAt > nowMs
+  ) {
+    return {
+      expiresAt: stored.expiresAt,
+      extended: stored.extended ?? false,
+      active: true,
+      durationMs,
+    }
+  }
+  return {
+    expiresAt: nowMs + durationMs,
+    extended: false,
+    active: false,
+    durationMs,
+  }
 }
 
 export interface UseDeadManReturn {
@@ -113,14 +147,7 @@ export function useDeadMan(onExpire?: () => void): UseDeadManReturn {
   // localStorage reads per second once the tick effect drives re-renders.
   const boot = () => {
     const stored = load()
-    const safeDuration =
-      typeof stored?.durationMs === 'number' && Number.isFinite(stored.durationMs)
-        ? Math.max(MIN_DURATION_MIN * 60_000, Math.min(MAX_DURATION_MIN * 60_000, stored.durationMs))
-        : FULL_MS
-    if (stored && stored.expiresAt > Date.now()) {
-      return { expiresAt: stored.expiresAt, extended: stored.extended, active: true, durationMs: safeDuration }
-    }
-    return { expiresAt: Date.now() + FULL_MS, extended: false, active: false, durationMs: safeDuration }
+    return resolveDeadManBootState(stored)
   }
 
   const b = useMemo(boot, [])
@@ -152,8 +179,11 @@ export function useDeadMan(onExpire?: () => void): UseDeadManReturn {
 
   // ── Persist ──────────────────────────────────────────────────────────────
   useEffect(() => {
-    if (isActive) save({ expiresAt, extended, durationMs })
-    else save({ expiresAt, extended, durationMs })
+    if (isActive) {
+      save({ armed: true, expiresAt, extended, durationMs })
+    } else {
+      saveStandbyPrefs(durationMs)
+    }
   }, [expiresAt, extended, isActive, durationMs])
 
   // ── Actions ──────────────────────────────────────────────────────────────
@@ -164,7 +194,7 @@ export function useDeadMan(onExpire?: () => void): UseDeadManReturn {
     setExtended(false)
     setIsActive(true)
     setRemainingMs(durationMs)
-    save({ expiresAt: newExpiry, extended: false, durationMs })
+    save({ armed: true, expiresAt: newExpiry, extended: false, durationMs })
   }, [durationMs])
 
   const extend = useCallback(() => {
@@ -172,7 +202,7 @@ export function useDeadMan(onExpire?: () => void): UseDeadManReturn {
       setExtended(true)
       setExpiresAt((prev) => {
         const n = prev + EXTEND_MS
-        save({ expiresAt: n, extended: true, durationMs })
+        save({ armed: true, expiresAt: n, extended: true, durationMs })
         return n
       })
       setRemainingMs((prev) => prev + EXTEND_MS)
@@ -184,7 +214,7 @@ export function useDeadMan(onExpire?: () => void): UseDeadManReturn {
     setRemainingMs(nextDurationMs)
     const previewExpiry = Date.now() + nextDurationMs
     setExpiresAt(previewExpiry)
-    save({ expiresAt: previewExpiry, extended: true, durationMs: nextDurationMs })
+    saveStandbyPrefs(nextDurationMs)
   }, [durationMs, isActive])
 
   const activate = useCallback(() => {
@@ -194,7 +224,7 @@ export function useDeadMan(onExpire?: () => void): UseDeadManReturn {
     setIsActive(true)
     setExtended(false)
     firedRef.current = false
-    save({ expiresAt: newExpiry, extended: false, durationMs })
+    save({ armed: true, expiresAt: newExpiry, extended: false, durationMs })
   }, [durationMs])
 
   const deactivate = useCallback(() => {
@@ -204,7 +234,7 @@ export function useDeadMan(onExpire?: () => void): UseDeadManReturn {
     const previewExpiry = Date.now() + durationMs
     setExpiresAt(previewExpiry)
     setRemainingMs(durationMs)
-    clear()
+    saveStandbyPrefs(durationMs)
   }, [durationMs])
 
   const setDurationMinutes = useCallback(
@@ -216,9 +246,9 @@ export function useDeadMan(onExpire?: () => void): UseDeadManReturn {
         const previewExpiry = Date.now() + nextDurationMs
         setExpiresAt(previewExpiry)
         setRemainingMs(nextDurationMs)
-        save({ expiresAt: previewExpiry, extended, durationMs: nextDurationMs })
+        saveStandbyPrefs(nextDurationMs)
       } else {
-        save({ expiresAt, extended, durationMs: nextDurationMs })
+        save({ armed: true, expiresAt, extended, durationMs: nextDurationMs })
       }
     },
     [expiresAt, extended, isActive],

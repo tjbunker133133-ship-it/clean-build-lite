@@ -21,4 +21,12 @@ export class HudMissionLinkWeb extends WebPlugin implements HudMissionLinkPlugin
   async stopDiscovery(): Promise<void> {
     /* noop */
   }
+
+  async sendPayloadToHost(): Promise<void> {
+    /* web uses QR / paste */
+  }
+
+  async sendNearbyPayload(): Promise<void> {
+    /* web uses QR / paste */
+  }
 }

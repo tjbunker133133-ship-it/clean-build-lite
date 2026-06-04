@@ -67,7 +67,7 @@ export default defineConfig({
         cleanupOutdatedCaches: true,
         skipWaiting: true,
         clientsClaim: true,
-        importScripts: ['/sw-message-handler.js'],
+        importScripts: ['/sw-message-handler.js', '/sw-push-handler.js'],
         runtimeCaching: [
           {
             urlPattern: ({ url }) =>
@@ -77,7 +77,7 @@ export default defineConfig({
             options: {
               cacheName: 'maptiler-outdoor-tiles-v1',
               expiration: {
-                maxEntries: 800,
+                maxEntries: 2400,
                 maxAgeSeconds: 60 * 60 * 24 * 30,
               },
               cacheableResponse: {

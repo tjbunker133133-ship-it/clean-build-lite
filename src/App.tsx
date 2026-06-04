@@ -2,6 +2,7 @@ import React, { Suspense, lazy } from 'react'
 import { AppProvider } from './context/AppContext'
 import { CockpitProvider } from './context/CockpitContext'
 import { MapProvider } from './context/MapContext'
+import { OverlayProvider } from './context/OverlayContext'
 import { PanelDataProvider } from './context/PanelDataContext'
 import { TrailRouteProvider } from './context/TrailRouteContext'
 import { MissionSyncProvider } from './context/MissionSyncContext'
@@ -15,11 +16,14 @@ import DisplayModeOverlay from './hud/DisplayModeOverlay'
 import PermissionPromptOverlay from './hud/PermissionPromptOverlay'
 import SwUpdateBanner from './hud/SwUpdateBanner'
 import TacticalSetupBanner from './hud/TacticalSetupBanner'
+import AlertWatchBootstrap from './hud/AlertWatchBootstrap'
 
 const MapCanvas = lazy(() => import('./components/MapCanvas'))
+const EnvironmentalOverlaysLayer = lazy(() => import('./layers/EnvironmentalOverlaysLayer'))
 const WaypointLayer = lazy(() => import('./layers/WaypointLayer'))
 const RouteLayer = lazy(() => import('./layers/RouteLayer'))
 const TeamPresenceLayer = lazy(() => import('./layers/TeamPresenceLayer'))
+const MonitorMapFollow = lazy(() => import('./layers/MonitorMapFollow'))
 const LayerPanel = lazy(() => import('./hud/LayerPanel'))
 const WaypointTypePanel = lazy(() => import('./hud/WaypointTypePanel'))
 const DeadManPanel = lazy(() => import('./hud/DeadManPanel'))
@@ -34,6 +38,7 @@ const PreflightPanel = lazy(() => import('./hud/PreflightPanel'))
 const InstallHelperBanner = lazy(() => import('./hud/InstallHelperBanner'))
 const NavigationHud = lazy(() => import('./hud/NavigationHud'))
 const MissionLinkPanel = lazy(() => import('./hud/MissionLinkPanel'))
+const WearablesPanel = lazy(() => import('./hud/WearablesPanel'))
 
 export default function App() {
   return (
@@ -42,6 +47,7 @@ export default function App() {
       <CockpitProvider>
       <PanelDataProvider>
       <MapProvider>
+        <OverlayProvider>
         <TrailRouteProvider>
         {/* Full-screen container */}
         <div
@@ -65,16 +71,19 @@ export default function App() {
             }
           >
             <MapCanvas />
-            {/* ── Map Feature Layers (render-only, no DOM) ── */}
+            {/* ── Situational overlays (above basemap, below route/waypoints) ── */}
+            <EnvironmentalOverlaysLayer />
             <WaypointLayer />
             <RouteLayer />
             <TeamPresenceLayer />
+            <MonitorMapFollow />
           </Suspense>
 
           {/* ── Atmospheric overlays (z-index: 1-2) ── */}
           <ScanlineOverlay />
           <PermissionPromptOverlay />
           <TacticalSetupBanner />
+          <AlertWatchBootstrap />
           <SwUpdateBanner />
           <Suspense fallback={null}>
             <InstallHelperBanner />
@@ -94,6 +103,7 @@ export default function App() {
               <PresetPanel />
               <PreflightPanel />
               <MissionLinkPanel />
+              <WearablesPanel />
             </Suspense>
             <div
               style={{
@@ -118,6 +128,7 @@ export default function App() {
           </Suspense>
         </div>
       </TrailRouteProvider>
+        </OverlayProvider>
       </MapProvider>
       </PanelDataProvider>
       </CockpitProvider>

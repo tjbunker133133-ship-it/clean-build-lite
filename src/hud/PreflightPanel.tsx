@@ -27,6 +27,8 @@ import { useCockpit } from '../context/CockpitContext'
 import { clampMobileToReachableViewport, isPanelReachableInViewport } from '../lib/mobilePanelHelpers'
 import { cockpitViewport } from '../lib/viewport'
 import { resolveBuildLabel } from '../runtime/buildLabel'
+import CommsStatusStrip from './CommsStatusStrip'
+import AlertPushStrip from './AlertPushStrip'
 
 type CheckState = 'pass' | 'warn' | 'fail'
 type ManualCheckKey =
@@ -518,6 +520,8 @@ export default function PreflightPanel() {
             ENSURE CONTACT PANEL IS VISIBLE
           </button>
         )}
+        <CommsStatusStrip />
+        <AlertPushStrip />
         <div
           style={{
             display: 'flex',

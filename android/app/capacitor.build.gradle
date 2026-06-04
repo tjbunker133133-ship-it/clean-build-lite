@@ -10,6 +10,7 @@ android {
 apply from: "../capacitor-cordova-android-plugins/cordova.variables.gradle"
 dependencies {
     implementation project(':signal-one-capacitor-hud-mission-link')
+    implementation project(':signal-one-capacitor-hud-health-connect')
 
 }
 

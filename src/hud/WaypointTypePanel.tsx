@@ -14,6 +14,8 @@ import { formatDistance, haversineDistance, totalRouteDistance } from '../lib/ha
 import { archivedWaypoints } from '../lib/waypointNavigation'
 import { tier1Debug } from '../lib/tier1DebugLog'
 import { maptilerBasemapsConfigured } from '../lib/mapStyles'
+import { iosTrailSnapUnavailableReason } from '../lib/iosFieldCapabilities'
+import { isIosFieldHud } from '../runtime/deviceProfile'
 
 /** Route waypoint tiles — CLEAR ROUTE is a separate command button (not a waypoint type). */
 type RouteTypeTile = { id: WaypointType; label: string; icon: string; color: string }
@@ -331,8 +333,10 @@ export default function WaypointTypePanel() {
           </label>
         </div>
         {!trailSnapAssistCapable ? (
-          <div style={{ fontSize: labelPx(10), color: '#64748b', marginTop: -gapSm, marginBottom: gapSm }}>
-            Trail snap needs vector layers at zoom 12+.
+          <div style={{ fontSize: labelPx(10), color: '#64748b', marginTop: -gapSm, marginBottom: gapSm, lineHeight: 1.4 }}>
+            {isIosFieldHud() && activeLayer === 'outdoor'
+              ? iosTrailSnapUnavailableReason()
+              : 'Trail snap needs vector layers at zoom 12+.'}
           </div>
         ) : snapToTrailEnabled ? (
           <div style={{ fontSize: labelPx(10), color: '#fbbf24', marginTop: -gapSm, marginBottom: gapSm, lineHeight: 1.4 }}>

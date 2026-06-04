@@ -1,18 +1,23 @@
 /**
  * Capacitor native mission discovery (Android Play build).
- * Web/PWA: returns unavailable — QR + paste remain the path.
+ * Wi‑Fi LAN (NSD) + Google Nearby (Bluetooth / Wi‑Fi Direct) in parallel.
  */
+
+export type MissionPayloadTransport = 'wifi-lan' | 'nearby' | 'unknown'
 
 export type NativeLinkPlatform = {
   available: boolean
   platform: 'web' | 'android' | 'ios' | 'unknown'
-  discoveryMethod: 'none' | 'android-nsd'
+  discoveryMethod: 'none' | 'android-nsd' | 'android-nsd-nearby'
 }
 
 export type NativePayloadEvent = {
   joinCode: string
   payload: string
   fromAddress?: string
+  fromPort?: number
+  endpointId?: string
+  transport: MissionPayloadTransport
 }
 
 type Listener = (ev: NativePayloadEvent) => void
@@ -37,6 +42,10 @@ async function getPlugin() {
   }
 }
 
+export function clearNativeLinkPlatformCache(): void {
+  platformCache = null
+}
+
 export async function getNativeLinkPlatform(): Promise<NativeLinkPlatform> {
   if (platformCache) return platformCache
   if (!isCapacitorNative()) {
@@ -50,10 +59,16 @@ export async function getNativeLinkPlatform(): Promise<NativeLinkPlatform> {
   }
   try {
     const info = await plugin.getPlatformInfo()
+    const method = info.discoveryMethod ?? 'none'
     platformCache = {
       available: Boolean(info.available),
       platform: info.platform === 'android' ? 'android' : info.platform === 'ios' ? 'ios' : 'unknown',
-      discoveryMethod: info.discoveryMethod === 'android-nsd' ? 'android-nsd' : 'none',
+      discoveryMethod:
+        method === 'android-nsd-nearby'
+          ? 'android-nsd-nearby'
+          : method === 'android-nsd'
+            ? 'android-nsd'
+            : 'none',
     }
   } catch {
     platformCache = { available: false, platform: 'unknown', discoveryMethod: 'none' }
@@ -79,10 +94,15 @@ export async function wireNativePayloadBridge(): Promise<void> {
   if (!plugin) return
   wired = true
   await plugin.addListener('payloadReceived', (data) => {
+    const transport: MissionPayloadTransport =
+      data.transport === 'nearby' ? 'nearby' : data.transport === 'wifi-lan' ? 'wifi-lan' : 'unknown'
     emitPayload({
       joinCode: data.joinCode,
       payload: data.payload,
       fromAddress: data.fromAddress,
+      fromPort: data.fromPort,
+      endpointId: data.endpointId,
+      transport,
     })
   })
 }
@@ -107,6 +127,36 @@ export async function nativeStopAdvertise(): Promise<void> {
     await plugin.stopAdvertising()
   } catch {
     /* ignore */
+  }
+}
+
+export async function nativeSendPayloadToHost(
+  host: string,
+  port: number,
+  payload: string,
+): Promise<boolean> {
+  const plat = await getNativeLinkPlatform()
+  if (!plat.available) return false
+  const plugin = await getPlugin()
+  if (!plugin) return false
+  try {
+    await plugin.sendPayloadToHost({ host, port, payload })
+    return true
+  } catch {
+    return false
+  }
+}
+
+export async function nativeSendNearbyPayload(endpointId: string, payload: string): Promise<boolean> {
+  const plat = await getNativeLinkPlatform()
+  if (!plat.available) return false
+  const plugin = await getPlugin()
+  if (!plugin) return false
+  try {
+    await plugin.sendNearbyPayload({ endpointId, payload })
+    return true
+  } catch {
+    return false
   }
 }
 

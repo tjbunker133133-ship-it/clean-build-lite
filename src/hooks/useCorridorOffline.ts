@@ -27,7 +27,7 @@ export function useCorridorOffline(): CorridorOfflineState {
   const { map } = useMapContext()
   const { state } = useAppContext()
   const gps = useGPS()
-  const { waypoints, activeLayer } = state
+  const { waypoints } = state
 
   const [prefetching, setPrefetching] = useState(false)
   const [lastPrefetchAt, setLastPrefetchAt] = useState<number | null>(null)
@@ -64,7 +64,6 @@ export function useCorridorOffline(): CorridorOfflineState {
 
   useEffect(() => {
     if (!map || (typeof navigator !== 'undefined' && !navigator.onLine)) return
-    if (activeLayer !== 'outdoor') return
     if (gps.lat == null || gps.lng == null) return
     if (route.length < 2) return
 
@@ -115,7 +114,7 @@ export function useCorridorOffline(): CorridorOfflineState {
     }
 
     void run()
-  }, [map, gps.lat, gps.lng, route, routeFingerprint, activeLayer])
+  }, [map, gps.lat, gps.lng, route, routeFingerprint])
 
   const approachingEdge =
     edgeDistanceFeet != null && edgeDistanceFeet > 0 && edgeDistanceFeet < 1500

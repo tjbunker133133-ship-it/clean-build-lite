@@ -20,6 +20,17 @@ export function normalizeJoinCodeInput(raw: string): string {
   return raw.trim().toUpperCase().replace(/[^A-Z0-9]/g, '')
 }
 
+/** Format 6-char normalized code as XXX-XXX for display and LAN. */
+export function formatJoinCode(normalized: string): string {
+  const n = normalizeJoinCodeInput(normalized)
+  if (n.length !== 6) return normalized.trim().toUpperCase()
+  return `${n.slice(0, 3)}-${n.slice(3)}`
+}
+
+export function isValidJoinCodeInput(raw: string): boolean {
+  return normalizeJoinCodeInput(raw).length === 6
+}
+
 export function joinCodesMatch(joinToken: string, userInput: string): boolean {
   const expected = normalizeJoinCodeInput(joinCodeFromToken(joinToken))
   const got = normalizeJoinCodeInput(userInput)

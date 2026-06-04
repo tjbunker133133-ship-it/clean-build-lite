@@ -516,6 +516,7 @@ function panelHeightGuess(pid: string, p: CockpitPanelRect): number {
     checkin: 200,
     sos: 300,
     preflight: 300,
+    wearables: 360,
   }
   const minBar = 46
   return Math.max(minBar, p.h ?? (p.minimized ? minBar : (defaults[pid] ?? 220)))
@@ -702,6 +703,16 @@ const DEFAULT_PANELS = (): PanelMap => ({
   checkin: { x: 1220, y: 340, w: 280, h: null, z: 413, minimized: false, docked: true, dockSide: 'right' },
   sos: { x: 1080, y: 420, w: 280, h: null, z: 411, minimized: false, docked: true, dockSide: 'right' },
   preflight: { x: 16, y: 180, w: 320, h: null, z: 412, minimized: false, docked: true, dockSide: 'left' },
+  wearables: {
+    x: 1220,
+    y: 560,
+    w: 320,
+    h: null,
+    z: 414,
+    minimized: true,
+    docked: true,
+    dockSide: 'right',
+  },
 })
 
 export function CockpitProvider({ children }: { children: ReactNode }) {

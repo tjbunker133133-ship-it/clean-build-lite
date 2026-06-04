@@ -10,6 +10,7 @@ const config: CapacitorConfig = {
   },
   plugins: {
     HudMissionLink: {},
+    Share: {},
   },
 }
 

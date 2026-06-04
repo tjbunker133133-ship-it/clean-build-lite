@@ -26,10 +26,12 @@
  *      app password labeled e.g. "tactical-hud rescue dispatch".
  *   3. Store both values as Supabase secrets:
  *
- *      npx supabase secrets set GMAIL_USER=<gmail-address> \
+ *      npx supabase secrets set GMAIL_USER=signalonehud@gmail.com \
  *        --project-ref nlrwmtzphoazktmseadb
  *      npx supabase secrets set GMAIL_APP_PASSWORD=<google-app-password> \
  *        --project-ref nlrwmtzphoazktmseadb
+ *
+ *   Or from repo root (after adding GMAIL_* to .env.local): npm run env:sync-gmail
  *
  *   The encryption secret (only if you ever switch the frontend to send
  *   `contacts_encrypted`) is set the same way:
@@ -336,7 +338,12 @@ function parseAndValidate(body: unknown):
     };
   }
 
-  const cleaned: { name: string; email: string; phone?: string }[] = [];
+  const cleaned: {
+    name: string;
+    email: string;
+    phone?: string;
+    alertChannel?: string;
+  }[] = [];
   let filteredOut = 0;
 
   for (const item of contactsField) {
@@ -348,7 +355,19 @@ function parseAndValidate(body: unknown):
     const email = typeof row.email === "string" ? row.email.trim() : "";
     const name = typeof row.name === "string" ? row.name.trim() : "";
     const phone = typeof row.phone === "string" ? row.phone.trim() : "";
+    const rawChannel =
+      typeof row.alertChannel === "string"
+        ? row.alertChannel.trim()
+        : typeof row.alert_channel === "string"
+          ? row.alert_channel.trim()
+          : "both";
+    const alertChannel =
+      rawChannel === "email" || rawChannel === "push" ? rawChannel : "both";
     if (!EMAIL_RE.test(email)) {
+      filteredOut++;
+      continue;
+    }
+    if (alertChannel === "push") {
       filteredOut++;
       continue;
     }
@@ -356,6 +375,7 @@ function parseAndValidate(body: unknown):
       name: name.length > 0 ? name : "Contact",
       email,
       ...(phone.length > 0 ? { phone } : {}),
+      alertChannel,
     });
   }
 

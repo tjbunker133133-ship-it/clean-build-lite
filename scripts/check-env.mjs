@@ -77,4 +77,10 @@ console.log(ok ? '\nAll required keys present.' : '\nFix missing keys, then rest
 const mapKey = (env.VITE_MAPTILER_KEY ?? '').trim()
 console.log(`\n  ${mapKey ? 'OK' : 'MISSING'}  VITE_MAPTILER_KEY (optional — basemap tiles)`)
 
+const vapid = (env.VITE_VAPID_PUBLIC_KEY ?? '').trim()
+console.log(`  ${vapid ? 'OK' : 'MISSING'}  VITE_VAPID_PUBLIC_KEY (optional — push alerts)`)
+
+const firms = (env.VITE_FIRMS_MAP_KEY ?? '').trim()
+console.log(`  ${firms ? 'OK' : 'MISSING'}  VITE_FIRMS_MAP_KEY (optional — fire overlay)`)
+
 process.exit(ok ? 0 : 1)

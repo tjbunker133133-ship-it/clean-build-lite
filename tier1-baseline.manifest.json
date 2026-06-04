@@ -8,20 +8,20 @@
   },
   "production": {
     "src/hooks/useGPS.ts": "bdd7b8ec309335ab05c6a819b27d962b516228ef5e37bf37ffbf8efff1b663a0",
-    "src/components/MapCanvas.tsx": "f14af04cec463382adfabdb92cce36c45fb2437b251bf22472a08ec908c72740",
-    "src/lib/mapStyles.ts": "345c6a8dc4286dd1f2deaba8f4738e1c8a9b8f096b62d358b3c1fa5cc943153c",
-    "src/hud/SOSPanel.tsx": "e036960f5110457917d7cde72c6bdead108c7615e0b9fedb54404b9789ffcccd",
-    "src/hud/DeadManPanel.tsx": "9cacdc1d2bf78ce42ffd9c7af367cbf7ddc12561c97d1adda597d573976f0be7",
+    "src/components/MapCanvas.tsx": "a709134ceca13a2b62769270f0e308ed61caff183a7658e622f0371d2d5286b6",
+    "src/lib/mapStyles.ts": "677b4c34c10958b1e9759689f1bcf07fb9aca0ad30a0a602b031eb787abb951f",
+    "src/hud/SOSPanel.tsx": "0e3285e1dd72b58e2d454da8f395ad4eb37c665d850b65fe13ac55b6f7ba8b81",
+    "src/hud/DeadManPanel.tsx": "c478eb0b86e95f1424ed958e3fd3d0925c1c3511dac44b5d0b88fc2a5eaf15d2",
     "src/hud/CockpitHudShell.tsx": "816d311cd774fec03c14b26972b78cf0ac5a7bd207810b555e5b9ac041732540",
     "src/controllers/resolveDockIntent.ts": "a824b236092ce85e7b230380d3a0904546d299920e3714b28e6faee387e08549",
-    "src/context/AppContext.tsx": "e5e40a9f63ccd3b2911c251c0cd15b36ac8f0261673a4282b5a1c413ff38680c",
-    "src/App.tsx": "f852932f53a528fb7fdaa396ddabd3a6493830a8d1272e1e03e1bed2105c304e",
-    "src/main.tsx": "440b20cc4ab289496952bb1101f632aa1dd349aaa9c785cb8261b728c32b9937",
-    "vite.config.ts": "d9f341d6b014b430246b5f2894ef901190a62f6d9ffc20290b171416ff27781b",
+    "src/context/AppContext.tsx": "f7d2590290cf42ababe95074d09f5f6717bd843e65eb350fa67e3407eba93e83",
+    "src/App.tsx": "31afbb73c5867c22f0dca32d19c80cbe920736318156e25bf346c180e49c7d41",
+    "src/main.tsx": "15b910908bc4722c9937f37852a52f28e3383a3b06877d128cb00d6c0a556298",
+    "vite.config.ts": "5d087285cec0b23b2b2d1eb112253af675233c7ff73a2c0fbec60c46e829d976",
     "index.html": "05d4c5091478975d6c67b5859302f97c8a222088a6f5052343884906344eda2e",
-    "src/lib/rescue/buildRescuePacket.ts": "fbb54f0e59f602b66350488ce3cbd96ec8d4829088e800819d51d92b9743469c",
-    "src/lib/rescue/postRescuePacket.ts": "f2398e3498dd1cddcdfd05798eaf4ee69296062a775ecfaf47d976c3afcbc9d0",
+    "src/lib/rescue/buildRescuePacket.ts": "c6f407455db0018ef00dd37f6f426c3b68c105208f1ac0ce65f99d438407a9bd",
+    "src/lib/rescue/postRescuePacket.ts": "1417d9a0f0bb811ba2b9adcd33f668dff1c633f9cf115e2b544d4e3762ebbed9",
     "src/lib/rescue/rescueDispatch.ts": "b5a0dca4dba1f1db52057deb242f519f200ace2833d7145e0d5f5e673a6893fe",
-    "supabase/functions/send-rescue-email/index.ts": "9eb49b731c35767b56a6750c26caa1c1a666cf400616b1cb84aa88a46504cdff"
+    "supabase/functions/send-rescue-email/index.ts": "ed6f0a05df30207955f5c916a1598ccbdeb65db4a3f0c7b7b5cfaa2f2137d62f"
   }
 }

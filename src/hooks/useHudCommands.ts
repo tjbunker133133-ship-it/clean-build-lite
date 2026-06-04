@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAppContext } from '../context/AppContext'
 import { useCockpit } from '../context/CockpitContext'
+import { useOverlayContext } from '../context/OverlayContext'
 import { useMapContext } from '../context/MapContext'
 import { usePanelData } from '../context/PanelDataContext'
 import type { LayerType } from '../types'
@@ -31,6 +32,18 @@ import {
 } from '../runtime/commandExecution'
 import { traceAction } from '../runtime/actionTrace'
 import { normalizeVoiceTranscript } from '../lib/voice/normalizeVoiceTranscript'
+import { buildOverlayVoiceCommands } from '../lib/environmentalOverlays/overlayVoiceCommands'
+import {
+  buildAiRouteVoiceMessage,
+  buildArVoiceMessage,
+  buildBiometricVoiceMessage,
+  buildForageSeasonalTip,
+  buildLidarVoiceMessage,
+  fireConditionsVoiceMessage,
+  formatDeadManVoiceMessage,
+  readDeadManVoiceStatus,
+  waterConditionsVoiceMessage,
+} from '../lib/environmentalVoice'
 
 /**
  * Single source of truth for HUD commands.
@@ -93,7 +106,13 @@ export function useHudCommands(): {
   const gps = useGPS()
   const { state, addWaypoint, removeWaypoint, setWaypoints, setLayer } = useAppContext()
   const { setScreenHue, resetLayout, raisePanel, updatePanel } = useCockpit()
+  const { setEnabled: setOverlayEnabled } = useOverlayContext()
   const panelData = usePanelData()
+
+  const raiseLayersPanel = useCallback(() => {
+    updatePanel('layers', { docked: false, minimized: false })
+    raisePanel('layers')
+  }, [raisePanel, updatePanel])
 
   const [attachedPinId, setAttachedPinId] = useState<string | null>(null)
   const [morseEnabled, setMorseEnabled] = useState(false)
@@ -588,6 +607,11 @@ export function useHudCommands(): {
         },
       })),
 
+      ...buildOverlayVoiceCommands({
+        setEnabled: setOverlayEnabled,
+        raiseLayersPanel,
+      }),
+
       // Display
       {
         id: 'night',
@@ -747,6 +771,65 @@ export function useHudCommands(): {
         },
       },
 
+      {
+        id: 'check in panel',
+        label: 'Open check-in panel',
+        aliases: ['open check in', 'check in', 'check-in panel'],
+        paletteVisible: true,
+        group: 'Panels',
+        run: () => {
+          updatePanel('checkin', { docked: false, minimized: false })
+          raisePanel('checkin')
+          return ok('Check-in panel opened.')
+        },
+      },
+      {
+        id: 'mission panel',
+        label: 'Open mission link panel',
+        aliases: ['open mission', 'mission link', 'open mission link'],
+        paletteVisible: true,
+        group: 'Panels',
+        run: () => {
+          updatePanel('missionLink', { docked: false, minimized: false })
+          raisePanel('missionLink')
+          return ok('Mission link panel opened.')
+        },
+      },
+      {
+        id: 'wearables panel',
+        label: 'Open wearables panel',
+        aliases: ['open wearables', 'wearables', 'companion devices', 'smartwatch panel'],
+        paletteVisible: true,
+        group: 'Panels',
+        run: () => {
+          updatePanel('wearables', { docked: false, minimized: false })
+          raisePanel('wearables')
+          return ok('Wearables panel opened.')
+        },
+      },
+      {
+        id: 'deadman panel',
+        label: 'Open deadman panel',
+        aliases: ['open deadman', 'open dead man'],
+        group: 'Safety',
+        run: () => {
+          updatePanel('deadman', { docked: false, minimized: false })
+          raisePanel('deadman')
+          return ok('Deadman panel opened.')
+        },
+      },
+      {
+        id: 'deadman',
+        label: 'Deadman status',
+        aliases: ['dead man', 'deadman status', 'dead man status'],
+        group: 'Safety',
+        run: () => {
+          updatePanel('deadman', { docked: false, minimized: false })
+          raisePanel('deadman')
+          return ok(formatDeadManVoiceMessage(readDeadManVoiceStatus()))
+        },
+      },
+
       // Weather
       {
         id: 'weather refresh',
@@ -783,21 +866,98 @@ export function useHudCommands(): {
         },
       },
 
-      // Tier stubs (kept for parity with legacy voice directory)
-      { id: 'fire', label: 'Fire (stub)', group: 'Tier 2', run: () => ok('Coming in Tier 2.') },
-      { id: 'water', label: 'Water (stub)', group: 'Tier 2', run: () => ok('Coming in Tier 2.') },
       {
-        id: 'deadman',
-        label: 'Deadman (stub)',
-        group: 'Tier 2',
-        run: () => ok('Coming in Tier 2.'),
+        id: 'fire',
+        label: 'Fire conditions brief',
+        aliases: ['fire status', 'fire risk'],
+        group: 'Environmental',
+        run: async () => {
+          const result = await fireConditionsVoiceMessage({
+            lat: gps.lat,
+            lng: gps.lng,
+            cachedWeather: panelData.weather,
+            fetchWeather,
+          })
+          if (!result.ok) return fail(result.message)
+          updatePanel('weather', { docked: false, minimized: false })
+          raisePanel('weather')
+          window.dispatchEvent(new CustomEvent('hud:weather-refresh'))
+          return ok(result.message)
+        },
       },
-      ...(['ai route', 'biometric', 'forage', 'lidar', 'ar'] as const).map((id) => ({
-        id,
-        label: `${id} (stub)`,
-        group: 'Tier 3',
-        run: () => ok('Coming in Tier 3.'),
-      })),
+      {
+        id: 'water',
+        label: 'Water crossing brief',
+        aliases: ['water status', 'stream conditions', 'hydro'],
+        group: 'Environmental',
+        run: async () => {
+          const result = await waterConditionsVoiceMessage({
+            lat: gps.lat,
+            lng: gps.lng,
+            cachedWeather: panelData.weather,
+            fetchWeather,
+          })
+          if (!result.ok) return fail(result.message)
+          updatePanel('weather', { docked: false, minimized: false })
+          raisePanel('weather')
+          window.dispatchEvent(new CustomEvent('hud:weather-refresh'))
+          return ok(result.message)
+        },
+      },
+      {
+        id: 'ai route',
+        label: 'Route planning status',
+        aliases: ['ai reroute', 'smart route'],
+        group: 'Route',
+        run: () => {
+          const total = totalRouteDistance(state.waypoints.map((w) => ({ lat: w.lat, lng: w.lng })))
+          updatePanel('waypoints', { docked: false, minimized: false })
+          raisePanel('waypoints')
+          return ok(buildAiRouteVoiceMessage(state.waypoints.length, total.miles))
+        },
+      },
+      {
+        id: 'biometric',
+        label: 'Biometric status',
+        aliases: ['heart rate', 'vitals'],
+        group: 'Status',
+        run: async () => {
+          const nav = navigator as Navigator & { getBattery?: () => Promise<{ level?: number }> }
+          let batteryPercent: number | null = null
+          if (nav.getBattery) {
+            try {
+              const b = await nav.getBattery()
+              batteryPercent = Math.round((b.level ?? 0) * 100)
+            } catch {
+              batteryPercent = null
+            }
+          }
+          const { getHealthConnectCache } = await import('../lib/wearables/healthConnectClient')
+          const { buildHealthBiometricLine } = await import('../lib/wearables/healthConnectFormat')
+          return ok(buildBiometricVoiceMessage(batteryPercent, buildHealthBiometricLine(getHealthConnectCache())))
+        },
+      },
+      {
+        id: 'forage',
+        label: 'Seasonal foraging tip',
+        aliases: ['foraging', 'morels'],
+        group: 'Environmental',
+        run: () => ok(buildForageSeasonalTip()),
+      },
+      {
+        id: 'lidar',
+        label: 'Trail / LiDAR status',
+        aliases: ['ghost trail', 'ghost trails'],
+        group: 'Navigation',
+        run: () => ok(buildLidarVoiceMessage(state.snapToTrailEnabled)),
+      },
+      {
+        id: 'ar',
+        label: 'AR HUD status',
+        aliases: ['augmented reality', 'ar hud'],
+        group: 'Display',
+        run: () => ok(buildArVoiceMessage()),
+      },
     ]
   }, [
     addWaypoint,
@@ -814,13 +974,16 @@ export function useHudCommands(): {
     panelData.userLocation,
     panelData.weather,
     panelData.weatherLoading,
+    raiseLayersPanel,
     raisePanel,
     removeWaypoint,
+    setOverlayEnabled,
     resetLayout,
     setLayer,
     setScreenHue,
     setWaypoints,
     state.waypoints,
+    state.snapToTrailEnabled,
     updatePanel,
   ])
 

@@ -44,6 +44,14 @@ export const TIER2_EXCLUDED_PATHS = [
   'src/hud/MissionLinkPanel.tsx',
   'src/hud/MissionSyncStatusChip.tsx',
   'src/layers/TeamPresenceLayer.tsx',
+  'src/layers/MonitorMapFollow.tsx',
+  'src/layers/EnvironmentalOverlaysLayer.tsx',
+  'src/lib/environmentalOverlays',
+  'src/context/OverlayContext.tsx',
+  'src/lib/snapTrack',
+  'src/lib/wearables',
+  'plugins/capacitor-hud-health-connect',
+  'src/hud/WearablesPanel.tsx',
 ] as const
 
 export const TIER2_EXCLUDED_CAPABILITIES = [

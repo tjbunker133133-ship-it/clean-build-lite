@@ -2,12 +2,16 @@ import type { Waypoint } from '../../types'
 
 export const MISSION_SYNC_PROTOCOL_VERSION = 1 as const
 
-/** `member` = equal peer in mission (any tablet may link others). */
-export type MissionSyncRole = 'idle' | 'member'
+/** Field operator with full mesh publish rights. */
+export type MissionSyncRole = 'idle' | 'member' | 'observer'
+
+/** Per-link slot — member (field) or observer (remote monitor). */
+export type MissionLinkRole = 'member' | 'observer'
 
 export type MissionSyncConnectionPhase =
   | 'idle'
   | 'awaiting-joiner'
+  | 'awaiting-observer'
   | 'awaiting-host-answer'
   | 'connecting'
   | 'connected'
@@ -22,6 +26,18 @@ export type MissionSnapshot = {
   sourceDeviceId: string
   sourceCallsign: string
   waypoints: Waypoint[]
+  snapToTrailEnabled?: boolean
+}
+
+export type MissionCorridorHint = {
+  missionId: string
+  sourceDeviceId: string
+  sourceCallsign: string
+  bounds: { minLat: number; maxLat: number; minLng: number; maxLng: number }
+  routeFingerprint: string
+  centerLat: number
+  centerLng: number
+  updatedAt: number
 }
 
 export type TeamPresence = {
@@ -33,7 +49,6 @@ export type TeamPresence = {
   updatedAt: number
 }
 
-/** Operator OK ping — does not replace SOS or deadman. */
 export type MissionCheckIn = {
   deviceId: string
   callsign: string
@@ -41,7 +56,6 @@ export type MissionCheckIn = {
   sentAt: number
 }
 
-/** Short team text over mesh (rate-limited in UI). */
 export type MissionBurst = {
   deviceId: string
   callsign: string
@@ -54,6 +68,7 @@ export type SyncWireMessage =
   | { type: 'presence'; payload: TeamPresence }
   | { type: 'checkin'; payload: MissionCheckIn }
   | { type: 'burst'; payload: MissionBurst }
+  | { type: 'corridor-hint'; payload: MissionCorridorHint }
   | { type: 'ping'; deviceId: string; sentAt: number }
 
 export type MissionOfferPacket = {
@@ -61,7 +76,11 @@ export type MissionOfferPacket = {
   v: typeof MISSION_SYNC_PROTOCOL_VERSION
   missionId: string
   missionName: string
+  /** Field join token — required for member links. */
   joinToken: string
+  /** Separate secret for remote monitor links (not the 6-char Wi‑Fi code). */
+  observerToken?: string
+  linkRole?: MissionLinkRole
   hostDeviceId: string
   hostCallsign: string
   peerId: string
@@ -73,6 +92,8 @@ export type MissionAnswerPacket = {
   v: typeof MISSION_SYNC_PROTOCOL_VERSION
   missionId: string
   joinToken: string
+  observerToken?: string
+  linkRole?: MissionLinkRole
   peerId: string
   hostPeerId: string
   callsign: string
@@ -84,14 +105,21 @@ export type ConnectedPeer = {
   deviceId: string
   callsign: string
   connectedAt: number
+  linkRole: MissionLinkRole
 }
 
 export type MissionSyncPersistedSession = {
   missionId: string
   missionName: string
-  role: 'member'
+  role: 'member' | 'observer'
   deviceId: string
   joinToken?: string
+  observerToken?: string
   hostDeviceId?: string
+  /** Observer waiting for field lead to create monitor link (token-only join). */
+  observerWaitMode?: boolean
   updatedAt: number
 }
+
+export const MAX_OBSERVER_PEERS = 12
+export const MAX_PENDING_OBSERVER_OFFERS = 8

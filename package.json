@@ -7,7 +7,7 @@
   "scripts": {
     "ensure:index": "node scripts/ensure-index.mjs",
     "predev": "npm run ensure:index",
-    "prebuild": "npm run ensure:index && npm run build:plugin",
+    "prebuild": "npm run ensure:index && npm run build:plugins",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
@@ -16,7 +16,8 @@
     "verify": "tsc --noEmit && vitest run && node scripts/verify-tier1-contract.mjs && vite build",
     "verify:runtime": "npm run verify && node scripts/runtime-audit.mjs",
     "build:plugin": "npm run build --prefix plugins/capacitor-hud-mission-link",
-    "cap:sync": "npm run build && npm run build:plugin && npx cap sync android",
+    "build:plugins": "npm run build:plugin && npm run build --prefix plugins/capacitor-hud-health-connect",
+    "cap:sync": "npm run build && npm run build:plugins && npx cap sync android",
     "cap:open:android": "npx cap open android",
     "env:init": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/init-env.ps1",
     "env:setup": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/set-env-interactive.ps1",
@@ -25,8 +26,14 @@
     "env:sync-vercel": "node scripts/sync-vercel-env.mjs",
     "env:check-signing": "node scripts/check-signing-key-digest.mjs",
     "env:sync-signing": "node scripts/sync-rescue-signing-key.mjs",
+    "env:sync-gmail": "node scripts/sync-gmail-sender.mjs",
     "env:verify-signing": "node scripts/verify-rescue-signing.mjs",
     "env:verify-contract": "node scripts/verify-rescue-contract.mjs",
+    "env:set-firms": "node scripts/set-firms-key.mjs",
+    "env:generate-vapid": "node scripts/generate-vapid-keys.mjs",
+    "env:sync-vapid": "node scripts/run-sync-vapid.mjs",
+    "deploy:push": "node scripts/deploy-alert-push.mjs",
+    "verify:register-push": "node scripts/verify-register-alert-push.mjs",
     "smoke": "npm run verify"
   },
   "overrides": {
@@ -34,6 +41,8 @@
     "tar": "^7.5.15"
   },
   "dependencies": {
+    "@capacitor/share": "^6.0.4",
+    "@signal-one/capacitor-hud-health-connect": "file:plugins/capacitor-hud-health-connect",
     "@signal-one/capacitor-hud-mission-link": "file:plugins/capacitor-hud-mission-link",
     "@supabase/supabase-js": "^2.105.3",
     "maplibre-gl": "^5.0.0",
@@ -58,6 +67,7 @@
     "prettier": "^3.8.3",
     "typescript": "^5.2.2",
     "vite": "^6.4.2",
-    "vitest": "^3.0.0"
+    "vitest": "^3.0.0",
+    "web-push": "^3.6.7"
   }
 }

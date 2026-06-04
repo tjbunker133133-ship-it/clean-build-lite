@@ -24,6 +24,13 @@ import { traceAction } from '../runtime/actionTrace'
 
 import TacticalProfileEditor from './TacticalProfileEditor'
 import { useTacticalProfile } from '../hooks/useTacticalProfile'
+import {
+  clearPendingAlertSubscribe,
+  readPendingAlertSubscribe,
+  type PendingAlertSubscribe,
+} from '../lib/push/pendingAlertSubscribe'
+import { ensureAlertPushSubscription } from '../lib/push/webPushClient'
+import { isWebPushConfigured } from '../lib/push/webPushConfig'
 
 export type WizardStepId =
   | 'intro'
@@ -118,7 +125,7 @@ export default function PermissionWizard({
   onClose,
   onResetApp,
 }: Props) {
-  const { operationalReady } = useTacticalProfile()
+  const { operationalReady, assessment } = useTacticalProfile()
 
   const steps = useMemo(() => {
     const s: WizardStepId[] = ['intro', 'identity', 'location', 'microphone', 'camera', 'notifications']
@@ -133,6 +140,9 @@ export default function PermissionWizard({
   const [linkHint, setLinkHint] = useState<string | null>(null)
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [settingsFallback, setSettingsFallback] = useState<string | null>(null)
+  const [pendingInvite, setPendingInvite] = useState<PendingAlertSubscribe | null>(null)
+  const [inviteEmail, setInviteEmail] = useState('')
+  const [pushInviteStatus, setPushInviteStatus] = useState<string | null>(null)
   const showSettingsFallback = useCallback(
     (msg: string) => setSettingsFallback(msg),
     [],
@@ -152,12 +162,39 @@ export default function PermissionWizard({
       setAttempted({})
       setLinkHint(null)
       setShowAdvanced(false)
+      const pending = readPendingAlertSubscribe()
+      setPendingInvite(pending)
+      setInviteEmail(pending?.contactEmail ?? '')
+      setPushInviteStatus(null)
     }
   }, [visible])
 
-  const stepId = steps[Math.min(stepIndex, steps.length - 1)] ?? 'intro'
-  const total = steps.length
-  const stepNum = stepIndex + 1
+  const tryEnableInvitedPush = useCallback(async () => {
+    const pending = pendingInvite ?? readPendingAlertSubscribe()
+    if (!pending || !isWebPushConfigured()) return
+    const email = inviteEmail.trim()
+    if (!email.includes('@')) {
+      setPushInviteStatus('Enter the email your teammate listed for you.')
+      return
+    }
+    setPushInviteStatus(null)
+    setBusy(true)
+    try {
+      const result = await ensureAlertPushSubscription({
+        watchToken: pending.watchToken,
+        contactEmail: email,
+      })
+      if (result.ok) {
+        clearPendingAlertSubscribe()
+        setPendingInvite(null)
+        setPushInviteStatus('Push alerts enabled on this device.')
+      } else {
+        setPushInviteStatus(result.message)
+      }
+    } finally {
+      setBusy(false)
+    }
+  }, [pendingInvite, inviteEmail, setBusy])
 
   const refreshSnapshot = useCallback(() => {
     void getPermissionSnapshot().then((s) => {
@@ -166,6 +203,27 @@ export default function PermissionWizard({
       setNotif(s.notifications)
     })
   }, [setGeo, setMic, setNotif])
+
+  const requestNotificationsStep = useCallback(async () => {
+    traceAction('permission_request:notifications', 'handler_enter')
+    if (busy) return
+    setBusy(true)
+    try {
+      const next = await requestNotificationPermission()
+      setNotif(next)
+      setAttempted((a) => ({ ...a, notifications: true }))
+      refreshSnapshot()
+      if (next === 'granted' && (pendingInvite ?? readPendingAlertSubscribe())) {
+        await tryEnableInvitedPush()
+      }
+    } finally {
+      setBusy(false)
+    }
+  }, [busy, setBusy, setNotif, refreshSnapshot, pendingInvite, tryEnableInvitedPush])
+
+  const stepId = steps[Math.min(stepIndex, steps.length - 1)] ?? 'intro'
+  const total = steps.length
+  const stepNum = stepIndex + 1
 
   const runRequest = useCallback(
     async (fn: () => Promise<PermissionStateLike>, set: (s: PermissionStateLike) => void, id: WizardStepId) => {
@@ -308,15 +366,22 @@ export default function PermissionWizard({
 
       {stepId === 'identity' && (
         <>
+          <div style={{ fontSize: fontMd, fontWeight: 800, color: '#d8e3d8' }}>Who gets alerts?</div>
           <div style={{ fontSize: fontSm, color: '#b8c4b8', lineHeight: 1.45 }}>
             <p style={{ margin: '0 0 8px' }}>
-              SOS, Deadman, and Check-In use a <strong>device-local</strong> profile (display name, reply-to email, shared
-              emergency contacts). You can skip and configure later in Preflight — emergency sends stay disabled until
-              setup is complete.
+              SOS, Deadman, and Check-In need a <strong>device-local</strong> profile: your display name, reply-to email,
+              and at least one emergency contact. Nothing is uploaded until you send an alert.
             </p>
-            <p style={{ margin: 0, color: operationalReady ? '#7dff8a' : '#ffd166' }}>
-              {operationalReady ? 'Profile ready for emergency dispatch.' : 'Profile not yet ready for dispatch.'}
+            <p style={{ margin: '0 0 8px', color: operationalReady ? '#7dff8a' : '#ffd166', fontWeight: 700 }}>
+              {operationalReady
+                ? `${assessment.validContactCount} contact(s) ready — alerts enabled.`
+                : 'Alerts disabled until Preflight is complete.'}
             </p>
+            {!operationalReady && (
+              <p style={{ margin: 0, color: '#94a3b8' }}>
+                You can skip and finish in Preflight later — emergency sends stay blocked until then.
+              </p>
+            )}
           </div>
           <div
             style={{
@@ -329,8 +394,16 @@ export default function PermissionWizard({
           >
             <TacticalProfileEditor compact />
           </div>
-          <button type="button" onClick={goNext} style={{ ...btnBase, borderColor: 'rgba(125,255,138,0.45)' }}>
-            {operationalReady ? 'CONTINUE' : 'SKIP FOR NOW'}
+          <button
+            type="button"
+            onClick={goNext}
+            style={{
+              ...btnBase,
+              borderColor: operationalReady ? 'rgba(125,255,138,0.55)' : 'rgba(255,209,102,0.45)',
+              background: operationalReady ? 'rgba(125,255,138,0.16)' : 'rgba(255,209,102,0.1)',
+            }}
+          >
+            {operationalReady ? 'CONTINUE' : 'SKIP FOR NOW — ALERTS OFF'}
           </button>
         </>
       )}
@@ -468,18 +541,61 @@ export default function PermissionWizard({
           <div>
             <div style={{ fontSize: fontMd, fontWeight: 800, marginBottom: 6 }}>Notifications</div>
             <div style={{ fontSize: fontSm, color: '#9ea7a0' }}>
-              Alerts and deadman renewals. Status:{' '}
+              {pendingInvite
+                ? 'You were invited to receive push alerts. Allow notifications, confirm your email, then enable push.'
+                : 'Required for emergency push alerts to contacts (replaces SMS). Also used for deadman renewals.'}{' '}
+              Status:{' '}
               <strong style={{ color: notif === 'granted' ? '#7dff8a' : '#ffd166' }}>{stateLabel(notif)}</strong>
             </div>
           </div>
+          {pendingInvite && (
+            <label style={{ display: 'grid', gap: 4, fontSize: fontSm }}>
+              Your email (must match what your teammate listed)
+              <input
+                type="email"
+                value={inviteEmail}
+                onChange={(e) => setInviteEmail(e.target.value)}
+                disabled={busy}
+                style={{
+                  minHeight: tapMin,
+                  borderRadius: 8,
+                  border: '1px solid rgba(199,206,198,0.35)',
+                  background: 'rgba(10,12,13,0.85)',
+                  color: '#e2e8e2',
+                  padding: '0 10px',
+                  fontSize: fontMd,
+                }}
+              />
+            </label>
+          )}
           <button
             type="button"
             disabled={busy}
-            onClick={() => void runRequest(requestNotificationPermission, setNotif, 'notifications')}
+            onClick={() => void requestNotificationsStep()}
             style={btnBase}
           >
             {busy ? 'REQUESTING…' : 'REQUEST NOTIFICATIONS'}
           </button>
+          {pendingInvite && notif === 'granted' && (
+            <button
+              type="button"
+              disabled={busy || !inviteEmail.includes('@')}
+              onClick={() => void tryEnableInvitedPush()}
+              style={{ ...btnBase, borderColor: 'rgba(125,255,138,0.55)', background: 'rgba(125,255,138,0.18)' }}
+            >
+              {busy ? 'ENABLING…' : 'ENABLE PUSH ALERTS'}
+            </button>
+          )}
+          {pushInviteStatus && (
+            <div
+              style={{
+                fontSize: fontSm,
+                color: pushInviteStatus.includes('enabled') ? '#7dff8a' : '#ffd166',
+              }}
+            >
+              {pushInviteStatus}
+            </div>
+          )}
         </>
       )}
 
@@ -542,6 +658,7 @@ export default function PermissionWizard({
             <div>MIC ··· {stateLabel(mic)}</div>
             <div>CAMERA ··· {stateLabel(camera)}</div>
             <div>NOTIFY ··· {stateLabel(notif)}</div>
+            <div>ALERTS ··· {operationalReady ? 'READY' : 'DISABLED'}</div>
             {steps.includes('orientation') && <div>ORIENT ··· {stateLabel(orient)}</div>}
             {steps.includes('motion') && <div>MOTION ··· {stateLabel(motion)}</div>}
           </div>

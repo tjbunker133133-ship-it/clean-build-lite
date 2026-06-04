@@ -27,6 +27,7 @@ import { forceUpdateApp } from './utils/forceUpdate'
 import { traceAction } from './runtime/actionTrace'
 import { hudDevLog } from './lib/tier1DebugLog'
 import { migrateTacticalProfileIfNeeded } from './lib/tacticalProfile'
+import { captureAlertWatchFromLocation } from './lib/push/pendingAlertSubscribe'
 
 logInfo('RUNTIME', 'build id', __BUILD_ID__)
 logInfo('RUNTIME', 'device detect', getDeviceEnvironment())
@@ -420,6 +421,10 @@ if (typeof window !== 'undefined') {
 }
 
 void migrateTacticalProfileIfNeeded()
+
+if (typeof window !== 'undefined') {
+  captureAlertWatchFromLocation(window.location.search)
+}
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

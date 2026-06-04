@@ -36,11 +36,10 @@ import { useTacticalProfile } from '../hooks/useTacticalProfile'
 import { getRescueEligibility } from '../lib/rescue/eligibility'
 import { buildRescuePacket } from '../lib/rescue/buildRescuePacket'
 import {
-  buildRescueDispatchHeaders,
   hasRescueDispatchAuth,
-  logRescueDispatchTrace,
-  parseRescueDispatchFailure,
 } from '../lib/rescue/rescueDispatch'
+import { postRescuePacket } from '../lib/rescue/postRescuePacket'
+import { formatRescuePushSuffix } from '../lib/rescue/postRescuePush'
 import {
   clearDeadmanDispatchLock,
   recordDeadmanDispatchSuccess,
@@ -68,7 +67,7 @@ const RENEW_WINDOW_S = 60
 // Removed obsolete localStorage contact fallbacks (`titanium_saved_contacts`,
 // `emergency_contacts_saved`, `titanium_route_contacts`,
 // `current_route_contacts`). The dispatch path is now backend-truth-only via
-// `buildRescuePacket()` → `fetchEmergencyContacts()`.
+// `buildRescuePacket()` → device-local tactical profile contacts.
 
 /**
  * Local audio playback for dead-man alerts.
@@ -276,32 +275,25 @@ export default function DeadManPanel() {
         hasDispatchAuth: hasRescueDispatchAuth(),
         signed: Boolean(packet.signature),
       })
-      logRescueDispatchTrace({
-        triggerLabel: 'DEADMAN',
-        endpoint,
-        triggerType: packet.triggerType,
-        hasOperator: Boolean(packet.operator),
-        signed: Boolean(packet.signature),
-      })
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: buildRescueDispatchHeaders(),
-        body: JSON.stringify(packet),
-        signal: ac.signal,
-      })
-      if (res.ok) {
+      const result = await postRescuePacket(packet, endpoint, 'DEADMAN', ac.signal)
+      if (result.ok) {
         recordDeadmanDispatchSuccess(expiresAt)
-        // Match SOS main-line wording: "SOS SENT TO N CONTACTS"
-        safeShowDispatch(`DEADMAN SENT TO ${contactCount} CONTACTS`)
-        traceAction('deadman_dispatch', 'async_complete', { status: res.status, contactCount })
-      } else {
-        const fail = await parseRescueDispatchFailure(res, 'DEADMAN')
-        safeShowDispatch(fail.operatorMessage)
+        safeShowDispatch(`DEADMAN SENT TO ${contactCount} CONTACTS${formatRescuePushSuffix(result.push)}`)
+        traceAction('deadman_dispatch', 'async_complete', {
+          status: result.status,
+          contactCount,
+          pushSent: result.push?.ok ? result.push.sentCount ?? 0 : 0,
+        })
+      } else if (result.reason === 'http_error') {
+        safeShowDispatch(result.failure.operatorMessage)
         traceAction('deadman_dispatch', 'failure', {
           reason: 'http_error',
-          status: fail.status,
-          code: fail.code,
+          status: result.failure.status,
+          code: result.failure.code,
         })
+      } else {
+        safeShowDispatch('DEADMAN SEND FAILED (NETWORK)')
+        traceAction('deadman_dispatch', 'failure', { reason: 'network_error' })
       }
     } catch (e: unknown) {
       if ((e as { name?: string })?.name === 'AbortError') return

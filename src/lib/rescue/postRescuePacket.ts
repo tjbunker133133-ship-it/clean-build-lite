@@ -5,15 +5,16 @@ import {
   parseRescueDispatchFailure,
   type RescueDispatchFailure,
 } from './rescueDispatch'
+import { postRescuePushBestEffort, type RescuePushDispatchResult } from './postRescuePush'
 
 export type RescueDispatchLabel = 'SOS' | 'DEADMAN' | 'CHECKIN'
 
 export type PostRescuePacketResult =
-  | { ok: true; status: number }
-  | { ok: false; reason: 'http_error'; failure: RescueDispatchFailure }
-  | { ok: false; reason: 'network_error' }
+  | { ok: true; status: number; push?: RescuePushDispatchResult }
+  | { ok: false; reason: 'http_error'; failure: RescueDispatchFailure; push?: RescuePushDispatchResult }
+  | { ok: false; reason: 'network_error'; push?: RescuePushDispatchResult }
 
-/** POST a signed rescue packet to the configured edge function. */
+/** POST a signed rescue packet to the configured edge function (+ best-effort push). */
 export async function postRescuePacket(
   packet: RescuePacket,
   endpoint: string,
@@ -27,6 +28,7 @@ export async function postRescuePacket(
     hasOperator: Boolean(packet.operator),
     signed: Boolean(packet.signature),
   })
+  const pushPromise = postRescuePushBestEffort(packet, signal)
   try {
     const res = await fetch(endpoint, {
       method: 'POST',
@@ -34,13 +36,20 @@ export async function postRescuePacket(
       body: JSON.stringify(packet),
       signal,
     })
-    if (res.ok) return { ok: true, status: res.status }
+    const push = await pushPromise
+    if (res.ok) return { ok: true, status: res.status, push }
     const failure = await parseRescueDispatchFailure(res, triggerLabel)
-    return { ok: false, reason: 'http_error', failure }
+    return { ok: false, reason: 'http_error', failure, push }
   } catch (e: unknown) {
     if ((e as { name?: string })?.name === 'AbortError') {
       throw e
     }
-    return { ok: false, reason: 'network_error' }
+    let push: RescuePushDispatchResult = { ok: false, reason: 'skipped' }
+    try {
+      push = await pushPromise
+    } catch {
+      /* ignore */
+    }
+    return { ok: false, reason: 'network_error', push }
   }
 }

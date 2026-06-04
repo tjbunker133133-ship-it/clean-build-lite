@@ -3,10 +3,10 @@
  * Stored in localStorage; no cloud sync. Schema is versioned by storage key.
  */
 
-import { fetchEmergencyContacts } from './emergencyContacts'
-
 export const TACTICAL_PROFILE_STORAGE_KEY = 'tactical_profile_v1'
 const MIGRATION_FLAG_KEY = 'tactical_profile_migrated_v1'
+
+import { contactWantsEmail, contactWantsPush, normalizeAlertChannel, type AlertChannel } from './alertChannel'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
@@ -15,6 +15,8 @@ export type TacticalContact = {
   name: string
   email: string
   phone: string
+  /** How this contact receives alerts when operator dispatches rescue. */
+  alert_channel: AlertChannel
 }
 
 export type TacticalProfile = {
@@ -94,7 +96,8 @@ function normalizeContact(raw: unknown): TacticalContact | null {
   const name = typeof o.name === 'string' ? o.name.trim() : ''
   const phone = typeof o.phone === 'string' ? o.phone.trim() : ''
   const id = typeof o.id === 'string' && o.id.trim() ? o.id.trim() : newContactId()
-  return { id, name, email, phone }
+  const alert_channel = normalizeAlertChannel(o.alert_channel ?? o.alertChannel)
+  return { id, name, email, phone, alert_channel }
 }
 
 function normalizeProfile(raw: unknown): TacticalProfile {
@@ -214,20 +217,33 @@ export function addTacticalContact(input: {
   name: string
   email: string
   phone?: string
+  alert_channel?: AlertChannel
 }): { profile: TacticalProfile; error: string | null } {
   const name = input.name.trim()
   const email = input.email.trim()
   const phone = (input.phone ?? '').trim()
+  const alert_channel = normalizeAlertChannel(input.alert_channel)
   if (!email) return { profile: loadTacticalProfile(), error: 'Email is required' }
   if (!isValidEmail(email)) return { profile: loadTacticalProfile(), error: 'Invalid email format' }
   const profile = saveTacticalProfile((prev) => ({
     ...prev,
     contacts: [
       ...prev.contacts,
-      { id: newContactId(), name, email, phone },
+      { id: newContactId(), name, email, phone, alert_channel },
     ],
   }))
   return { profile, error: null }
+}
+
+export function updateTacticalContactAlertChannel(
+  id: string,
+  alert_channel: AlertChannel,
+): TacticalProfile {
+  const channel = normalizeAlertChannel(alert_channel)
+  return saveTacticalProfile((prev) => ({
+    ...prev,
+    contacts: prev.contacts.map((c) => (c.id === id ? { ...c, alert_channel: channel } : c)),
+  }))
 }
 
 export function removeTacticalContact(id: string): TacticalProfile {
@@ -246,15 +262,19 @@ export function rescueContactsFromProfile(profile: TacticalProfile): {
   name: string
   email: string
   phone?: string
+  alertChannel: AlertChannel
 }[] {
   return profile.contacts
     .filter((c) => isValidEmail(c.email))
     .map((c) => ({
       name: c.name.trim() || 'Contact',
       email: c.email.trim(),
+      alertChannel: normalizeAlertChannel(c.alert_channel),
       ...(c.phone.trim() ? { phone: c.phone.trim() } : {}),
     }))
 }
+
+export { contactWantsEmail, contactWantsPush }
 
 export function operatorMetaFromProfile(
   profile: TacticalProfile,
@@ -301,7 +321,8 @@ function parseLegacyLocalContacts(): TacticalContact[] {
 }
 
 /**
- * One-time import from legacy localStorage keys and Supabase (if local list empty).
+ * One-time import from legacy localStorage keys on this device only.
+ * Does not pull from shared Supabase — contacts must be entered in Preflight/wizard.
  * Never throws; safe to call on boot.
  */
 export async function migrateTacticalProfileIfNeeded(): Promise<void> {
@@ -314,31 +335,6 @@ export async function migrateTacticalProfileIfNeeded(): Promise<void> {
     if (legacy.length > 0) {
       profile = saveTacticalProfile({ contacts: legacy })
       changed = true
-    }
-  }
-
-  if (profile.contacts.length === 0) {
-    try {
-      const { data, error } = await fetchEmergencyContacts()
-      if (!error && data.length > 0) {
-        const imported: TacticalContact[] = data
-          .filter((c) => typeof c.email === 'string' && c.email.trim())
-          .map((c) =>
-            normalizeContact({
-              id: c.id,
-              name: c.contact_name,
-              email: c.email,
-              phone: '',
-            }),
-          )
-          .filter((c): c is TacticalContact => c != null)
-        if (imported.length > 0) {
-          profile = saveTacticalProfile({ contacts: imported })
-          changed = true
-        }
-      }
-    } catch {
-      /* network / backend unavailable */
     }
   }
 

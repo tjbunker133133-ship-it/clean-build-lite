@@ -1,22 +1,25 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React from 'react'
 import { useMapContext } from '../context/MapContext'
+import { useDeviceHeading } from '../hooks/useDeviceHeading'
 import { useGPS } from '../hooks/useGPS'
 import { getDeviceProfile } from '../runtime/deviceProfile'
+import CompassDial from './CompassDial'
 import { touchFontSm, touchFontMd, touchGapMd, touchMinTarget } from './tokens'
 
-function normalizeHeading(value: number): number {
-  const n = value % 360
-  return n < 0 ? n + 360 : n
-}
-
-function headingToCardinal(heading: number): string {
-  const idx = Math.round(heading / 45) % 8
-  return ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][idx]
+function LocateIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden fill="none">
+      <circle cx="12" cy="12" r="7" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M12 3v3M12 18v3M3 12h3M18 12h3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <circle cx="12" cy="12" r="2" fill="currentColor" />
+    </svg>
+  )
 }
 
 export default function TopBar() {
   const { map } = useMapContext()
   const gps = useGPS()
+  const { heading, status, cardinal } = useDeviceHeading()
   const profile = getDeviceProfile()
   const isMobile = profile.interactionMode === 'mobile'
   const fontSm = touchFontSm(isMobile)
@@ -25,65 +28,8 @@ export default function TopBar() {
   const tapMin = touchMinTarget(isMobile)
   const isCompact = profile.width < 720 || profile.isCoarsePointer
   const hasFix = gps.lat != null && gps.lng != null
-  const [heading, setHeading] = useState<number | null>(null)
-  const [compassAvailable, setCompassAvailable] = useState(false)
-  const lastHeadingRef = useRef<number | null>(null)
-  const lastPublishRef = useRef(0)
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    let mounted = true
-    let fallbackTimer: number | null = null
-
-    const publishHeading = (rawHeading: number | null) => {
-      if (!mounted) return
-      if (rawHeading == null || !Number.isFinite(rawHeading)) return
-      const normalized = normalizeHeading(rawHeading)
-      const last = lastHeadingRef.current
-      const now = performance.now()
-      // Throttle micro-jitter to avoid noisy rerenders on mobile sensors.
-      if (last != null && Math.abs(last - normalized) < 2 && now - lastPublishRef.current < 250) return
-      lastHeadingRef.current = normalized
-      lastPublishRef.current = now
-      setHeading(normalized)
-      setCompassAvailable(true)
-    }
-
-    const onOrientation = (event: DeviceOrientationEvent) => {
-      // iOS Safari uses webkitCompassHeading; other browsers typically provide alpha.
-      const webkitHeading = (event as DeviceOrientationEvent & { webkitCompassHeading?: number })
-        .webkitCompassHeading
-      if (typeof webkitHeading === 'number' && Number.isFinite(webkitHeading)) {
-        publishHeading(webkitHeading)
-        return
-      }
-      if (typeof event.alpha === 'number' && Number.isFinite(event.alpha)) {
-        publishHeading(360 - event.alpha)
-      }
-    }
-
-    window.addEventListener('deviceorientationabsolute', onOrientation as EventListener, { passive: true })
-    window.addEventListener('deviceorientation', onOrientation as EventListener, { passive: true })
-    fallbackTimer = window.setTimeout(() => {
-      if (!mounted || lastHeadingRef.current != null) return
-      setCompassAvailable(false)
-      setHeading(null)
-    }, 1500)
-
-    return () => {
-      mounted = false
-      window.removeEventListener('deviceorientationabsolute', onOrientation as EventListener)
-      window.removeEventListener('deviceorientation', onOrientation as EventListener)
-      if (fallbackTimer != null) window.clearTimeout(fallbackTimer)
-    }
-  }, [])
-
-  const headingLabel = useMemo(() => {
-    if (!compassAvailable || heading == null) return 'HDG --'
-    return `HDG ${Math.round(heading)
-      .toString()
-      .padStart(3, '0')} ${headingToCardinal(heading)}`
-  }, [compassAvailable, heading])
+  const dialSize = isCompact ? 38 : 42
+  const barHeight = isCompact ? 54 : 50
 
   const locateMe = () => {
     if (!map || !hasFix) return
@@ -102,17 +48,18 @@ export default function TopBar() {
         top: 0,
         left: 0,
         right: 0,
-        height: isCompact ? 52 : 48,
+        height: barHeight,
         zIndex: 200,
         pointerEvents: 'auto',
         display: 'grid',
-        gridTemplateColumns: '1fr auto 1fr',
+        gridTemplateColumns: 'minmax(0, 1fr) auto minmax(0, 1fr)',
         alignItems: 'center',
-        padding: `calc(env(safe-area-inset-top, 0px) + 2px) ${isCompact ? 12 : 16}px 0 ${isCompact ? 12 : 16}px`,
+        columnGap: isCompact ? 8 : 12,
+        padding: `calc(env(safe-area-inset-top, 0px) + 4px) ${isCompact ? 10 : 14}px 0`,
         background: isMobile ? 'rgba(10, 12, 13, 0.96)' : 'rgba(10, 12, 13, 0.9)',
-        borderBottom: '1px solid rgba(199, 206, 198, 0.22)',
+        borderBottom: '1px solid rgba(199, 206, 198, 0.2)',
         backdropFilter: isMobile ? undefined : 'blur(12px)',
-        boxShadow: '0 4px 30px rgba(0, 0, 0, 0.35)',
+        boxShadow: '0 4px 24px rgba(0, 0, 0, 0.32)',
       }}
     >
       <div
@@ -120,23 +67,61 @@ export default function TopBar() {
           display: 'flex',
           alignItems: 'center',
           gap: gapMd,
-          fontFamily: 'var(--font-ui)',
-          fontWeight: 700,
-          fontSize: isCompact ? fontSm : fontMd,
-          letterSpacing: '0.18em',
-          color: '#c7cec6',
-          textShadow: '0 0 8px rgba(199,206,198,0.18)',
+          minWidth: 0,
+          overflow: 'hidden',
         }}
       >
-        SIGNAL ONE HUD
+        <div
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: isCompact ? '5px 9px' : '5px 11px',
+            borderRadius: 7,
+            border: '1px solid rgba(125,255,138,0.42)',
+            background: 'rgba(125,255,138,0.06)',
+            boxShadow: 'inset 0 0 0 1px rgba(125,255,138,0.08)',
+            flexShrink: 0,
+          }}
+        >
+          <span
+            style={{
+              fontFamily: 'var(--font-ui)',
+              fontWeight: 700,
+              fontSize: isCompact ? fontSm : fontMd,
+              letterSpacing: isCompact ? '0.14em' : '0.16em',
+              color: '#c7cec6',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            SIGNAL ONE
+          </span>
+          {!isCompact && (
+            <span
+              style={{
+                fontFamily: 'var(--font-ui)',
+                fontWeight: 600,
+                fontSize: fontSm,
+                letterSpacing: '0.12em',
+                color: '#7dffa8',
+                opacity: 0.92,
+              }}
+            >
+              HUD
+            </span>
+          )}
+        </div>
         {!isCompact && profile.interactionMode === 'desktop' && !profile.isIOS && (
           <span
             style={{
               fontSize: fontSm,
               color: '#9ea7a0',
-              letterSpacing: '0.12em',
+              letterSpacing: '0.1em',
               fontWeight: 400,
-              opacity: 0.9,
+              opacity: 0.88,
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
             }}
           >
             Ctrl+E export · ⇧Ctrl+E import
@@ -144,54 +129,46 @@ export default function TopBar() {
         )}
       </div>
 
-      <div
-        aria-live="polite"
-        style={{
-          justifySelf: 'center',
-          fontFamily: 'var(--font-mono, monospace)',
-          fontSize: isCompact ? fontSm : fontMd,
-          color: compassAvailable ? '#b8c1b9' : '#8f9891',
-          letterSpacing: '0.1em',
-          textTransform: 'uppercase',
-          whiteSpace: 'nowrap',
-        }}
-        title={compassAvailable ? 'Device heading' : 'Compass unavailable on this device/browser'}
-      >
-        {headingLabel}
+      <div style={{ justifySelf: 'center' }}>
+        <CompassDial heading={heading} status={status} cardinal={cardinal} size={dialSize} />
       </div>
 
       <div
         style={{
           display: 'flex',
           alignItems: 'center',
+          justifyContent: 'flex-end',
           gap: gapMd,
-          fontFamily: 'var(--font-ui, system-ui)',
-          fontSize: fontSm,
-          color: '#9ea7a0',
-          letterSpacing: '0.12em',
-          textTransform: 'uppercase',
-          justifySelf: 'end',
+          minWidth: 0,
         }}
       >
         <button
           type="button"
           onClick={locateMe}
           disabled={!hasFix}
+          aria-label={hasFix ? 'Center map on live GPS' : 'Waiting for GPS fix'}
+          title={hasFix ? 'Center map on live GPS' : 'Waiting for GPS fix'}
           style={{
             minHeight: tapMin,
-            padding: isCompact ? '0 12px' : '0 14px',
+            minWidth: isCompact ? tapMin : undefined,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 6,
+            padding: isCompact ? '0 10px' : '0 12px',
             borderRadius: 8,
-            border: hasFix ? '1px solid rgba(125,255,138,0.65)' : '1px solid rgba(130,138,132,0.45)',
-            background: hasFix ? 'rgba(125,255,138,0.14)' : 'rgba(60,66,62,0.35)',
+            border: hasFix ? '1px solid rgba(125,255,138,0.55)' : '1px solid rgba(130,138,132,0.4)',
+            background: hasFix ? 'rgba(125,255,138,0.12)' : 'rgba(60,66,62,0.32)',
             color: hasFix ? '#b8f7c1' : '#8e9992',
             cursor: hasFix ? 'pointer' : 'not-allowed',
             letterSpacing: '0.08em',
             fontSize: fontSm,
             fontWeight: 700,
+            fontFamily: 'var(--font-ui, system-ui)',
           }}
-          title={hasFix ? 'Center map on live GPS' : 'Waiting for GPS fix'}
         >
-          LOCATE ME
+          <LocateIcon />
+          {!isCompact && <span>LOCATE</span>}
         </button>
       </div>
     </div>

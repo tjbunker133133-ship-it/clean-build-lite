@@ -5,6 +5,7 @@ export type MissionMergeResult = {
   merged: Waypoint[]
   added: number
   updated: number
+  archived: number
   unchanged: number
 }
 
@@ -16,6 +17,7 @@ export function mergeMissionWaypoints(local: Waypoint[], remote: Waypoint[]): Mi
   const localById = new Map(local.map((w) => [w.id, w]))
   let added = 0
   let updated = 0
+  let archived = 0
   let unchanged = 0
 
   for (const raw of remote) {
@@ -23,19 +25,23 @@ export function mergeMissionWaypoints(local: Waypoint[], remote: Waypoint[]): Mi
     const cur = localById.get(peer.id)
     if (!cur) {
       localById.set(peer.id, peer)
-      added += 1
+      if (peer.status === 'archived') archived += 1
+      else added += 1
       continue
     }
     if (peer.createdAt >= cur.createdAt) {
+      const nextStatus = peer.status ?? 'pending'
+      const curStatus = cur.status ?? 'pending'
       const changed =
         cur.lat !== peer.lat ||
         cur.lng !== peer.lng ||
         cur.label !== peer.label ||
         cur.type !== peer.type ||
-        (cur.status ?? 'pending') !== (peer.status ?? 'pending')
+        curStatus !== nextStatus
       if (changed) {
         localById.set(peer.id, { ...cur, ...peer, id: cur.id })
-        updated += 1
+        if (nextStatus === 'archived' && curStatus !== 'archived') archived += 1
+        else updated += 1
       } else {
         unchanged += 1
       }
@@ -45,5 +51,5 @@ export function mergeMissionWaypoints(local: Waypoint[], remote: Waypoint[]): Mi
   }
 
   const merged = [...localById.values()].sort((a, b) => a.createdAt - b.createdAt)
-  return { merged, added, updated, unchanged }
+  return { merged, added, updated, archived, unchanged }
 }

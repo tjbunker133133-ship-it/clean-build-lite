@@ -1,0 +1,6 @@
+[
+  { "lat": 39.7392, "lng": -104.9903, "accuracy": 8, "heading": null, "speed": 0, "timestampMs": 0 },
+  { "lat": 39.73921, "lng": -104.99029, "accuracy": 9, "heading": null, "speed": 0, "timestampMs": 2000 },
+  { "lat": 39.73919, "lng": -104.99031, "accuracy": 12, "heading": null, "speed": 0, "timestampMs": 4000 },
+  { "lat": 39.73922, "lng": -104.99028, "accuracy": 45, "heading": null, "speed": 0, "timestampMs": 6000 }
+]

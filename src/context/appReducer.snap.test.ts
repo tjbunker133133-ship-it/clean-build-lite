@@ -15,7 +15,7 @@ const base: AppState = {
   snapToTrailEnabled: false,
   trailSnapAssistCapable: false,
   deadManTimeLeft: 300,
-  deadManActive: true,
+  deadManActive: false,
 }
 
 describe('appReducer trail snap actions', () => {

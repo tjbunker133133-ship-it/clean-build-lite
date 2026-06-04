@@ -6,11 +6,16 @@ const METERS_PER_MILE = 1609.344
 const HALF_CORRIDOR_MILES = HALF_CORRIDOR_FEET / 5280
 export const PREFETCH_MOVE_MILES = 1.5
 
-/** Cache Storage bucket for Outdoor corridor tiles (bookmark + PWA). */
-export const OUTDOOR_TILE_CACHE_NAME = 'hud-outdoor-tiles-v1'
+/** Must match Workbox `cacheName` in vite.config.ts so prefetch + map share tiles. */
+export const OUTDOOR_TILE_CACHE_NAME = 'maptiler-outdoor-tiles-v1'
+
+/** Pre-unification bucket — migrated into OUTDOOR_TILE_CACHE_NAME on first write. */
+const LEGACY_OUTDOOR_TILE_CACHE = 'hud-outdoor-tiles-v1'
+
+let legacyCacheMigrated = false
 
 /** Per prefetch run — bounded; accumulates across waypoint edits and travel. */
-export const PREFETCH_MAX_TILES_PER_RUN = 200
+export const PREFETCH_MAX_TILES_PER_RUN = 280
 
 export const PREFETCH_ZOOM_LEVELS = [11, 12, 13] as const
 
@@ -122,10 +127,33 @@ export function saveCorridorCacheRegion(region: CorridorCacheRegion): void {
   }
 }
 
-/** True when a prior Outdoor corridor prefetch has stored bounds (offline boot hint). */
+export type CorridorOfflineSummary = {
+  ready: boolean
+  tilesLoaded: number
+  updatedAt: number | null
+}
+
+/** Metadata + at least one prefetched tile recorded (offline boot hint). */
 export function hasCorridorOutdoorCache(): boolean {
   const region = loadCorridorCacheRegion()
-  return region != null && region.layer === 'outdoor'
+  return (
+    region != null &&
+    region.layer === 'outdoor' &&
+    typeof region.tilesLoaded === 'number' &&
+    region.tilesLoaded > 0
+  )
+}
+
+export function getCorridorOfflineSummary(): CorridorOfflineSummary {
+  const region = loadCorridorCacheRegion()
+  if (!region) {
+    return { ready: false, tilesLoaded: 0, updatedAt: null }
+  }
+  return {
+    ready: hasCorridorOutdoorCache(),
+    tilesLoaded: region.tilesLoaded,
+    updatedAt: region.updatedAt,
+  }
 }
 
 export function loadOperationalAreaSeeds(): OperationalAreaSeed[] {
@@ -272,10 +300,37 @@ function tileUrlFromTemplate(template: string, z: number, x: number, y: number):
     .replace('@2x', '')
 }
 
-async function persistTileResponse(url: string, response: Response): Promise<void> {
-  if (!response.ok || typeof caches === 'undefined') return
+async function migrateLegacyOutdoorCacheIfNeeded(): Promise<void> {
+  if (legacyCacheMigrated || typeof caches === 'undefined') return
+  legacyCacheMigrated = true
   try {
-    const cache = await caches.open(OUTDOOR_TILE_CACHE_NAME)
+    const legacy = await caches.open(LEGACY_OUTDOOR_TILE_CACHE)
+    const target = await caches.open(OUTDOOR_TILE_CACHE_NAME)
+    const keys = await legacy.keys()
+    for (const req of keys.slice(0, 800)) {
+      const res = await legacy.match(req)
+      if (res) await target.put(req, res)
+    }
+  } catch {
+    /* ignore migration failures */
+  }
+}
+
+async function openOutdoorTileCache(): Promise<Cache | null> {
+  if (typeof caches === 'undefined') return null
+  await migrateLegacyOutdoorCacheIfNeeded()
+  try {
+    return await caches.open(OUTDOOR_TILE_CACHE_NAME)
+  } catch {
+    return null
+  }
+}
+
+async function persistTileResponse(url: string, response: Response): Promise<void> {
+  if (!response.ok) return
+  const cache = await openOutdoorTileCache()
+  if (!cache) return
+  try {
     await cache.put(url, response.clone())
   } catch {
     /* quota / private mode */

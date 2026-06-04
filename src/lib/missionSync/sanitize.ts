@@ -18,8 +18,7 @@ export function sanitizeWaypointForSync(wp: Waypoint): Waypoint {
   return out
 }
 
+/** Includes archived waypoints so teammates can apply removals/arrivals. */
 export function sanitizeWaypointsForSync(waypoints: Waypoint[]): Waypoint[] {
-  return waypoints
-    .filter((w) => w && w.status !== 'archived')
-    .map(sanitizeWaypointForSync)
+  return waypoints.filter((w) => w && w.id).map(sanitizeWaypointForSync)
 }

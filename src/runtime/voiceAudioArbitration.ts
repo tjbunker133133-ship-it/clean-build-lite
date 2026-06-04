@@ -51,6 +51,18 @@ export function shouldBlockSpeechRecognition(): boolean {
   return false
 }
 
+/** Ms until SR may start again (0 = ready now). Used to defer mic restart, not skip it. */
+export function speechRecognitionBlockRemainingMs(): number {
+  let remaining = 0
+  if (speechActive || recognitionHold) {
+    remaining = Math.max(remaining, 400)
+  }
+  if (typeof performance !== 'undefined' && performance.now() < ignoreRecognitionUntil) {
+    remaining = Math.max(remaining, ignoreRecognitionUntil - performance.now() + 50)
+  }
+  return remaining
+}
+
 /**
  * Voice-only teardown (mic/TTS gates). Does not invoke registered alarm hooks.
  */

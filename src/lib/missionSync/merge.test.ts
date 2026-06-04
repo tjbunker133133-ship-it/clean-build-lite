@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import type { Waypoint } from '../../types'
 import { mergeMissionWaypoints } from './merge'
 
 describe('mergeMissionWaypoints', () => {
@@ -25,5 +26,25 @@ describe('mergeMissionWaypoints', () => {
     expect(updated).toBe(1)
     expect(merged[0]?.label).toBe('New')
     expect(merged[0]?.lat).toBe(9)
+  })
+
+  it('applies archived status from newer peer copy', () => {
+    const local: Waypoint[] = [
+      { id: 'a', lat: 1, lng: 2, label: 'A', type: 'pin', createdAt: 100, status: 'pending' },
+    ]
+    const remote: Waypoint[] = [
+      {
+        id: 'a',
+        lat: 1,
+        lng: 2,
+        label: 'A',
+        type: 'pin',
+        createdAt: 500,
+        status: 'archived',
+      },
+    ]
+    const { merged, archived } = mergeMissionWaypoints(local, remote)
+    expect(archived).toBe(1)
+    expect(merged[0]?.status).toBe('archived')
   })
 })

@@ -21,5 +21,19 @@ VITE_MAPTILER_KEY=
 # VITE_GOOGLE_MAPS_API_KEY=
 # VITE_MAPBOX_ACCESS_TOKEN=
 
-# ── OPTIONAL: legacy alias (only if you still use it) ─────────────────────────
-# VITE_RAPID_ENDPOINT_URL=
+# Optional (derived from VITE_SUPABASE_URL if omitted):
+# VITE_RESCUE_PUSH_URL=https://YOUR_REF.supabase.co/functions/v1/send-rescue-push
+
+# Web Push — public VAPID key (generate: npm run env:generate-vapid)
+VITE_VAPID_PUBLIC_KEY=
+
+# ── OPTIONAL: situational map overlays (Tier 2) ───────────────────────────────
+# NASA FIRMS active fire — free MAP_KEY: https://firms.modaps.eosdis.nasa.gov/api/map_key/
+# Register with signalonehud@gmail.com, then add key here + Vercel production env.
+VITE_FIRMS_MAP_KEY=
+
+# ── OPTIONAL: snap pipeline (Phase 1b — Tier 2 library, Tier 1 MapCanvas hook) ─
+# Production defaults: pipeline off, validation on, diagnostics on.
+# VITE_ENABLE_SNAP_PIPELINE=false
+# VITE_ENABLE_SNAP_VALIDATION=true
+# VITE_ENABLE_SNAP_DIAGNOSTICS=true

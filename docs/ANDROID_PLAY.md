@@ -23,6 +23,13 @@ In Android Studio: **Build → Generate Signed Bundle / APK** (AAB for Play).
 - **Web/PWA:** QR + copy/paste WebRTC bundles (all Android Chrome devices, phones included).
 - **Play APK:** adds **LAN discovery** (`android-nsd`) so teammates on the same hotspot can find a mission by **join code** without pasting SDP when discovery succeeds. QR/paste remain the fallback.
 
+## Wearables / Health Connect (Tier 2)
+
+- **Plugin:** `@signal-one/capacitor-hud-health-connect` (read-only heart rate + steps).
+- **UI:** Wearables panel → **Link Health Connect** / **Refresh vitals**.
+- **Data safety:** Declare health data as read-only, advisory; not used for SOS or deadman.
+- Operators must install/update the **Health Connect** app and link ring/watch sources before granting HUD permissions.
+
 ## Play policy checklist (before listing)
 
 | Item | Notes |
@@ -42,6 +49,7 @@ Declared in the app module as features are enabled:
 - `ACCESS_FINE_LOCATION` — map + team presence (foreground)
 - `ACCESS_NETWORK_STATE`, `INTERNET` — maps + mesh
 - `CHANGE_WIFI_MULTICAST_STATE` — NSD LAN discovery
+- `health.READ_HEART_RATE`, `health.READ_STEPS` — Wearables advisory vitals (APK only)
 
 ## Tier 1 safety
 
