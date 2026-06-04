@@ -8,8 +8,8 @@
   },
   "production": {
     "src/hooks/useGPS.ts": "bdd7b8ec309335ab05c6a819b27d962b516228ef5e37bf37ffbf8efff1b663a0",
-    "src/components/MapCanvas.tsx": "8b0cbe5c677307e84abc483f291ff6b46a1f45fe0d23a7adbee252908ee6c3d6",
-    "src/lib/mapStyles.ts": "677b4c34c10958b1e9759689f1bcf07fb9aca0ad30a0a602b031eb787abb951f",
+    "src/components/MapCanvas.tsx": "1f67b190102b1190b56f23d98af2c205a007260c4d11ceb2c780c3fb4ccb154e",
+    "src/lib/mapStyles.ts": "8655566bb554d6077e19f10702a98c4d15448156a77bfcff3645c5b2a3f852a8",
     "src/hud/SOSPanel.tsx": "0e3285e1dd72b58e2d454da8f395ad4eb37c665d850b65fe13ac55b6f7ba8b81",
     "src/hud/DeadManPanel.tsx": "c478eb0b86e95f1424ed958e3fd3d0925c1c3511dac44b5d0b88fc2a5eaf15d2",
     "src/hud/CockpitHudShell.tsx": "816d311cd774fec03c14b26972b78cf0ac5a7bd207810b555e5b9ac041732540",

@@ -18,6 +18,7 @@ import {
   isAppleWebKitMapSwitch,
   resolveBasemapStyle,
   validatedEmergencyFallbackStyle,
+  FIELD_MAX_MAP_ZOOM,
 } from '../lib/mapStyles'
 import { hasCorridorOutdoorCache } from '../lib/corridorPrefetch'
 import { dispatchTrailInspectTap } from '../lib/trailInspectBridge'
@@ -732,9 +733,31 @@ export default function MapCanvas() {
         container,
         style: initialStyle,
         center: [initialView.lng, initialView.lat],
-        zoom: initialView.zoom,
+        zoom: Math.min(initialView.zoom, FIELD_MAX_MAP_ZOOM),
+        maxZoom: FIELD_MAX_MAP_ZOOM,
         attributionControl: { compact: true },
         renderWorldCopies: false,
+      })
+
+      const clampFieldZoom = () => {
+        if (!map) return
+        try {
+          const z = map.getZoom()
+          if (typeof z === 'number' && z > FIELD_MAX_MAP_ZOOM) {
+            map.setZoom(FIELD_MAX_MAP_ZOOM)
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+      map.on('zoom', clampFieldZoom)
+      map.on('zoomend', () => {
+        clampFieldZoom()
+        try {
+          map?.resize()
+        } catch {
+          /* ignore */
+        }
       })
 
       hudObsMark('hud:map:boot:constructed')

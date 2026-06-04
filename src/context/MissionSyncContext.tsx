@@ -199,6 +199,8 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
   const gps = useGPS()
   const { profile } = useTacticalProfile()
   const waypoints = state.waypoints
+  const waypointsRef = useRef(waypoints)
+  waypointsRef.current = waypoints
   const snapToTrailEnabled = state.snapToTrailEnabled
 
   const [role, setRole] = useState<MissionSyncRole>('idle')
@@ -273,6 +275,7 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
   const locallySuppressedWaypointIdsRef = useRef<Set<string>>(new Set())
   const peerSnapshotStateRef = useRef<Map<string, PeerSnapshotState>>(new Map())
   const prevWaypointIdsRef = useRef<Set<string>>(new Set())
+  const pendingMeshPushAfterDeleteRef = useRef(false)
   const pendingOfferEncodedRef = useRef<string | null>(null)
   const applyJoinAnswerRef = useRef<(encoded: string) => Promise<void>>(async () => {})
   const createJoinOfferRef = useRef<() => Promise<void>>(async () => {})
@@ -316,6 +319,11 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     setLastNotice({ level, message, at: Date.now() })
   }, [])
 
+  const waypointsForSync = useCallback((): typeof waypoints => {
+    const suppressed = locallySuppressedWaypointIdsRef.current
+    return waypointsRef.current.filter((w) => !suppressed.has(w.id))
+  }, [])
+
   const buildSnapshot = useCallback((): MissionSnapshot | null => {
     if (!missionId) return null
     revisionRef.current += 1
@@ -327,10 +335,10 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       hostDeviceId: coordinatorRef.current?.hostDeviceId ?? deviceId,
       sourceDeviceId: deviceId,
       sourceCallsign: callsign,
-      waypoints: sanitizeWaypointsForSync(waypoints),
+      waypoints: sanitizeWaypointsForSync(waypointsForSync()),
       snapToTrailEnabled,
     }
-  }, [missionId, missionName, deviceId, callsign, waypoints, snapToTrailEnabled])
+  }, [missionId, missionName, deviceId, callsign, waypointsForSync, snapToTrailEnabled])
 
   const refreshCorridorStatus = useCallback(() => {
     const summary = getCorridorOfflineSummary()
@@ -410,7 +418,10 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       applyingRemoteRef.current = true
       try {
         if (autoApply) {
-          if (wpChanged) setWaypoints(merged)
+          if (wpChanged) {
+            const suppressed = locallySuppressedWaypointIdsRef.current
+            setWaypoints(merged.filter((w) => !suppressed.has(w.id)))
+          }
           if (snapChanged && snapshot.snapToTrailEnabled !== undefined) {
             setSnapToTrail(snapshot.snapToTrailEnabled)
           }
@@ -1565,11 +1576,18 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     const onRemoved = (ev: Event) => {
       const id = (ev as CustomEvent<{ id: string }>).detail?.id
       if (id) locallySuppressedWaypointIdsRef.current.add(id)
-      pushSnapshotNow()
+      pendingMeshPushAfterDeleteRef.current = true
     }
     window.addEventListener(WAYPOINT_REMOVED_EVENT, onRemoved)
     return () => window.removeEventListener(WAYPOINT_REMOVED_EVENT, onRemoved)
-  }, [missionId, role, pushSnapshotNow])
+  }, [missionId, role])
+
+  useEffect(() => {
+    if (!missionId || role !== 'member') return
+    if (!pendingMeshPushAfterDeleteRef.current) return
+    pendingMeshPushAfterDeleteRef.current = false
+    pushSnapshotNow()
+  }, [waypoints, missionId, role, pushSnapshotNow])
 
   useEffect(() => {
     const ids = new Set(waypoints.map((w) => w.id))

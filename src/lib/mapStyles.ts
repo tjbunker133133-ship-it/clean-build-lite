@@ -5,6 +5,9 @@ import { getDeviceProfile } from '../runtime/deviceProfile'
 // ⚠️ LOCKED SYSTEM — Behavior Freeze Active
 // Any change to interaction, layout, display modes, or layers requires explicit approval.
 
+/** Field cap — MapTiler vector/raster tiles go empty above ~18; prevents black void when pinching in. */
+export const FIELD_MAX_MAP_ZOOM = 18
+
 /**
  * 🔒 CONTRACT: Map layer system is immutable.
  * Allowed layers: streets, topo, outdoor, satellite only
