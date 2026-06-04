@@ -3,6 +3,7 @@ import { buildBurst } from './comms'
 import {
   burstTargetsLocalDevice,
   buildTeammateMessageCommandSpecs,
+  listLinkedFieldCallsigns,
   listMessageableTeammates,
   normalizeCallsignKey,
   parseTeamMessageVoice,
@@ -69,6 +70,11 @@ describe('teamComms', () => {
     expect(specs.some((s) => s.callsign === 'Good Cit')).toBe(true)
     expect(specs.some((s) => s.callsign === 'Bravo-2')).toBe(true)
     expect(specs.some((s) => s.callsign === 'Alpha')).toBe(false)
+  })
+
+  it('lists linked field callsigns excluding self', () => {
+    expect(listLinkedFieldCallsigns(peers, 'd1')).toEqual(['Good Cit'])
+    expect(listLinkedFieldCallsigns(peers, 'self')).toEqual(['Bravo-2', 'Good Cit'])
   })
 
   it('directed burst targets local device', () => {

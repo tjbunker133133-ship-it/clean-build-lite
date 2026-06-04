@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAppContext } from '../context/AppContext'
 import { useMissionSync } from '../context/MissionSyncContext'
-import { parseTeamMessageVoice, buildTeammateMessageCommandSpecs } from '../lib/missionSync/teamComms'
+import { parseTeamMessageVoice, buildTeammateMessageCommandSpecs, listLinkedFieldCallsigns } from '../lib/missionSync/teamComms'
 import { tryHandleMissionCommsVoice } from '../lib/missionSync/missionCommsVoiceBridge'
 import { useCockpit } from '../context/CockpitContext'
 import { useOverlayContext } from '../context/OverlayContext'
@@ -835,6 +835,23 @@ export function useHudCommands(): {
           }
           missionSync.startTeamMessageTo()
           return ok('Say your message, then accept to send.')
+        },
+      },
+      {
+        id: 'team roster',
+        label: 'Who is on the mission mesh',
+        aliases: ['team roster', 'who is on mission', 'mission roster', 'who is linked'],
+        paletteVisible: true,
+        group: 'Mission',
+        run: () => {
+          if (missionSync.role === 'idle') {
+            return fail('Start or join a mission first.')
+          }
+          const names = listLinkedFieldCallsigns(missionSync.peers, missionSync.deviceId)
+          if (names.length === 0) {
+            return fail('No teammates linked yet — finish Mission Link step 2.')
+          }
+          return ok(`Linked for messages: ${names.join(', ')}.`)
         },
       },
       ...buildTeammateMessageCommandSpecs(missionSync.peers, missionSync.deviceId).map(

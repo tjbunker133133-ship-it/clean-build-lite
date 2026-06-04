@@ -40,7 +40,7 @@ export function useTravelSpeed(
       const distM = haversineMeters(prev.lat, prev.lng, lat, lng)
       if (distM < gateM) {
         jitterStreakRef.current += 1
-        if (jitterStreakRef.current >= 2) {
+        if (jitterStreakRef.current >= 3) {
           smoothRef.current = decaySpeedMps(smoothRef.current)
         }
         const mps = smoothRef.current
@@ -67,6 +67,23 @@ export function useTravelSpeed(
     })
 
     if (raw != null) {
+      const prevMps = smoothRef.current
+      if (
+        prevMps != null &&
+        prevMps < 2 &&
+        raw > prevMps * 4 &&
+        raw > 8
+      ) {
+        prevRef.current = { lat, lng, atMs }
+        smoothRef.current = decaySpeedMps(prevMps)
+        const mps = smoothRef.current
+        if (mps == null) {
+          setSample(null)
+          return
+        }
+        setSample({ speedMps: mps, mph: mps * 2.23694, kph: mps * 3.6 })
+        return
+      }
       prevRef.current = { lat, lng, atMs }
       smoothRef.current = smoothSpeedMps(smoothRef.current, raw)
       const mps = smoothRef.current

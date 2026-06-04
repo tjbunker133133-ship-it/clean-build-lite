@@ -1,6 +1,7 @@
 import {
   resolveDirectedMessageRest,
   resolveMissionPeerByCallsign,
+  formatMissionRosterForSpeech,
 } from './teamComms'
 import type { ConnectedPeer } from './types'
 import { sanitizeBurstText } from './comms'
@@ -140,6 +141,7 @@ export function reduceMissionCommsFlow(
   state: MissionCommsFlowState,
   phrase: string,
   peers: ConnectedPeer[],
+  selfDeviceId = '',
 ): { state: MissionCommsFlowState; effects: MissionCommsFlowEffect[] } {
   const p = phrase.trim().toLowerCase()
   const effects: MissionCommsFlowEffect[] = []
@@ -168,9 +170,10 @@ export function reduceMissionCommsFlow(
   if (state.phase === 'await_target') {
     const t = targetFromCallsign(peers, p)
     if (!t) {
+      const roster = formatMissionRosterForSpeech(peers, selfDeviceId)
       effects.push({
         type: 'speak',
-        text: 'Say a teammate callsign, or say whole team.',
+        text: `No match. ${roster} Say whole team, or a callsign from that list.`,
       })
       return { state, effects }
     }
@@ -206,7 +209,7 @@ export function reduceMissionCommsFlow(
       if (parsed.target.callsign && !resolved) {
         effects.push({
           type: 'speak',
-          text: `No linked member matches ${parsed.target.callsign}.`,
+          text: `No linked member matches ${parsed.target.callsign}. ${formatMissionRosterForSpeech(peers, selfDeviceId)}`,
         })
         return { state, effects }
       }

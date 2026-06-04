@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import HudPanel from './HudPanel'
 import { requestMicrophonePermission } from '../lib/devicePermissions'
 import { useHudCommands, type CommandSource } from '../hooks/useHudCommands'
+import { useMissionSync } from '../context/MissionSyncContext'
+import { listLinkedFieldCallsigns } from '../lib/missionSync/teamComms'
 import { tryHandleMissionCommsVoice } from '../lib/missionSync/missionCommsVoiceBridge'
 import {
   recordWakeWordGatePassed,
@@ -102,7 +104,7 @@ function playChime() {
 /** Former voice stubs — now wired to live handlers in useHudCommands. */
 const VOICE_STUB_COMMAND_IDS = new Set<string>()
 
-const QUICK_COMMAND_GROUPS: Array<{
+const BASE_QUICK_COMMAND_GROUPS: Array<{
   group: string
   priority?: boolean
   items: Array<{ label: string; cmd: string }>
@@ -129,13 +131,6 @@ const QUICK_COMMAND_GROUPS: Array<{
       { label: 'Check-In Panel', cmd: 'check in panel' },
       { label: 'Mission Link', cmd: 'mission panel' },
       { label: 'Team Check-In', cmd: 'team check in' },
-    ],
-  },
-  {
-    group: 'Mission mesh',
-    items: [
-      { label: 'Message team…', cmd: 'team message regroup here' },
-      { label: 'Voice note…', cmd: 'voice message team' },
     ],
   },
   {
@@ -199,7 +194,26 @@ const QUICK_COMMAND_GROUPS: Array<{
 
 export default function VoicePanel() {
   const { commands, dispatch } = useHudCommands()
+  const missionSync = useMissionSync()
   const isMobileHud = getDeviceProfile().interactionMode === 'mobile'
+
+  const quickCommandGroups = useMemo(() => {
+    const meshItems: Array<{ label: string; cmd: string }> = [
+      { label: 'Message whole team…', cmd: 'team message' },
+      { label: 'Who is linked', cmd: 'team roster' },
+    ]
+    for (const cs of listLinkedFieldCallsigns(missionSync.peers, missionSync.deviceId)) {
+      meshItems.push({
+        label: `Message ${cs}`,
+        cmd: `message ${cs.toLowerCase()}`,
+      })
+    }
+    const out = [...BASE_QUICK_COMMAND_GROUPS]
+    const commsIdx = out.findIndex((g) => g.group === 'Comms')
+    out.splice(commsIdx + 1, 0, { group: 'Mission mesh (live)', items: meshItems })
+    return out
+  }, [missionSync.peers, missionSync.deviceId])
+
   const touchGapMd = touchGapMdFn(isMobileHud)
   const touchGapSm = touchGapSmFn(isMobileHud)
   const tapMin = touchMinTargetFn(isMobileHud)
@@ -214,10 +228,10 @@ export default function VoicePanel() {
   // descriptor; this UI is a curated subset of that registry.
   const directoryItems = useMemo<VoiceDirectoryItem[]>(
     () =>
-      QUICK_COMMAND_GROUPS.flatMap((g) =>
+      quickCommandGroups.flatMap((g) =>
         g.items.map((it) => ({ group: g.group, cmd: it.cmd, label: it.label })),
       ),
-    [],
+    [quickCommandGroups],
   )
 
   /** Full registry catalog for the expanded command reference (no stubs). */
@@ -1257,7 +1271,7 @@ export default function VoicePanel() {
                 gap: touchGapMd,
               }}
             >
-              {QUICK_COMMAND_GROUPS.map((group) => (
+              {quickCommandGroups.map((group) => (
                 <div key={group.group} style={{ display: 'grid', gap: touchGapSm }}>
                   <div
                     style={{

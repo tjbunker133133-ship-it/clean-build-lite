@@ -11,6 +11,10 @@ import React, {
 import { useAppContext } from './AppContext'
 import { useGPS } from '../hooks/useGPS'
 import { useTravelSpeed } from '../hooks/useTravelSpeed'
+import {
+  installFieldWakeLockRecovery,
+  setFieldWakeLockActive,
+} from '../runtime/fieldWakeLock'
 import { useTacticalProfile } from '../hooks/useTacticalProfile'
 import { decodeMissionPacket, packetFitsCompactQr } from '../lib/missionSync/codec'
 import {
@@ -1365,6 +1369,14 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     applyJoinAnswerRef.current = applyJoinAnswer
   }, [applyJoinAnswer])
 
+  useEffect(() => installFieldWakeLockRecovery(), [])
+
+  useEffect(() => {
+    const keepAwake = role === 'member' || role === 'observer'
+    setFieldWakeLockActive(keepAwake)
+    return () => setFieldWakeLockActive(false)
+  }, [role])
+
   useEffect(() => {
     createJoinOfferRef.current = createJoinOffer
   }, [createJoinOffer])
@@ -1709,7 +1721,7 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
 
       if (activeFlow || missionCommsPrefs.handsFree) {
         const linked = coordinatorRef.current?.connectedPeers ?? peers
-        const { state, effects } = reduceMissionCommsFlow(flowBefore, phrase, linked)
+        const { state, effects } = reduceMissionCommsFlow(flowBefore, phrase, linked, deviceId)
         syncOutboundFlowState(state)
 
         if (effects.length > 0 || state.phase !== flowBefore.phase) {
@@ -1750,6 +1762,7 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     [
       role,
       peers,
+      deviceId,
       pendingInboundBurst,
       confirmInboundMessage,
       skipInboundMessage,

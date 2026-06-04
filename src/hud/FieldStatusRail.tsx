@@ -5,6 +5,7 @@ import { useCorridorOffline } from '../hooks/useCorridorOffline'
 import { useNavigationMonitor } from '../hooks/useNavigationMonitor'
 import { monitorTransportLabel } from '../lib/missionSync/monitorUx'
 import { getDeviceProfile } from '../runtime/deviceProfile'
+import { isFieldWakeLockHeld, isFieldWakeLockSupported } from '../runtime/fieldWakeLock'
 import { fieldStatusRailBottomCss } from './hudLayout'
 import { touchFontSm } from './tokens'
 
@@ -39,6 +40,27 @@ export default function FieldStatusRail() {
 
   const rows = useMemo(() => {
     const list: StatusRow[] = []
+    const profile = getDeviceProfile()
+    const inMission = sync.role !== 'idle'
+
+    if (inMission && !profile.isStandalone) {
+      list.push({
+        id: 'browser-tab',
+        label: 'Browser tab — open HUD from Home Screen icon for full screen',
+        tone: 'warn',
+      })
+    }
+
+    if (inMission && isFieldWakeLockSupported()) {
+      list.push({
+        id: 'wake-lock',
+        label: isFieldWakeLockHeld()
+          ? 'Screen awake for mission'
+          : 'Tap screen once if display sleeps',
+        live: isFieldWakeLockHeld(),
+        tone: 'ready',
+      })
+    }
 
     const navAdvisory =
       nav.arrivalCandidate != null

@@ -188,6 +188,36 @@ export type TeammateMessageCommandSpec = {
   aliases: string[]
 }
 
+/** Linked field member callsigns for voice roster (excludes self and watchers). */
+export function listLinkedFieldCallsigns(
+  peers: ConnectedPeer[],
+  selfDeviceId: string,
+): string[] {
+  const names: string[] = []
+  const seen = new Set<string>()
+  for (const p of peers) {
+    if (p.linkRole !== 'member' || p.deviceId === selfDeviceId) continue
+    const label = p.callsign.trim()
+    if (!label) continue
+    const key = normalizeCallsignKey(label)
+    if (seen.has(key)) continue
+    seen.add(key)
+    names.push(label)
+  }
+  return names.sort((a, b) => a.localeCompare(b))
+}
+
+/** TTS-friendly roster of who can receive a directed message right now. */
+export function formatMissionRosterForSpeech(
+  peers: ConnectedPeer[],
+  selfDeviceId: string,
+): string {
+  const names = listLinkedFieldCallsigns(peers, selfDeviceId)
+  if (names.length === 0) return 'No teammates linked on mesh yet.'
+  if (names.length === 1) return `Linked teammate: ${names[0]}.`
+  return `Linked teammates: ${names.join(', ')}.`
+}
+
 /** Voice/command palette entries for each mesh-linked field member. */
 export function buildTeammateMessageCommandSpecs(
   peers: ConnectedPeer[],

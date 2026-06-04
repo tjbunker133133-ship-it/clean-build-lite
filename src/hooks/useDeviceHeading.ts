@@ -16,8 +16,8 @@ export type DeviceHeadingState = {
   cardinal: string
 }
 
-/** Lower = steadier dial (less twitch on Android magnetometer). */
-const SMOOTH_FACTOR = 0.14
+/** Lower = steadier dial (less twitch on phone magnetometer). */
+const SMOOTH_FACTOR = getDeviceProfile().isIOS ? 0.09 : 0.12
 
 export function useDeviceHeading(): DeviceHeadingState {
   const [heading, setHeading] = useState<number | null>(null)
@@ -41,7 +41,7 @@ export function useDeviceHeading(): DeviceHeadingState {
 
     const publishDisplay = (value: number) => {
       if (!mounted) return
-      const quantized = quantizeHeading(value, 3)
+      const quantized = quantizeHeading(value, getDeviceProfile().isIOS ? 5 : 3)
       displayRef.current = quantized
       setHeading(quantized)
       gotReadingRef.current = true
