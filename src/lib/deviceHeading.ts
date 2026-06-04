@@ -102,9 +102,10 @@ export function resolveOrientationHeading(event: DeviceOrientationEvent): number
 
   const orient = getScreenOrientationAngle()
 
-  if (event.absolute === true) {
-    return normalizeHeading(event.alpha + orient)
-  }
-
+  /**
+   * Compass heading from alpha (W3C / MDN): 0° = north, clockwise.
+   * Same inversion for relative and Android `absolute` — using `alpha` directly
+   * misreads ~90° on many Android Chrome builds.
+   */
   return normalizeHeading(360 - event.alpha + orient)
 }

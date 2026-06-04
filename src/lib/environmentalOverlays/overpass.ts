@@ -1,7 +1,25 @@
+import { getDeviceProfile } from '../../runtime/deviceProfile'
 import type { EnvironmentalOverlayId, MapBbox } from './types'
 
-const OVERPASS_URL = 'https://overpass-api.de/api/interpreter'
-const MAX_BBOX_DEG = 0.35
+const OVERPASS_ENDPOINTS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+]
+
+function maxBboxDeg(): number {
+  return getDeviceProfile().interactionMode === 'mobile' ? 0.22 : 0.35
+}
+
+let overpassChain: Promise<unknown> = Promise.resolve()
+
+function enqueueOverpass<T>(task: () => Promise<T>): Promise<T> {
+  const run = overpassChain.then(task, task)
+  overpassChain = run.then(
+    () => undefined,
+    () => undefined,
+  )
+  return run
+}
 
 /** Shrink wide viewports to a fetchable box (centered) instead of failing silently. */
 export function clampBbox(bbox: MapBbox): MapBbox | null {
@@ -9,12 +27,13 @@ export function clampBbox(bbox: MapBbox): MapBbox | null {
   const lngSpan = bbox.east - bbox.west
   if (latSpan <= 0 || lngSpan <= 0) return null
 
-  if (latSpan <= MAX_BBOX_DEG && lngSpan <= MAX_BBOX_DEG) return bbox
+  const cap = maxBboxDeg()
+  if (latSpan <= cap && lngSpan <= cap) return bbox
 
   const centerLat = (bbox.south + bbox.north) / 2
   const centerLng = (bbox.west + bbox.east) / 2
-  const halfLat = Math.min(MAX_BBOX_DEG / 2, latSpan / 2)
-  const halfLng = Math.min(MAX_BBOX_DEG / 2, lngSpan / 2)
+  const halfLat = Math.min(cap / 2, latSpan / 2)
+  const halfLng = Math.min(cap / 2, lngSpan / 2)
   return {
     south: centerLat - halfLat,
     north: centerLat + halfLat,
@@ -77,6 +96,35 @@ export function overpassToGeojson(raw: unknown): GeoJSON.FeatureCollection {
   return { type: 'FeatureCollection', features }
 }
 
+function networkOverlayError(err: unknown): Error {
+  const raw = err instanceof Error ? err.message : String(err)
+  if (raw.toLowerCase().includes('failed to fetch') || raw.toLowerCase().includes('network')) {
+    return new Error('OSM layer blocked or offline — retry on signal or zoom in closer')
+  }
+  return err instanceof Error ? err : new Error(raw || 'OSM load failed')
+}
+
+async function postOverpass(
+  endpoint: string,
+  query: string,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: `data=${encodeURIComponent(query)}`,
+    signal,
+    mode: 'cors',
+  })
+  if (res.status === 429) {
+    throw new Error('OSM busy (rate limit) — wait 30s and retry')
+  }
+  if (!res.ok) {
+    throw new Error(`OSM data unavailable (${res.status})`)
+  }
+  return res.json() as Promise<unknown>
+}
+
 export async function fetchOverpassGeojson(
   id: EnvironmentalOverlayId,
   bbox: MapBbox,
@@ -86,15 +134,18 @@ export async function fetchOverpassGeojson(
   if (!q) {
     throw new Error('Map area invalid — pan or zoom and try again.')
   }
-  const res = await fetch(OVERPASS_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: `data=${encodeURIComponent(q)}`,
-    signal,
+
+  return enqueueOverpass(async () => {
+    let lastErr: unknown = null
+    for (const endpoint of OVERPASS_ENDPOINTS) {
+      try {
+        const json = await postOverpass(endpoint, q, signal)
+        return overpassToGeojson(json)
+      } catch (e) {
+        lastErr = e
+        if (signal?.aborted) throw e
+      }
+    }
+    throw networkOverlayError(lastErr)
   })
-  if (!res.ok) {
-    throw new Error(`OSM data unavailable (${res.status})`)
-  }
-  const json = (await res.json()) as unknown
-  return overpassToGeojson(json)
 }

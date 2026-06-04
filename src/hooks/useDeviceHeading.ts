@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   type CompassStatus,
-  headingDelta,
   headingToCardinal,
   isCompassTiltUnreliable,
   resolveOrientationHeading,
@@ -17,7 +16,6 @@ export type DeviceHeadingState = {
 }
 
 const SMOOTH_FACTOR = 0.38
-const OUTLIER_DEG = 48
 
 export function useDeviceHeading(): DeviceHeadingState {
   const [heading, setHeading] = useState<number | null>(null)
@@ -61,10 +59,6 @@ export function useDeviceHeading(): DeviceHeadingState {
 
       if (event.absolute === true) preferAbsoluteOnly = true
 
-      const lastRaw = lastRawRef.current
-      if (lastRaw != null && Math.abs(headingDelta(lastRaw, raw)) > OUTLIER_DEG) {
-        return
-      }
       lastRawRef.current = raw
 
       const display = displayRef.current

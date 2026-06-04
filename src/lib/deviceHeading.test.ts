@@ -50,12 +50,12 @@ describe('deviceHeading', () => {
     expect(h).toBe(12)
   })
 
-  it('resolveOrientationHeading uses alpha for absolute earth frame (north = 0)', () => {
+  it('resolveOrientationHeading uses inverted alpha for compass (north = 0)', () => {
     const h = resolveOrientationHeading({
       alpha: 0,
       absolute: true,
     } as unknown as DeviceOrientationEvent)
-    expect(h).toBe(getScreenOrientationAngle())
+    expect(h).toBe(normalizeHeading(360 + getScreenOrientationAngle()))
   })
 
   it('resolveOrientationHeading inverts relative alpha (legacy Android)', () => {

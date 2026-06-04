@@ -8,12 +8,12 @@ export type TravelSpeedSample = {
 
 const MPS_TO_MPH = 2.23694
 const MPS_TO_KPH = 3.6
-/** ~2.5 mph — GPS drift while stationary often reads 2–4 mph without a displacement gate. */
-export const STOPPED_MPS = 1.15
-const MIN_DT_SEC = 0.35
+/** ~3 mph — hide GPS wander while standing (field phones often report 2–5 mph). */
+export const STOPPED_MPS = 1.34
+const MIN_DT_SEC = 0.5
 const MAX_DT_SEC = 25
 const MAX_IMPLIED_MPS = 55
-const MIN_DISPLACEMENT_M = 2.5
+const MIN_DISPLACEMENT_M = 4
 
 export type TravelSpeedSampleInput = {
   prev: { lat: number; lng: number; atMs: number } | null
@@ -32,7 +32,7 @@ export function computeTravelSpeedMps(input: TravelSpeedSampleInput): number | n
   const distM = haversineMeters(prev.lat, prev.lng, lat, lng)
   const minMoveM =
     accuracyM != null && Number.isFinite(accuracyM) && accuracyM > 0
-      ? Math.max(MIN_DISPLACEMENT_M, accuracyM * 0.85)
+      ? Math.max(MIN_DISPLACEMENT_M, accuracyM * 1.15)
       : MIN_DISPLACEMENT_M
   if (distM < minMoveM) return null
   const mps = distM / dtSec
@@ -47,10 +47,18 @@ export function smoothSpeedMps(prev: number | null, next: number, factor = 0.35)
 }
 
 /** Pull smoothed speed down when fixes stop implying movement (GPS wander). */
-export function decaySpeedMps(prev: number | null, factor = 0.35): number | null {
+export function decaySpeedMps(prev: number | null, factor = 0.18): number | null {
   if (prev == null) return null
   const next = prev * factor
   return next < STOPPED_MPS ? null : next
+}
+
+/** Minimum meters between fixes before speed math runs (blocks standing GPS jitter). */
+export function minMovementGateM(accuracyM?: number | null): number {
+  if (accuracyM != null && Number.isFinite(accuracyM) && accuracyM > 0) {
+    return Math.max(MIN_DISPLACEMENT_M, accuracyM * 1.15)
+  }
+  return MIN_DISPLACEMENT_M
 }
 
 export function formatTravelSpeed(mps: number | null): {

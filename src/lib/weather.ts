@@ -16,6 +16,41 @@ export type WeatherResult =
 
 const WEATHER_CACHE_KEY = 'titanium_weather_cache_v2'
 const WEATHER_CACHE_KEY_LEGACY = 'titanium_weather_cache_v1'
+const LOCATION_LABEL_CACHE_KEY = 'titanium_weather_location_v1'
+const NOMINATIM_UA = 'SignalOneHUD/1.0 (field weather; contact: support@signal-one.local)'
+
+function locationCacheKey(lat: number, lon: number): string {
+  return `${lat.toFixed(2)},${lon.toFixed(2)}`
+}
+
+function readCachedLocationLabel(lat: number, lon: number): string | null {
+  try {
+    const raw = localStorage.getItem(LOCATION_LABEL_CACHE_KEY)
+    if (!raw) return null
+    const map = JSON.parse(raw) as Record<string, string>
+    return map[locationCacheKey(lat, lon)] ?? null
+  } catch {
+    return null
+  }
+}
+
+function writeCachedLocationLabel(lat: number, lon: number, label: string): void {
+  try {
+    const key = locationCacheKey(lat, lon)
+    const raw = localStorage.getItem(LOCATION_LABEL_CACHE_KEY)
+    const map = raw ? (JSON.parse(raw) as Record<string, string>) : {}
+    map[key] = label
+    localStorage.setItem(LOCATION_LABEL_CACHE_KEY, JSON.stringify(map))
+  } catch {
+    // ignore
+  }
+}
+
+function weatherFromCache(staleOkMs: number, suffix = '(cached)'): WeatherResult | null {
+  const c = readCachedWeather(staleOkMs)
+  if (!c || 'error' in c) return null
+  return { ...c, condition: suffix ? `${c.condition} ${suffix}`.trim() : c.condition }
+}
 
 /** Last-known-good weather for instant panel render (no API key required). */
 export function readCachedWeather(maxAgeMs = 3_600_000): WeatherResult | null {
@@ -71,19 +106,31 @@ export function weatherDescription(code: number): string {
 }
 
 async function reverseLocation(lat: number, lon: number, signal?: AbortSignal): Promise<string> {
+  const cached = readCachedLocationLabel(lat, lon)
+  if (cached) return cached
+
   try {
     const r = await fetch(
       `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}&zoom=10&addressdetails=1`,
-      { signal },
+      {
+        signal,
+        headers: { Accept: 'application/json', 'User-Agent': NOMINATIM_UA },
+      },
     )
+    if (r.status === 429) return `${lat.toFixed(4)}, ${lon.toFixed(4)}`
     if (!r.ok) return `${lat.toFixed(4)}, ${lon.toFixed(4)}`
     const data = await r.json()
     const a = data?.address ?? {}
     const city = a.city || a.town || a.village || a.hamlet || a.county
     const region = a.state || a.region
-    if (city && region) return `${city}, ${region}`
-    if (city) return String(city)
-    return data?.display_name?.split(',').slice(0, 2).join(', ') || `${lat.toFixed(4)}, ${lon.toFixed(4)}`
+    const label =
+      city && region
+        ? `${city}, ${region}`
+        : city
+          ? String(city)
+          : data?.display_name?.split(',').slice(0, 2).join(', ') || `${lat.toFixed(4)}, ${lon.toFixed(4)}`
+    writeCachedLocationLabel(lat, lon, label)
+    return label
   } catch {
     return `${lat.toFixed(4)}, ${lon.toFixed(4)}`
   }
@@ -99,14 +146,23 @@ export async function fetchWeather(
   const { signal } = opts ?? {}
   if (lat == null || lon == null) return { error: 'No GPS fix available' }
   try {
-    const [response, location] = await Promise.all([
-      fetch(
-        `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m&temperature_unit=fahrenheit&windspeed_unit=mph&timezone=auto`,
-        { signal },
-      ),
-      reverseLocation(lat, lon, signal),
-    ])
-    if (!response.ok) return { error: `Weather service error (${response.status})` }
+    const cachedLabel = readCachedLocationLabel(lat, lon)
+    const response = await fetch(
+      `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m&temperature_unit=fahrenheit&windspeed_unit=mph&timezone=auto`,
+      { signal },
+    )
+    if (response.status === 429) {
+      const stale = weatherFromCache(86_400_000, '(rate limited — cached)')
+      if (stale) return stale
+      return { error: 'Weather busy — wait a few minutes' }
+    }
+    if (!response.ok) {
+      const stale = weatherFromCache(86_400_000)
+      if (stale) return stale
+      return { error: `Weather service error (${response.status})` }
+    }
+    const location =
+      cachedLabel ?? (await reverseLocation(lat, lon, signal))
     const data = await response.json()
     const current = data?.current
     if (!current) return { error: 'No weather data' }
@@ -149,23 +205,8 @@ export async function fetchWeather(
     if (signal?.aborted || (err instanceof DOMException && err.name === 'AbortError')) {
       throw err
     }
-    try {
-      const cached = localStorage.getItem(WEATHER_CACHE_KEY)
-      if (cached) {
-        const c = JSON.parse(cached)
-        // Cache entries written prior to the windUnit normalization may
-        // still contain the raw "mp/h" API value; force "mph" on read so
-        // legacy caches do not resurface the TTS pronunciation issue.
-        return {
-          ...c,
-          humidity: typeof c.humidity === 'number' ? c.humidity : 0,
-          condition: `${c.condition} (cached)`,
-          windUnit: 'mph',
-        }
-      }
-    } catch {
-      // ignore cache parse failures
-    }
+    const stale = weatherFromCache(86_400_000)
+    if (stale) return stale
     return { error: err instanceof Error ? err.message : 'Weather fetch failed' }
   }
 }
