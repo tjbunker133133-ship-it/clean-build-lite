@@ -122,6 +122,7 @@ export default function MissionLinkPanel() {
   const isObserver = sync.role === 'observer'
   const isFieldMember = sync.role === 'member'
   const lanReady = sync.nativeLink.available
+  const codeJoinReady = sync.joinCodeSignalingAvailable || lanReady
 
   const phaseLabel = useMemo(() => {
     if (isObserver) {
@@ -441,7 +442,7 @@ export default function MissionLinkPanel() {
               <input
                 value={joinCodeInput}
                 onChange={(e) => setJoinCodeInput(e.target.value.toUpperCase())}
-                placeholder="Mission code · e.g. ABC-123"
+                placeholder="Code from host screen · e.g. ABC-123"
                 style={{
                   width: '100%',
                   padding: '10px 12px',
@@ -457,25 +458,29 @@ export default function MissionLinkPanel() {
               />
               {joinCodePreview ? (
                 <div style={{ color: '#64748b', fontSize: '0.88em', marginTop: 6, textAlign: 'center' }}>
-                  Will search for {joinCodePreview}
+                  Will join mission {joinCodePreview} — must match host exactly (not a guess).
                 </div>
               ) : null}
               <button
                 type="button"
                 style={{ ...btnStyle(true), width: '100%', marginTop: 10 }}
-                disabled={!isValidJoinCodeInput(joinCodeInput) || lanSearching}
+                disabled={!isValidJoinCodeInput(joinCodeInput) || lanSearching || !codeJoinReady}
                 onClick={() => void runLanJoin()}
               >
-                {lanSearching ? 'Searching Wi‑Fi…' : lanReady ? 'Join via Wi‑Fi code' : 'Join via Wi‑Fi (Android app)'}
+                {lanSearching
+                  ? 'Connecting…'
+                  : codeJoinReady
+                    ? 'Join with mission code'
+                    : 'Code join unavailable'}
               </button>
-              {!lanReady ? (
-                <p style={{ color: '#64748b', margin: '8px 0 0', fontSize: '0.88em', lineHeight: 1.45 }}>
-                  Browser builds: use QR scan or paste join bundle below. Put both devices on the same phone
-                  hotspot with Wi‑Fi on (mobile data can stay off).
+              {!codeJoinReady ? (
+                <p style={{ color: '#fbbf24', margin: '8px 0 0', fontSize: '0.88em', lineHeight: 1.45 }}>
+                  Mission code needs production Supabase (Wi‑Fi + internet). Or paste join bundle below.
                 </p>
               ) : (
                 <p style={{ color: '#64748b', margin: '8px 0 0', fontSize: '0.88em', lineHeight: 1.45 }}>
-                  Same Wi‑Fi / hotspot required. Host must have started the mission first.
+                  Read the <strong style={{ color: '#5eead4' }}>6-character code on the host tablet</strong> — same
+                  Wi‑Fi/hotspot. No SMS or paste required{lanReady ? '; Android also auto-links locally' : ''}.
                 </p>
               )}
               <textarea
@@ -650,7 +655,9 @@ export default function MissionLinkPanel() {
             <StepCard step={2} title="Share mission code" active={sync.phase === 'awaiting-joiner'} done={linked}>
               {sync.joinCode ? (
                 <div style={{ textAlign: 'center' }}>
-                  <div style={{ color: '#94a3b8', fontSize: '0.88em' }}>Teammates enter this on their tablet</div>
+                  <div style={{ color: '#94a3b8', fontSize: '0.88em' }}>
+                    Teammates tap Join with mission code and type this exactly
+                  </div>
                   <div style={{ color: '#5eead4', fontSize: 28, fontWeight: 800, letterSpacing: 3, margin: '6px 0' }}>
                     {sync.joinCode}
                   </div>
@@ -664,7 +671,9 @@ export default function MissionLinkPanel() {
                   {qrUrl ? (
                     <img src={qrUrl} alt="Join QR" style={{ width: 180, height: 180, alignSelf: 'center' }} />
                   ) : (
-                    <span style={{ color: '#fbbf24' }}>Bundle too large for QR — use copy or Wi‑Fi code.</span>
+                    <span style={{ color: '#94a3b8' }}>
+                      QR skipped — teammates use the mission code above (no paste).
+                    </span>
                   )}
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                     <button

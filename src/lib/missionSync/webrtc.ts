@@ -2,8 +2,11 @@ import type { SyncWireMessage } from './types'
 
 export type MissionIceProfile = 'field' | 'internet'
 
-/** LAN host candidates first; internet profile adds STUN + optional TURN for remote observers. */
+/** Field = LAN host candidates only (small bundles, code/QR friendly). Internet adds STUN + TURN. */
 function iceServersForProfile(profile: MissionIceProfile): RTCIceServer[] {
+  if (profile === 'field') {
+    return []
+  }
   const servers: RTCIceServer[] = [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
@@ -22,6 +25,7 @@ function iceServersForProfile(profile: MissionIceProfile): RTCIceServer[] {
 const DATA_CHANNEL_LABEL = 'hud-mission-sync-v1'
 const KEEPALIVE_MS = 12_000
 const DISCONNECTED_GRACE_MS = 12_000
+const ICE_GATHER_FIELD_MS = 4_000
 const ICE_GATHER_TIMEOUT_MS = 12_000
 const ICE_GATHER_INTERNET_MS = 18_000
 
@@ -141,7 +145,14 @@ export class MissionPeerSession {
   async createOffer(): Promise<RTCSessionDescriptionInit> {
     const offer = await this.pc.createOffer({ iceRestart: false })
     await this.pc.setLocalDescription(offer)
-    await waitIceGathering(this.pc, this.iceProfile === 'internet' ? ICE_GATHER_INTERNET_MS : ICE_GATHER_TIMEOUT_MS)
+    await waitIceGathering(
+      this.pc,
+      this.iceProfile === 'internet'
+        ? ICE_GATHER_INTERNET_MS
+        : this.iceProfile === 'field'
+          ? ICE_GATHER_FIELD_MS
+          : ICE_GATHER_TIMEOUT_MS,
+    )
     return this.pc.localDescription ?? offer
   }
 
@@ -149,7 +160,14 @@ export class MissionPeerSession {
     await this.pc.setRemoteDescription(offer)
     const answer = await this.pc.createAnswer()
     await this.pc.setLocalDescription(answer)
-    await waitIceGathering(this.pc, this.iceProfile === 'internet' ? ICE_GATHER_INTERNET_MS : ICE_GATHER_TIMEOUT_MS)
+    await waitIceGathering(
+      this.pc,
+      this.iceProfile === 'internet'
+        ? ICE_GATHER_INTERNET_MS
+        : this.iceProfile === 'field'
+          ? ICE_GATHER_FIELD_MS
+          : ICE_GATHER_TIMEOUT_MS,
+    )
     return this.pc.localDescription ?? answer
   }
 

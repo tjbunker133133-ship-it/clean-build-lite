@@ -46,7 +46,20 @@ import type {
   TeamPresence,
 } from '../lib/missionSync/types'
 import { getBluetoothMeshCapability } from '../lib/missionSync/bluetooth'
-import { joinCodeFromToken, joinCodesMatch, formatJoinCode, isValidJoinCodeInput } from '../lib/missionSync/joinCode'
+import {
+  joinCodeFromToken,
+  joinCodesMatch,
+  formatJoinCode,
+  isValidJoinCodeInput,
+  normalizeJoinCodeInput,
+} from '../lib/missionSync/joinCode'
+import {
+  isJoinCodeSignalingAvailable,
+  joinCodeSignalingHint,
+  publishJoinCodeAnswer,
+  publishJoinCodeOffer,
+  subscribeJoinCodeRoom,
+} from '../lib/missionSync/missionJoinSignaling'
 import {
   getNativeLinkPlatform,
   nativeAdvertisePayload,
@@ -120,6 +133,8 @@ export type MissionSyncContextValue = {
   bluetoothNote: string
   joinCode: string | null
   nativeLink: NativeLinkPlatform
+  /** Wi‑Fi mission code works in browser when Supabase signaling is configured. */
+  joinCodeSignalingAvailable: boolean
   /** Active bundle-exchange path (Wi‑Fi LAN vs Nearby vs manual). */
   signalingTransport: MissionSignalingTransport
   signalingLabel: string
@@ -234,6 +249,10 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
   const teamPresenceRef = useRef<TeamPresence[]>([])
   teamPresenceRef.current = teamPresence
   const observerSignalUnsubRef = useRef<(() => void) | null>(null)
+  const joinCodeHostUnsubRef = useRef<(() => void) | null>(null)
+  const joinCodeDiscoverUnsubRef = useRef<(() => void) | null>(null)
+  const joinCodeDiscoveringRef = useRef(false)
+  const lastJoinCodeOfferRef = useRef('')
   const observerChannelRef = useRef<ObserverMonitorChannel | null>(null)
   const waitingForMonitorOfferRef = useRef(false)
   const relayDedupeRef = useRef(new SyncWireDedupe())
@@ -601,10 +620,19 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     ],
   )
 
+  const stopJoinCodeDiscovery = useCallback(() => {
+    joinCodeDiscoveringRef.current = false
+    joinCodeDiscoverUnsubRef.current?.()
+    joinCodeDiscoverUnsubRef.current = null
+    void nativeStopDiscovery()
+  }, [])
+
   const endMission = useCallback(() => {
     const wasObserver = role === 'observer'
     void nativeStopAdvertise()
-    void nativeStopDiscovery()
+    stopJoinCodeDiscovery()
+    joinCodeHostUnsubRef.current?.()
+    joinCodeHostUnsubRef.current = null
     coordinatorRef.current?.close()
     coordinatorRef.current = null
     setRole('idle')
@@ -636,7 +664,7 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     setMonitorTargetCallsign('Operator')
     saveMissionSession(null)
     notify('info', wasObserver ? 'Mission monitor ended' : 'Mission link ended')
-  }, [notify, role, setObserverToken])
+  }, [notify, role, setObserverToken, stopJoinCodeDiscovery])
 
   const endMonitor = endMission
 
@@ -884,6 +912,22 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     [supported, observerSignalingAvailable, endMission, deviceId, notify, setObserverToken],
   )
 
+  const publishJoinOfferToCodeRoom = useCallback(
+    async (encoded: string) => {
+      const mid = missionId ?? coordinatorRef.current?.missionId
+      const token = joinTokenRef.current
+      if (!mid || !token) return false
+      const code = joinCodeFromToken(token)
+      return publishJoinCodeOffer({
+        code,
+        encoded,
+        missionId: mid,
+        fromDeviceId: deviceId,
+      })
+    },
+    [missionId, deviceId],
+  )
+
   const createJoinOffer = useCallback(async () => {
     const coord = coordinatorRef.current
     if (!coord) return
@@ -892,11 +936,21 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     setPendingOfferEncoded(encoded)
     setPendingAnswerEncoded(null)
     const code = joinCodeFromToken(joinTokenRef.current)
-    if (await nativeAdvertisePayload(code, encoded)) {
+    const codeRoomOk = await publishJoinOfferToCodeRoom(encoded)
+    const nativeOk = await nativeAdvertisePayload(code, encoded)
+    if (nativeOk) {
       setSignalingTransport('wifi-lan')
       notify(
-        'info',
-        `Teammate code ${code} — searching Wi‑Fi + Nearby. Share join link if auto-link fails.`,
+        'success',
+        codeRoomOk
+          ? `Code ${code} — teammates enter the same code (Wi‑Fi or Android auto-link).`
+          : `Code ${code} — Wi‑Fi + Nearby advertising. Teammate enters this exact code.`,
+      )
+    } else if (codeRoomOk) {
+      setSignalingTransport('share')
+      notify(
+        'success',
+        `Code ${code} is live — teammate enters it on their tablet (same Wi‑Fi; no paste or SMS).`,
       )
     } else {
       setSignalingTransport('share')
@@ -908,10 +962,12 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       notify(
         'info',
         shareBundleResultMessage(result, 'join') +
-          (packetFitsCompactQr(encoded) ? ' QR code is below.' : ' Bundle is large — use Share, not QR.'),
+          (packetFitsCompactQr(encoded)
+            ? ' QR code is below.'
+            : ' Or paste join bundle in Mission Link.'),
       )
     }
-  }, [notify])
+  }, [notify, publishJoinOfferToCodeRoom])
 
   const startMission = useCallback(
     async (name: string) => {
@@ -1211,22 +1267,54 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
         return false
       }
       const code = token ? joinCodeFromToken(token) : formatJoinCode(codeInput)
-      const ok = await nativeDiscoverMission(code)
-      if (ok) {
+      const normalized = normalizeJoinCodeInput(codeInput)
+      let started = false
+
+      if (isJoinCodeSignalingAvailable() && !joinCodeDiscoveringRef.current) {
+        joinCodeDiscoveringRef.current = true
+        joinCodeDiscoverUnsubRef.current?.()
+        joinCodeDiscoverUnsubRef.current = subscribeJoinCodeRoom(normalized, {
+          onOffer: (msg) => {
+            if (!joinCodeDiscoveringRef.current || msg.fromDeviceId === deviceId) return
+            if (msg.encoded === lastJoinCodeOfferRef.current) return
+            lastJoinCodeOfferRef.current = msg.encoded
+            void (async () => {
+              const answer = await joinMissionFromOffer(msg.encoded)
+              if (!answer) return
+              const sentCode = await publishJoinCodeAnswer({
+                code: normalized,
+                encoded: answer,
+                fromDeviceId: deviceId,
+              })
+              if (sentCode) {
+                setSignalingTransport('share')
+                notify('success', `Linked to mission — code ${code} (Wi‑Fi relay).`)
+                stopJoinCodeDiscovery()
+              }
+            })()
+          },
+        })
+        started = true
+        notify('info', joinCodeSignalingHint(codeInput))
+      }
+
+      const nativeOk = await nativeDiscoverMission(code)
+      if (nativeOk) {
         setSignalingTransport('wifi-lan')
         notify(
           'info',
-          `Searching Wi‑Fi + Bluetooth/Nearby for ${code}… same hotspot preferred, no pairing needed`,
+          `Also scanning local Wi‑Fi + Nearby for ${code}…`,
         )
-      } else {
+        started = true
+      } else if (!started) {
         notify(
           'warn',
-          'Auto-link needs the Android field app — or scan QR / paste join bundle',
+          'Could not start code join — check Wi‑Fi and Supabase env on production, or paste join bundle.',
         )
       }
-      return ok
+      return started || nativeOk
     },
-    [missionId, notify],
+    [missionId, deviceId, notify, joinMissionFromOffer, stopJoinCodeDiscovery],
   )
 
   useEffect(() => {
@@ -1256,7 +1344,18 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
             sent = await nativeSendPayloadToHost(ev.fromAddress, ev.fromPort, answer)
             if (sent) notify('success', `Answer sent via ${transportLabel('wifi-lan')} — linking…`)
           }
-          if (sent) void nativeStopDiscovery()
+          if (!sent && isJoinCodeSignalingAvailable()) {
+            const codeNorm = normalizeJoinCodeInput(ev.joinCode)
+            if (codeNorm.length === 6) {
+              sent = await publishJoinCodeAnswer({
+                code: codeNorm,
+                encoded: answer,
+                fromDeviceId: deviceId,
+              })
+              if (sent) notify('success', `Answer sent — mission code ${formatJoinCode(codeNorm)}`)
+            }
+          }
+          if (sent) stopJoinCodeDiscovery()
           else notify('info', 'Paste answer bundle on host tablet if link does not complete')
         })()
         return
@@ -1266,7 +1365,37 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
         void applyJoinAnswer(ev.payload)
       }
     })
-  }, [joinMissionFromOffer, applyJoinAnswer, notify])
+  }, [joinMissionFromOffer, applyJoinAnswer, notify, deviceId, stopJoinCodeDiscovery])
+
+  useEffect(() => {
+    if (!isFieldMember || !missionId || !missionJoinToken) {
+      joinCodeHostUnsubRef.current?.()
+      joinCodeHostUnsubRef.current = null
+      return
+    }
+    const normalized = normalizeJoinCodeInput(joinCodeFromToken(missionJoinToken))
+    joinCodeHostUnsubRef.current?.()
+    joinCodeHostUnsubRef.current = subscribeJoinCodeRoom(normalized, {
+      onAnswer: (msg) => {
+        if (msg.fromDeviceId === deviceId) return
+        void applyJoinAnswer(msg.encoded)
+        notify('success', `Teammate linked via mission code ${formatJoinCode(normalized)}`)
+      },
+    })
+    return () => {
+      joinCodeHostUnsubRef.current?.()
+      joinCodeHostUnsubRef.current = null
+    }
+  }, [isFieldMember, missionId, missionJoinToken, deviceId, applyJoinAnswer, notify])
+
+  useEffect(() => {
+    if (!isFieldMember || !pendingOfferEncoded || phase !== 'awaiting-joiner') return
+    void publishJoinOfferToCodeRoom(pendingOfferEncoded)
+    const id = window.setInterval(() => {
+      void publishJoinOfferToCodeRoom(pendingOfferEncoded)
+    }, 8_000)
+    return () => window.clearInterval(id)
+  }, [isFieldMember, pendingOfferEncoded, phase, publishJoinOfferToCodeRoom])
 
   useEffect(() => {
     const saved = loadMissionSession()
@@ -1371,6 +1500,7 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       bluetoothNote,
       joinCode,
       nativeLink,
+      joinCodeSignalingAvailable: isJoinCodeSignalingAvailable(),
       signalingTransport,
       signalingLabel,
       teamCorridorStatus,
