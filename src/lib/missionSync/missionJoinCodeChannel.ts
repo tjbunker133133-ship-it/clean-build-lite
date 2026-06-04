@@ -18,7 +18,18 @@ export type JoinCodeAnswerMessage = {
   at: number
 }
 
-export type JoinCodeSignalMessage = JoinCodeOfferMessage | JoinCodeAnswerMessage
+/** Joiner asks host to re-broadcast the current offer (same code room). */
+export type JoinCodeRequestOfferMessage = {
+  kind: 'request-offer'
+  fromDeviceId: string
+  callsign?: string
+  at: number
+}
+
+export type JoinCodeSignalMessage =
+  | JoinCodeOfferMessage
+  | JoinCodeAnswerMessage
+  | JoinCodeRequestOfferMessage
 
 export function joinCodeChannelName(normalized6: string): string {
   const code = normalizeJoinCodeInput(normalized6)
@@ -37,6 +48,7 @@ export function isJoinCodeSignalingAvailable(): boolean {
 type Handlers = {
   onOffer?: (msg: JoinCodeOfferMessage) => void
   onAnswer?: (msg: JoinCodeAnswerMessage) => void
+  onRequestOffer?: (msg: JoinCodeRequestOfferMessage) => void
 }
 
 /** Supabase room keyed by 6-char mission code — join bundles without paste/SMS. */
@@ -64,6 +76,7 @@ export class MissionJoinCodeChannel {
       if (!msg || typeof msg !== 'object' || typeof msg.kind !== 'string') return
       if (msg.kind === 'offer') this.handlers.onOffer?.(msg)
       if (msg.kind === 'answer') this.handlers.onAnswer?.(msg)
+      if (msg.kind === 'request-offer') this.handlers.onRequestOffer?.(msg)
     })
     ch.subscribe((status) => {
       if (status === 'SUBSCRIBED') {

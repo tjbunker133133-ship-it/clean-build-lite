@@ -70,5 +70,5 @@ export function subscribeJoinCodeRoom(
 
 export function joinCodeSignalingHint(codeInput: string): string {
   const label = formatJoinCode(codeInput)
-  return `Mission code ${label} — linking over Wi‑Fi (no paste). Code must match the host screen exactly.`
+  return `Joining mission ${label} — your callsign is only your label; waiting for host…`
 }

@@ -437,7 +437,8 @@ export default function MissionLinkPanel() {
                 Start new mission
               </button>
               <p style={{ color: '#64748b', margin: '10px 0 8px', fontSize: '0.92em' }}>
-                Or join a teammate&apos;s mission:
+                Or join a teammate&apos;s mission (your callsign is yours only — only the code must match
+                the host):
               </p>
               <input
                 value={joinCodeInput}
@@ -457,8 +458,8 @@ export default function MissionLinkPanel() {
                 }}
               />
               {joinCodePreview ? (
-                <div style={{ color: '#64748b', fontSize: '0.88em', marginTop: 6, textAlign: 'center' }}>
-                  Will join mission {joinCodePreview} — must match host exactly (not a guess).
+                <div style={{ color: '#5eead4', fontSize: '0.88em', marginTop: 6, textAlign: 'center', fontWeight: 700 }}>
+                  Ready to join {joinCodePreview}
                 </div>
               ) : null}
               <button
@@ -479,8 +480,8 @@ export default function MissionLinkPanel() {
                 </p>
               ) : (
                 <p style={{ color: '#64748b', margin: '8px 0 0', fontSize: '0.88em', lineHeight: 1.45 }}>
-                  Read the <strong style={{ color: '#5eead4' }}>6-character code on the host tablet</strong> — same
-                  Wi‑Fi/hotspot. No SMS or paste required{lanReady ? '; Android also auto-links locally' : ''}.
+                  Type the <strong style={{ color: '#5eead4' }}>code on the host phone</strong> (e.g. 222-222). Same
+                  Wi‑Fi/hotspot + internet. Callsigns can differ (GCM vs Good Cit){lanReady ? '; Android also auto-links' : ''}.
                 </p>
               )}
               <textarea
@@ -656,7 +657,7 @@ export default function MissionLinkPanel() {
               {sync.joinCode ? (
                 <div style={{ textAlign: 'center' }}>
                   <div style={{ color: '#94a3b8', fontSize: '0.88em' }}>
-                    Teammates tap Join with mission code and type this exactly
+                    Teammates enter this code — their callsign can be different
                   </div>
                   <div style={{ color: '#5eead4', fontSize: 28, fontWeight: 800, letterSpacing: 3, margin: '6px 0' }}>
                     {sync.joinCode}
