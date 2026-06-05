@@ -11,6 +11,7 @@
  */
 
 import { logInfo, logWarn } from './logger'
+const LOG_CAT = 'VOICE' as const
 import {
   startSpeech as authorityStartSpeech,
   stopSpeech as authorityStopSpeech,
@@ -231,7 +232,7 @@ export function speakHudPhrase(text: string, rate: number, priority?: VoicePrior
 
     if (!result.started) {
       // Blocked by priority — resolve immediately with log
-      logInfo('VOICE_ARBITRATION', `Speech dropped by authority: ${result.reason}`, {
+      logInfo(LOG_CAT, `Speech dropped by authority: ${result.reason}`, {
         text: trimmed.slice(0, 60),
         priority: effectivePriority,
       })
@@ -242,7 +243,7 @@ export function speakHudPhrase(text: string, rate: number, priority?: VoicePrior
     // Safety timeout in case authority callbacks fail
     window.setTimeout(() => {
       if (!settled) {
-        logWarn('VOICE_ARBITRATION', 'Speech safety timeout fired', { text: trimmed.slice(0, 40) })
+        logWarn(LOG_CAT, 'Speech safety timeout fired', { text: trimmed.slice(0, 40) })
         authorityStopSpeech('safety_timeout')
         finish()
       }
@@ -270,7 +271,7 @@ export function speakHudPhrase(text: string, rate: number, priority?: VoicePrior
  * system reset, critical interruptions.
  */
 export function stopAllSpeech(reason = 'emergency_stop'): void {
-  logInfo('VOICE_ARBITRATION', `stopAllSpeech: ${reason}`)
+  logInfo(LOG_CAT, `stopAllSpeech: ${reason}`)
   authorityStopSpeech(reason)
   try {
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
@@ -286,7 +287,7 @@ export function stopAllSpeech(reason = 'emergency_stop'): void {
  * More aggressive than stopAllSpeech — also clears any pending items.
  */
 export function clearAllSpeech(reason = 'clear_all'): void {
-  logInfo('VOICE_ARBITRATION', `clearAllSpeech: ${reason}`)
+  logInfo(LOG_CAT, `clearAllSpeech: ${reason}`)
   authorityClearQueue(reason)
 }
 
@@ -295,7 +296,7 @@ export function clearAllSpeech(reason = 'clear_all'): void {
  * Returns true if interrupt succeeded.
  */
 export function interruptSpeech(priority: VoicePriority, reason: string): boolean {
-  logInfo('VOICE_ARBITRATION', `interruptSpeech requested: priority ${priority}, ${reason}`)
+  logInfo(LOG_CAT, `interruptSpeech requested: priority ${priority}, ${reason}`)
   return authorityStopSpeech(`interrupt_${reason}`)
 }
 

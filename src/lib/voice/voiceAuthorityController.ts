@@ -12,6 +12,7 @@
  */
 
 import { logInfo, logWarn } from '../../runtime/logger'
+const LOG_CAT = 'VOICE' as const
 
 // ============================================================================
 // PRIORITY DEFINITIONS (HIGHEST to LOWEST)
@@ -124,7 +125,7 @@ export function startSpeech(
   if (currentSpeech !== null) {
     if (priority > currentSpeech.priority) {
       // Higher priority — interrupt
-      logInfo('VOICE_AUTHORITY', `Interrupting priority ${currentSpeech.priority} with priority ${priority}`, {
+      logInfo(LOG_CAT, `Interrupting priority ${currentSpeech.priority} with priority ${priority}`, {
         current: currentSpeech.sourceId,
         incoming: sourceId,
       })
@@ -132,7 +133,7 @@ export function startSpeech(
       return { started: true, interrupted: true }
     } else {
       // Equal or lower priority — drop (no queueing to prevent overlap)
-      logInfo('VOICE_AUTHORITY', `Dropping speech: priority ${priority} <= current ${currentSpeech.priority}`, {
+      logInfo(LOG_CAT, `Dropping speech: priority ${priority} <= current ${currentSpeech.priority}`, {
         sourceId,
       })
       return { started: false, interrupted: false, reason: 'priority_blocked' }
@@ -154,7 +155,7 @@ export function stopSpeech(reason: string): boolean {
 
   const speechId = currentSpeech.id
 
-  logInfo('VOICE_AUTHORITY', `Stopping speech: ${reason}`, {
+  logInfo(LOG_CAT, `Stopping speech: ${reason}`, {
     speechId,
     sourceId: currentSpeech.sourceId,
     progressMs: Date.now() - currentSpeech.startedAt,
@@ -194,7 +195,7 @@ export function interruptSpeech(priority: VoicePriority, sourceId = 'interrupt')
   }
 
   if (priority <= currentSpeech.priority) {
-    logWarn('VOICE_AUTHORITY', `Interrupt rejected: priority ${priority} <= current ${currentSpeech.priority}`)
+    logWarn(LOG_CAT, `Interrupt rejected: priority ${priority} <= current ${currentSpeech.priority}`)
     return false
   }
 
@@ -212,7 +213,7 @@ export function clearSpeechQueue(reason: string): void {
     stopSpeech(reason)
   }
 
-  logInfo('VOICE_AUTHORITY', `Cleared queue (${clearedCount} items) + stopped current: ${reason}`)
+  logInfo(LOG_CAT, `Cleared queue (${clearedCount} items) + stopped current: ${reason}`)
 }
 
 /**
@@ -328,7 +329,7 @@ function cleanupSpeech(speechId: string): void {
 
 function executeTTS(text: string, speechId: string): void {
   if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
-    logWarn('VOICE_AUTHORITY', 'TTS not supported')
+    logWarn(LOG_CAT, 'TTS not supported')
     cleanupSpeech(speechId)
     return
   }
@@ -363,7 +364,7 @@ function executeTTS(text: string, speechId: string): void {
   try {
     synth.speak(utterance)
   } catch (err) {
-    logWarn('VOICE_AUTHORITY', 'speak() threw', { error: (err as Error).message })
+    logWarn(LOG_CAT, 'speak() threw', { error: (err as Error).message })
     cleanupSpeech(speechId)
   }
 }
