@@ -17,7 +17,9 @@ export type Tier1BaselineManifest = {
 
 export function sha256FileHex(rootDir: string, relPath: string): string {
   const abs = resolve(rootDir, relPath)
-  return createHash('sha256').update(readFileSync(abs)).digest('hex')
+  // Normalize line endings for cross-platform consistency (Vercel checkout uses LF)
+  const data = readFileSync(abs, 'utf8').replace(/\r\n/g, '\n')
+  return createHash('sha256').update(data, 'utf8').digest('hex')
 }
 
 export function readTier1BaselineManifest(rootDir: string): Tier1BaselineManifest {

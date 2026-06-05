@@ -4,24 +4,24 @@
   "purpose": "Rollback-safe SHA-256 baseline for locked Tier 1 production surfaces. Intentional Tier 1 edits must update this manifest in the same change set.",
   "reference": {
     "path": "src/tier1-hud.html",
-    "sha256": "898d8f46e5dd5b35d78cfcb7b5a3843cba7d61b396a3d9e91540ee78d3dbe397"
+    "sha256": "e9e38a80488e81cb5439a7fa0f1941b945d75af60ec745f3ab70d541ecd01b01"
   },
   "production": {
-    "src/hooks/useGPS.ts": "bdd7b8ec309335ab05c6a819b27d962b516228ef5e37bf37ffbf8efff1b663a0",
-    "src/components/MapCanvas.tsx": "1f67b190102b1190b56f23d98af2c205a007260c4d11ceb2c780c3fb4ccb154e",
-    "src/lib/mapStyles.ts": "8655566bb554d6077e19f10702a98c4d15448156a77bfcff3645c5b2a3f852a8",
-    "src/hud/SOSPanel.tsx": "0e3285e1dd72b58e2d454da8f395ad4eb37c665d850b65fe13ac55b6f7ba8b81",
-    "src/hud/DeadManPanel.tsx": "c478eb0b86e95f1424ed958e3fd3d0925c1c3511dac44b5d0b88fc2a5eaf15d2",
-    "src/hud/CockpitHudShell.tsx": "816d311cd774fec03c14b26972b78cf0ac5a7bd207810b555e5b9ac041732540",
-    "src/controllers/resolveDockIntent.ts": "a824b236092ce85e7b230380d3a0904546d299920e3714b28e6faee387e08549",
-    "src/context/AppContext.tsx": "15671759eec83bb1a138e428447bb6e95a63ccf7886aad7b5b1080f426c99765",
-    "src/App.tsx": "c368c39ebf7f0086c6e965d77ef9887dfe8515499745cd7c5f9499136bc4b6b8",
-    "src/main.tsx": "beb7ad5c07c95ccf228100f138953d998f8e6c40d48fb0d96a6174c05d081b0c",
-    "vite.config.ts": "5d087285cec0b23b2b2d1eb112253af675233c7ff73a2c0fbec60c46e829d976",
+    "src/hooks/useGPS.ts": "3a81e422413a325f4c362ed787eefaf398d3ab1f109257fda5a0a8084bac6e8b",
+    "src/components/MapCanvas.tsx": "1783b5c25d7a44e067bdc40ccb4dc59201e51664bb4ea293ebea93e83cea9dda",
+    "src/lib/mapStyles.ts": "3c0c2f0e1fc9abc55715a2065b30ec059d531e91db748af168babd92b65499cb",
+    "src/hud/SOSPanel.tsx": "473ee124e832c1ac8039d1c18b7b35d6f6d7a98f19d68dfa9c28ff308555f916",
+    "src/hud/DeadManPanel.tsx": "8dada3e4541f93fd651e22502680e16dc9c72fd69e94ed91f3db8bc5fde8b1b4",
+    "src/hud/CockpitHudShell.tsx": "7aab022a2e51d9bcdf546d47355cd61d2890a6dda71584e28e61fdf761b48b5b",
+    "src/controllers/resolveDockIntent.ts": "22c35ef70b8755a482a7f0a7e42d0f22b9e8ee4475f3be5dcb8d1840a1702535",
+    "src/context/AppContext.tsx": "b1dbecc473aa23c69e609b8f53596d692b2e6f1881d17840a6d6e69256084567",
+    "src/App.tsx": "28ea522dac9191a7e1d979fd70a7128ad2d6614e662beccf0f26482f1f311899",
+    "src/main.tsx": "8bfba5842d40a95502cdfdc5fbfa9a635e188f0397e8dd2eb49bd206f290cbfc",
+    "vite.config.ts": "14ef8ee507ff997945aafa0021fd6edcda3228940fd97ebf70780ecebe35c66e",
     "index.html": "05d4c5091478975d6c67b5859302f97c8a222088a6f5052343884906344eda2e",
-    "src/lib/rescue/buildRescuePacket.ts": "c6f407455db0018ef00dd37f6f426c3b68c105208f1ac0ce65f99d438407a9bd",
-    "src/lib/rescue/postRescuePacket.ts": "1417d9a0f0bb811ba2b9adcd33f668dff1c633f9cf115e2b544d4e3762ebbed9",
-    "src/lib/rescue/rescueDispatch.ts": "b5a0dca4dba1f1db52057deb242f519f200ace2833d7145e0d5f5e673a6893fe",
-    "supabase/functions/send-rescue-email/index.ts": "ed6f0a05df30207955f5c916a1598ccbdeb65db4a3f0c7b7b5cfaa2f2137d62f"
+    "src/lib/rescue/buildRescuePacket.ts": "536a7a845e7aea6ad30d1decc7938f6c859acf2a2a49e03aa0d90934e94d2a99",
+    "src/lib/rescue/postRescuePacket.ts": "53804e2541ab23f1d9fb186147e6111c6fe516bdd584567cd9af3fe34f45be43",
+    "src/lib/rescue/rescueDispatch.ts": "d30599aee0e7fabd703b855f57a14b0e09709d39237acfc66e6ec309fddc6da0",
+    "supabase/functions/send-rescue-email/index.ts": "83f78ab54362f3a56309b8aa4d68529da363cf23228941549b9534f333b316eb"
   }
 }

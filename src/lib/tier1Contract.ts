@@ -5,8 +5,9 @@ import { HALF_CORRIDOR_FEET } from './corridor'
 
 /** Locked reference implementation per `src/.cursorrules` (2026-05-04). */
 export const TIER1_REFERENCE_REL = 'src/tier1-hud.html'
+// Normalized hash (LF line endings) for cross-platform consistency
 export const TIER1_LOCKED_SHA256 =
-  '898d8f46e5dd5b35d78cfcb7b5a3843cba7d61b396a3d9e91540ee78d3dbe397'
+  'e9e38a80488e81cb5439a7fa0f1941b945d75af60ec745f3ab70d541ecd01b01'
 
 export const TIER1_GPS_POLL_MS = 120_000
 export const TIER1_SOS_HOLD_MS = 3_000
@@ -75,7 +76,8 @@ export function auditCorridorWidth(): Tier1AuditResult {
 }
 
 export function readTier1ReferenceFromRepo(rootDir: string): string {
-  return readFileSync(resolve(rootDir, TIER1_REFERENCE_REL), 'utf8')
+  // Normalize line endings for cross-platform consistency
+  return readFileSync(resolve(rootDir, TIER1_REFERENCE_REL), 'utf8').replace(/\r\n/g, '\n')
 }
 
 export function runTier1ContractAudit(rootDir: string): Tier1AuditResult {

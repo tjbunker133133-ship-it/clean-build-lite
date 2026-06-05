@@ -9,8 +9,9 @@ import { resolve } from 'node:path'
 
 const root = resolve(import.meta.dirname, '..')
 const manifestPath = resolve(root, 'tier1-baseline.manifest.json')
+// Normalized hash (LF line endings) for cross-platform consistency
 const TIER1_LOCKED =
-  '898d8f46e5dd5b35d78cfcb7b5a3843cba7d61b396a3d9e91540ee78d3dbe397'
+  'e9e38a80488e81cb5439a7fa0f1941b945d75af60ec745f3ab70d541ecd01b01'
 
 function fail(msg) {
   console.error(`[tier1-freeze] ${msg}`)
@@ -18,7 +19,9 @@ function fail(msg) {
 }
 
 function sha256(rel) {
-  return createHash('sha256').update(readFileSync(resolve(root, rel))).digest('hex')
+  // Normalize line endings for consistent hashing across platforms
+  const data = readFileSync(resolve(root, rel), 'utf8').replace(/\r\n/g, '\n')
+  return createHash('sha256').update(data, 'utf8').digest('hex')
 }
 
 if (!existsSync(manifestPath)) {

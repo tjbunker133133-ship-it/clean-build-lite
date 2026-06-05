@@ -9,8 +9,9 @@ import { resolve } from 'node:path'
 
 const root = resolve(import.meta.dirname, '..')
 const referencePath = resolve(root, 'src/tier1-hud.html')
+// Normalized hash (LF line endings) for cross-platform consistency
 const LOCKED =
-  '898d8f46e5dd5b35d78cfcb7b5a3843cba7d61b396a3d9e91540ee78d3dbe397'
+  'e9e38a80488e81cb5439a7fa0f1941b945d75af60ec745f3ab70d541ecd01b01'
 
 function fail(msg) {
   console.error(`[tier1-contract] ${msg}`)
@@ -21,7 +22,9 @@ if (!existsSync(referencePath)) {
   fail(`missing ${referencePath}`)
 }
 
-const reference = readFileSync(referencePath, 'utf8')
+// Normalize line endings for cross-platform consistency (Vercel checkout may differ from local)
+const rawReference = readFileSync(referencePath, 'utf8')
+const reference = rawReference.replace(/\r\n/g, '\n')
 const hash = createHash('sha256').update(reference, 'utf8').digest('hex')
 if (hash !== LOCKED) {
   fail(`SHA-256 drift (expected ${LOCKED.slice(0, 16)}…, got ${hash.slice(0, 16)}…)`)
