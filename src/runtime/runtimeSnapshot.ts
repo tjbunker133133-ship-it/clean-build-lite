@@ -64,6 +64,7 @@ import {
   type PolicyMode,
   type PolicyViolation,
 } from './devicePolicy'
+import { syncRuntimeActivityFromLifecycle } from './runtimeActivityPolicy'
 
 export type ServiceWorkerStatus =
   | 'unsupported'
@@ -569,6 +570,7 @@ export function updateRuntimeLifecycle(state: AppLifecycleState): void {
     appLifecycleState: state,
     recoveryCoordinatorState: coordinatorState,
   }
+  syncRuntimeActivityFromLifecycle(state)
   recordEvent('runtime', 'INFO', `lifecycle -> ${state}`)
   notify()
 }

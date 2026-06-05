@@ -12,8 +12,12 @@ export type OverlayLayerStatus = 'active' | 'pending' | 'failed' | 'off'
 
 export type LayoutHealthLevel = 'ok' | 'misaligned' | 'overlapping'
 
+/** Single usability signal for field operators and debug console. */
+export type Tier2UsabilityLevel = 'ok' | 'degraded' | 'unstable'
+
 export type HudSystemHealth = {
   updatedAt: number
+  overall_health: Tier2UsabilityLevel
   compass_health: CompassHealthLevel
   route_health: RouteHealthLevel
   snap_health: SnapHealthLevel
@@ -59,6 +63,7 @@ export type HudSystemHealth = {
 
 export const HUD_SYSTEM_HEALTH_DEFAULT: HudSystemHealth = {
   updatedAt: 0,
+  overall_health: 'ok',
   compass_health: 'ok',
   route_health: 'ok',
   snap_health: 'ok',

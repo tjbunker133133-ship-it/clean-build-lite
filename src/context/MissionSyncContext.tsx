@@ -51,6 +51,7 @@ import { buildStabilizedTeamPresence } from '../lib/missionSync/presencePublish'
 import {
   speakInboundTeamMessage,
   speakMissionCommsPhrase,
+  stopMissionVoiceCapture,
 } from '../lib/missionSync/missionVoiceMessage'
 import {
   createIdleMissionCommsFlow,
@@ -64,6 +65,8 @@ import {
   saveMissionCommsPrefs,
   type MissionCommsPrefs,
 } from '../lib/missionSync/missionCommsPrefs'
+import { shouldPlayMissionCommsAudio } from '../lib/missionSync/missionCommsAudio'
+import { showInboundTeamMessageNotification } from '../lib/missionSync/missionCommsNotification'
 import { emitHaptic } from '../runtime/haptics'
 import {
   burstTargetsLocalDevice,
@@ -148,7 +151,23 @@ import {
   missionRestoreGuidance,
 } from '../lib/missionSync/missionRestoreContract'
 import { recordMissionOperationalEvent } from '../lib/missionSync/operationalTelemetry'
-import { isFieldSessionBackgrounded } from '../runtime/fieldLifecycle'
+import {
+  clearBurstOutbox,
+  dueQueuedBursts,
+  enqueueBurst,
+  listQueuedBursts,
+  markBurstAttempt,
+} from '../lib/missionSync/burstOutbox'
+import {
+  MESH_AUTO_RECONNECT_MS,
+  shouldAttemptMeshAutoReconnect,
+} from '../lib/missionSync/missionMeshRecovery'
+import {
+  burstLifecycleKey,
+  createInboundBurstDedupe,
+  type OutboundMessagePhase,
+} from '../lib/missionSync/messageLifecycle'
+import { isFieldSessionBackgrounded, nudgeMapViewport } from '../runtime/fieldLifecycle'
 import {
   computeFilteredTeamComms,
   computeMissionRelayFlags,
@@ -161,8 +180,33 @@ import {
 import { captureMonitorJoinFromLocation } from '../lib/missionSync/pendingMonitorJoin'
 import MonitorJoinBootstrap from '../hud/MonitorJoinBootstrap'
 
+const JOIN_HANDSHAKE_TIMEOUT_MS = 45_000
+
 if (typeof window !== 'undefined') {
   captureMonitorJoinFromLocation(window.location.search)
+}
+
+function deliverBurstToMissionLink(
+  coord: MissionSyncCoordinator,
+  burst: MissionBurst,
+  storedPeerId: string | undefined,
+  monitorRelayActive: boolean,
+): boolean {
+  const linked = coord.connectedPeers
+  const directed = Boolean(storedPeerId || burst.toDeviceId || burst.toCallsign)
+  if (directed) {
+    const peer =
+      (storedPeerId ? linked.find((p) => p.peerId === storedPeerId) : undefined) ??
+      (burst.toCallsign ? resolveMissionPeerByCallsign(linked, burst.toCallsign) : null) ??
+      (burst.toDeviceId ? linked.find((p) => p.deviceId === burst.toDeviceId) : null) ??
+      null
+    if (!peer) return false
+    coord.sendBurstToPeer(peer.peerId, burst)
+    return true
+  }
+  if (linked.length === 0 && !monitorRelayActive) return false
+  coord.sendBurst(burst)
+  return true
 }
 
 export type MissionSyncNotice = {
@@ -214,12 +258,19 @@ export type MissionSyncContextValue = {
   /** Latest inbound burst for HUD toast (directed messages prioritized). */
   lastInboundTeamBurst: MissionBurst | null
   dismissTeamCommsAlert: () => void
+  /** Session-only — clears visible mission message log on this device. */
+  clearMissionLog: () => void
   /** Set when user taps a teammate on the map (opens quick message sheet). */
   activeCommsTarget: { deviceId: string; callsign: string } | null
   openCommsForTeammate: (deviceId: string, callsign: string) => void
   clearActiveCommsTarget: () => void
   sendTeamCheckIn: (note?: string) => void
   sendTeamBurst: (text: string, toCallsign?: string) => boolean
+  sendTeamBurstMany: (text: string, callsigns: string[]) => boolean
+  /** Local delivery lifecycle keyed by deviceId:sentAt (read-only diagnostic). */
+  outboundMessagePhases: Record<string, OutboundMessagePhase>
+  /** Outbound messages waiting for link (offline queue). */
+  queuedBurstCount: number
   /** True after host shares live map link this mission (controls watcher pill). */
   watchLinkShared: boolean
   missionCommsPrefs: MissionCommsPrefs
@@ -258,6 +309,8 @@ export type MissionSyncContextValue = {
   /** Remote read-only monitor — separate token from field join code. */
   observerToken: string | null
   observerCount: number
+  /** Watchers known this session — mesh-linked and relay-only. */
+  watcherRoster: { callsign: string; live: boolean }[]
   pendingObserverOfferEncoded: string | null
   pendingObserverOfferFitsQr: boolean
   observerSignalingAvailable: boolean
@@ -275,6 +328,11 @@ export type MissionSyncContextValue = {
   applyObserverAnswer: (encoded: string) => Promise<void>
   endMonitor: () => void
   dismissNotice: () => void
+  /** True when this device started or restored as mission host (not a joiner). */
+  isMissionHost: boolean
+  missionHostDeviceId: string | null
+  /** Reset failed join handshake — host refreshes offer, joiner retries code/bundle. */
+  retryMissionLink: () => void
 }
 
 const MissionSyncContext = createContext<MissionSyncContextValue | null>(null)
@@ -283,6 +341,32 @@ const PRESENCE_INTERVAL_MS = 8_000
 const PRESENCE_GPS_DEBOUNCE_MS = 4_000
 const SNAPSHOT_DEBOUNCE_MS = 1800
 const CORRIDOR_HINT_DEBOUNCE_MS = 4_000
+
+type SessionWatcher = { deviceId: string; callsign: string; live: boolean }
+
+function upsertSessionWatcher(
+  prev: SessionWatcher[],
+  deviceId: string,
+  callsign: string,
+  live: boolean,
+): SessionWatcher[] {
+  const label = callsign.trim() || 'Watcher'
+  const idx = prev.findIndex((w) => w.deviceId === deviceId)
+  if (idx >= 0) {
+    const next = [...prev]
+    next[idx] = { deviceId, callsign: label, live: live || next[idx]!.live }
+    return next
+  }
+  return [...prev, { deviceId, callsign: label, live }]
+}
+
+function syncWatcherLiveFlags(prev: SessionWatcher[], peers: ConnectedPeer[]): SessionWatcher[] {
+  if (prev.length === 0) return prev
+  return prev.map((w) => ({
+    ...w,
+    live: peers.some((p) => p.linkRole === 'observer' && p.deviceId === w.deviceId),
+  }))
+}
 
 export function MissionSyncProvider({ children }: { children: ReactNode }) {
   const { state, setWaypoints, setSnapToTrail } = useAppContext()
@@ -295,10 +379,14 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
   const snapToTrailEnabled = state.snapToTrailEnabled
 
   const [role, setRole] = useState<MissionSyncRole>('idle')
+  const roleRef = useRef<MissionSyncRole>('idle')
+  roleRef.current = role
   const [phase, setPhase] = useState<MissionSyncConnectionPhase>('idle')
   const [missionId, setMissionId] = useState<string | null>(null)
+  const [missionHostDeviceId, setMissionHostDeviceId] = useState<string | null>(null)
   const [missionName, setMissionName] = useState('Field mission')
   const [peers, setPeers] = useState<ConnectedPeer[]>([])
+  const [sessionWatchers, setSessionWatchers] = useState<SessionWatcher[]>([])
   const [teamPresence, setTeamPresence] = useState<TeamPresence[]>([])
   const [autoApply, setAutoApply] = useState(true)
   const [lastSyncAt, setLastSyncAt] = useState<number | null>(null)
@@ -329,6 +417,7 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
   const [monitorTargetCallsign, setMonitorTargetCallsign] = useState('Operator')
 
   const deviceId = useMemo(() => loadOrCreateDeviceId(), [])
+  const isMissionHost = role === 'member' && missionHostDeviceId === deviceId
   const signalingLabel = transportLabel(signalingTransport)
   const callsign = profile.display_name.trim() || 'Operator'
   const coordinatorRef = useRef<MissionSyncCoordinator | null>(null)
@@ -366,6 +455,10 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
   } | null>(null)
   const missionCommsFlowRef = useRef<MissionCommsFlowState>(createIdleMissionCommsFlow())
   const [missionCommsFlowPhase, setMissionCommsFlowPhase] = useState<MissionCommsFlowState['phase']>('idle')
+  const [outboundMessagePhases, setOutboundMessagePhases] = useState<
+    Record<string, OutboundMessagePhase>
+  >({})
+  const [queuedBurstCount, setQueuedBurstCount] = useState(0)
   const lastNativePayloadRef = useRef('')
   const teamPresenceRef = useRef<TeamPresence[]>([])
   teamPresenceRef.current = teamPresence
@@ -389,10 +482,17 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
   const pendingMeshPushAfterDeleteRef = useRef(false)
   const pendingOfferEncodedRef = useRef<string | null>(null)
   const applyJoinAnswerRef = useRef<(encoded: string) => Promise<void>>(async () => {})
-  const createJoinOfferRef = useRef<() => Promise<void>>(async () => {})
+  const createJoinOfferRef = useRef<(opts?: { silent?: boolean }) => Promise<void>>(async () => {})
   const observerChannelRef = useRef<ObserverMonitorChannel | null>(null)
   const waitingForMonitorOfferRef = useRef(false)
   const relayDedupeRef = useRef(new SyncWireDedupe())
+  const inboundBurstDedupeRef = useRef(createInboundBurstDedupe())
+  const flushOutboxLockRef = useRef(false)
+  const flushBurstOutboxRef = useRef<() => void>(() => {})
+  const meshReconnectBusyRef = useRef(false)
+  const discoverMissionOnLanRef = useRef<(codeInput: string) => Promise<boolean>>(
+    async () => false,
+  )
   const relayLastAtRef = useRef(0)
   const linkRecoveryTimerRef = useRef<number | null>(null)
   const prevWakeHeldRef = useRef(false)
@@ -410,7 +510,18 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       }),
     [missionId, observerTokenState, observerSignalingAvailable, role],
   )
-  const observerCount = useMemo(() => computeObserverCount(peers), [peers])
+  const watcherRoster = useMemo(
+    () =>
+      sessionWatchers.map((w) => ({
+        callsign: w.callsign,
+        live: w.live,
+      })),
+    [sessionWatchers],
+  )
+  const observerCount = useMemo(
+    () => Math.max(computeObserverCount(peers), sessionWatchers.length),
+    [peers, sessionWatchers.length],
+  )
   const monitorLive = useMemo(
     () =>
       computeMonitorLive({
@@ -617,13 +728,76 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     setLastSyncAt(Date.now())
   }, [buildSnapshot])
 
+  const trackOutboundPhase = useCallback((burst: MissionBurst, phase: OutboundMessagePhase) => {
+    const key = burstLifecycleKey(burst)
+    setOutboundMessagePhases((prev) => {
+      const next = { ...prev, [key]: phase }
+      const keys = Object.keys(next)
+      if (keys.length <= 32) return next
+      const trimmed = keys
+        .sort((a, b) => {
+          const ta = Number(a.split(':')[1] ?? 0)
+          const tb = Number(b.split(':')[1] ?? 0)
+          return tb - ta
+        })
+        .slice(0, 32)
+      const out: Record<string, OutboundMessagePhase> = {}
+      for (const k of trimmed) out[k] = next[k]!
+      return out
+    })
+  }, [])
+
+  const refreshQueuedBurstCount = useCallback(() => {
+    setQueuedBurstCount(listQueuedBursts().length)
+  }, [])
+
+  const attemptMeshAutoReconnect = useCallback(async () => {
+    if (meshReconnectBusyRef.current) return
+    if (!coordinatorRef.current || !missionId) return
+    const online = typeof navigator !== 'undefined' ? navigator.onLine : true
+    const peerCount = coordinatorRef.current.peerCount
+    if (
+      !shouldAttemptMeshAutoReconnect({
+        role: roleRef.current,
+        missionId,
+        peerCount,
+        online,
+        phase,
+      })
+    ) {
+      return
+    }
+    meshReconnectBusyRef.current = true
+    try {
+      if (isMissionHost) {
+        await createJoinOfferRef.current({ silent: true })
+      } else if (missionJoinToken && !joinCodeDiscoveringRef.current) {
+        const code = joinCodeFromToken(missionJoinToken)
+        if (code) await discoverMissionOnLanRef.current(code)
+      }
+      flushBurstOutboxRef.current()
+    } finally {
+      meshReconnectBusyRef.current = false
+    }
+  }, [missionId, phase, isMissionHost, missionJoinToken])
+
+  const resolveCommsRole = useCallback((): MissionSyncRole => {
+    if (roleRef.current !== 'idle') return roleRef.current
+    const coordRole = coordinatorRef.current?.role
+    if (coordRole === 'member' || coordRole === 'observer') return coordRole
+    return 'idle'
+  }, [])
+
   const ingestInboundBurst = useCallback(
     (burst: MissionBurst) => {
+      const syncRole = resolveCommsRole()
+      if (syncRole === 'idle') return
       if (burst.deviceId === deviceId) return
+      if (!inboundBurstDedupeRef.current.accept(burst)) return
       setTeamBursts((prev) => filterRecentBursts([...prev, burst]))
       const directed = Boolean(burst.toDeviceId)
       const forMe = burstTargetsLocalDevice(burst, deviceId)
-      const watching = role === 'observer'
+      const watching = syncRole === 'observer'
       const arrow = formatBurstTargetLabel(burst)
       const line = formatBurstLine(burst, deviceId)
       const shouldAlert = forMe || watching || !directed
@@ -634,25 +808,35 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
         if (missionCommsPrefs.inboundConfirm) {
           setPendingInboundBurst(burst)
           notify(forMe ? 'success' : 'info', `Message from ${burst.callsign} — say accept to listen`)
-          void speakMissionCommsPhrase(
-            `Message from ${burst.callsign}. Say accept to listen, or skip.`,
-          )
+          if (shouldPlayMissionCommsAudio()) {
+            void speakMissionCommsPhrase(
+              `Message from ${burst.callsign}. Say accept to listen, or skip.`,
+            )
+          } else {
+            void showInboundTeamMessageNotification(burst.callsign, burst.text, {
+              pendingConfirm: true,
+            })
+          }
         } else {
           notify(forMe ? 'success' : 'info', directed ? `Team message ${arrow ?? ''}: ${burst.text}`.trim() : line)
-          void speakInboundTeamMessage(burst.callsign, burst.text)
+          if (shouldPlayMissionCommsAudio()) {
+            void speakInboundTeamMessage(burst.callsign, burst.text)
+          } else {
+            void showInboundTeamMessageNotification(burst.callsign, burst.text)
+          }
         }
         return
       }
       if (!directed) notify('info', line)
     },
-    [deviceId, notify, role, missionCommsPrefs.inboundConfirm],
+    [deviceId, notify, missionCommsPrefs.inboundConfirm, resolveCommsRole],
   )
 
   const ingestInboundVoiceClip = useCallback(
     (clip: MissionVoiceClip) => {
       if (clip.deviceId === deviceId) return
       const forMe = voiceClipTargetsLocalDevice(clip, deviceId)
-      const watching = role === 'observer'
+      const watching = resolveCommsRole() === 'observer'
       const who = clip.callsign
       const dur = `${Math.max(1, Math.round(clip.durationMs / 1000))}s`
       if (forMe || watching || !clip.toDeviceId) {
@@ -663,10 +847,12 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
         notify('info', `Voice from ${who} (${dur})`)
       }
     },
-    [deviceId, notify, role],
+    [deviceId, notify, resolveCommsRole],
   )
 
   const dismissTeamCommsAlert = useCallback(() => setLastInboundTeamBurst(null), [])
+
+  const clearMissionLog = useCallback(() => setTeamBursts([]), [])
 
   const confirmInboundMessage = useCallback(() => {
     const b = pendingInboundBurst
@@ -764,7 +950,7 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       )
       if (msg.type === 'snapshot') applyRemoteSnapshot(msg.payload, 'relay')
       if (msg.type === 'presence') {
-        if (isObserver && msg.payload.callsign) {
+        if (resolveCommsRole() === 'observer' && msg.payload.callsign) {
           setMonitorTargetCallsign(msg.payload.callsign)
           setMonitorHostDeviceId((prev) => prev ?? msg.payload.deviceId)
         }
@@ -783,8 +969,16 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       if (msg.type === 'corridor-hint') handleRemoteCorridorHint(msg.payload)
       setLastSyncAt(Date.now())
       completeLinkRecovery('relay')
+      flushBurstOutboxRef.current()
     },
-    [applyRemoteSnapshot, deviceId, handleRemoteCorridorHint, isObserver, ingestInboundBurst, completeLinkRecovery],
+    [
+      applyRemoteSnapshot,
+      deviceId,
+      handleRemoteCorridorHint,
+      ingestInboundBurst,
+      completeLinkRecovery,
+      resolveCommsRole,
+    ],
   )
 
   const attachFieldMonitorRelay = useCallback(
@@ -822,6 +1016,7 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
           if (peer.linkRole === 'observer') {
             setMonitorTransport((prev) => (prev === 'relay' ? 'both' : 'direct'))
             const name = peer.callsign?.trim() || 'Watcher'
+            setSessionWatchers((prev) => upsertSessionWatcher(prev, peer.deviceId, name, true))
             notify('success', `${name} is watching your live map`)
             const snap = buildSnapshot()
             if (snap) coord.sendSnapshotToPeer(peer.peerId, snap)
@@ -844,6 +1039,14 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
         onPeerDisconnected: () => {
           const prevObserverCount = peers.filter((p) => p.linkRole === 'observer').length
           setPeers(coord.connectedPeers)
+          setSessionWatchers((prev) => syncWatcherLiveFlags(prev, coord.connectedPeers))
+          setActiveCommsTarget((cur) => {
+            if (!cur) return null
+            const stillLinked = coord.connectedPeers.some(
+              (p) => p.deviceId === cur.deviceId || p.callsign === cur.callsign,
+            )
+            return stillLinked ? cur : null
+          })
           const nextObserverCount = coord.connectedPeers.filter(
             (p) => p.linkRole === 'observer',
           ).length
@@ -947,6 +1150,12 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     ],
   )
 
+  useEffect(() => {
+    const coord = coordinatorRef.current
+    if (!coord || role === 'idle') return
+    wireCoordinator(coord)
+  }, [role, wireCoordinator])
+
   const disposeHostJoinCodeRoom = useCallback(() => {
     joinCodeHostRoomRef.current?.channel.dispose()
     joinCodeHostRoomRef.current = null
@@ -967,6 +1176,49 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     joinCodeDiscoverRoomRef.current = null
     void nativeStopDiscovery()
   }, [])
+
+  const syncPeersFromCoordinator = useCallback((): boolean => {
+    const coord = coordinatorRef.current
+    if (!coord || coord.connectedPeers.length === 0) return false
+    setPeers(coord.connectedPeers)
+    setPhase('connected')
+    stopJoinCodeDiscovery()
+    return true
+  }, [stopJoinCodeDiscovery])
+
+  const failJoinHandshake = useCallback(
+    (message: string) => {
+      if (syncPeersFromCoordinator()) return
+      stopJoinCodeDiscovery()
+      setPhase('failed')
+      notify('warn', message)
+    },
+    [notify, stopJoinCodeDiscovery, syncPeersFromCoordinator],
+  )
+
+  const failJoinHandshakeRef = useRef(failJoinHandshake)
+  useEffect(() => {
+    failJoinHandshakeRef.current = failJoinHandshake
+  }, [failJoinHandshake])
+
+  const retryMissionLink = useCallback(() => {
+    stopJoinCodeDiscovery()
+    setJoinCodeSearching(false)
+    setPendingAnswerEncoded(null)
+    if (isMissionHost && missionId && coordinatorRef.current) {
+      setPhase('awaiting-joiner')
+      void createJoinOfferRef.current()
+      notify('info', 'Host link refreshed — share mission code or Connect device again.')
+      return
+    }
+    if (missionId && coordinatorRef.current) {
+      setPhase('connecting')
+      notify('info', 'Retry join — enter mission code or paste join bundle.')
+      return
+    }
+    setPhase('idle')
+    notify('info', 'Enter mission code or paste join bundle to join.')
+  }, [isMissionHost, missionId, notify, stopJoinCodeDiscovery])
 
   const ensureHostJoinCodeRoom = useCallback((): MissionJoinCodeChannel | null => {
     if (!isJoinCodeSignalingAvailable()) return null
@@ -1011,8 +1263,10 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     setRole('idle')
     setPhase('idle')
     setMissionId(null)
+    setMissionHostDeviceId(null)
     setJoinToken('')
     setPeers([])
+    setSessionWatchers([])
     setTeamPresence([])
     setTeamCheckIns([])
     setTeamBursts([])
@@ -1040,12 +1294,24 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     waitingForMonitorOfferRef.current = false
     relayLastAtRef.current = 0
     relayDedupeRef.current = new SyncWireDedupe()
+    inboundBurstDedupeRef.current = createInboundBurstDedupe()
+    setOutboundMessagePhases({})
     setMonitorTransport('idle')
     setMonitorHostDeviceId(null)
     setMonitorTargetCallsign('Operator')
     clearLinkRecoveryTimer()
     setLinkRecoveryPending(false)
     setRelayLinkState('active')
+    clearBurstOutbox()
+    setQueuedBurstCount(0)
+    if (snapshotTimerRef.current != null) {
+      window.clearTimeout(snapshotTimerRef.current)
+      snapshotTimerRef.current = null
+    }
+    if (corridorTimerRef.current != null) {
+      window.clearTimeout(corridorTimerRef.current)
+      corridorTimerRef.current = null
+    }
     saveMissionSession(null)
     locallySuppressedWaypointIdsRef.current.clear()
     peerSnapshotStateRef.current.clear()
@@ -1097,6 +1363,7 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       notify('warn', 'Start a field mission first')
       return
     }
+    notify('info', 'Preparing live map link…')
     const encoded = await ensureObserverOfferEncoded()
     if (!encoded) return
 
@@ -1317,47 +1584,51 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     [missionId, deviceId, ensureHostJoinCodeRoom],
   )
 
-  const createJoinOffer = useCallback(async () => {
-    const coord = coordinatorRef.current
-    if (!coord) return
-    setPhase('awaiting-joiner')
-    const { encoded } = await coord.createJoinOffer()
-    setPendingOfferEncoded(encoded)
-    pendingOfferEncodedRef.current = encoded
-    setPendingAnswerEncoded(null)
-    const code = joinCodeFromToken(joinTokenRef.current)
-    const codeRoomOk = await publishJoinOfferToCodeRoom(encoded)
-    const nativeOk = await nativeAdvertisePayload(code, encoded)
-    if (nativeOk) {
-      setSignalingTransport('wifi-lan')
-      notify(
-        'success',
-        codeRoomOk
-          ? `Code ${code} — teammates enter the same code (Wi‑Fi or Android auto-link).`
-          : `Code ${code} — Wi‑Fi + Nearby advertising. Teammate enters this exact code.`,
-      )
-    } else if (codeRoomOk) {
-      setSignalingTransport('share')
-      notify(
-        'success',
-        `Code ${code} is live — teammate taps Join with mission code (callsign can differ).`,
-      )
-    } else {
-      setSignalingTransport('share')
-      const { shareMissionBundle, shareBundleResultMessage } = await import('../lib/missionSync/shareBundle')
-      const result = await shareMissionBundle(encoded, {
-        title: 'Signal One — join mission',
-        alsoCopy: false,
-      })
-      notify(
-        'info',
-        shareBundleResultMessage(result, 'join') +
-          (packetFitsCompactQr(encoded)
-            ? ' QR code is below.'
-            : ' Or paste join bundle in Mission Link.'),
-      )
-    }
-  }, [notify, publishJoinOfferToCodeRoom])
+  const createJoinOffer = useCallback(
+    async (opts?: { silent?: boolean }) => {
+      const coord = coordinatorRef.current
+      if (!coord) return
+      setPhase('awaiting-joiner')
+      const { encoded } = await coord.createJoinOffer()
+      setPendingOfferEncoded(encoded)
+      pendingOfferEncodedRef.current = encoded
+      setPendingAnswerEncoded(null)
+      const code = joinCodeFromToken(joinTokenRef.current)
+      const codeRoomOk = await publishJoinOfferToCodeRoom(encoded)
+      const nativeOk = await nativeAdvertisePayload(code, encoded)
+      if (opts?.silent) return
+      if (nativeOk) {
+        setSignalingTransport('wifi-lan')
+        notify(
+          'success',
+          codeRoomOk
+            ? `Code ${code} — teammates enter the same code (Wi‑Fi or Android auto-link).`
+            : `Code ${code} — Wi‑Fi + Nearby advertising. Teammate enters this exact code.`,
+        )
+      } else if (codeRoomOk) {
+        setSignalingTransport('share')
+        notify(
+          'success',
+          `Code ${code} is live — teammate taps Join with mission code (callsign can differ).`,
+        )
+      } else {
+        setSignalingTransport('share')
+        const { shareMissionBundle, shareBundleResultMessage } = await import('../lib/missionSync/shareBundle')
+        const result = await shareMissionBundle(encoded, {
+          title: 'Signal One — join mission',
+          alsoCopy: false,
+        })
+        notify(
+          'info',
+          shareBundleResultMessage(result, 'join') +
+            (packetFitsCompactQr(encoded)
+              ? ' QR code is below.'
+              : ' Or paste join bundle in Mission Link.'),
+        )
+      }
+    },
+    [notify, publishJoinOfferToCodeRoom],
+  )
 
   const startMission = useCallback(
     async (name: string) => {
@@ -1372,6 +1643,7 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       const trimmed = name.trim() || 'Field mission'
       setMissionName(trimmed)
       setMissionId(ids.missionId)
+      setMissionHostDeviceId(deviceId)
       setRole('member')
       setPhase('awaiting-joiner')
       const coord = new MissionSyncCoordinator({
@@ -1397,6 +1669,7 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       })
       notify('info', 'Mission started — share code with teammates on the same Wi‑Fi')
       await createJoinOffer()
+      nudgeMapViewport()
     },
     [supported, endMission, deviceId, callsign, wireCoordinator, notify, createJoinOffer, setObserverToken],
   )
@@ -1420,6 +1693,9 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       }
       if (isObs) {
         setPendingObserverOfferEncoded(null)
+        setSessionWatchers((prev) =>
+          upsertSessionWatcher(prev, answer.peerId, answer.callsign?.trim() || 'Watcher', true),
+        )
       } else {
         setPendingOfferEncoded(null)
         void nativeStopDiscovery()
@@ -1427,6 +1703,8 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       setPendingAnswerEncoded(null)
       setPeers(coord.connectedPeers)
       setPhase('connected')
+      stopJoinCodeDiscovery()
+      pushSnapshotNow()
       notify(
         'success',
         isObs
@@ -1434,7 +1712,7 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
           : `${answer.callsign} joined your mission mesh`,
       )
     },
-    [notify],
+    [notify, pushSnapshotNow, stopJoinCodeDiscovery],
   )
 
   useEffect(() => {
@@ -1502,17 +1780,26 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
   }, [role, missionId, peers.length, missionRelayActive, observerSignalingAvailable])
 
   useEffect(() => {
+    refreshQueuedBurstCount()
+  }, [refreshQueuedBurstCount])
+
+  useEffect(() => {
     if (typeof document === 'undefined') return
     const onVisibility = () => {
       if (isFieldSessionBackgrounded()) {
         recordMissionOperationalEvent('visibility_background')
       } else {
         recordMissionOperationalEvent('visibility_foreground')
+        flushBurstOutboxRef.current()
+        void attemptMeshAutoReconnect()
+        if (roleRef.current === 'member' && missionId) {
+          pushSnapshotNow()
+        }
       }
     }
     document.addEventListener('visibilitychange', onVisibility)
     return () => document.removeEventListener('visibilitychange', onVisibility)
-  }, [])
+  }, [attemptMeshAutoReconnect, missionId, pushSnapshotNow])
 
   useEffect(() => {
     return subscribeFieldWakeLock((held) => {
@@ -1530,6 +1817,20 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     setFieldWakeLockActive(keepAwake)
     return () => setFieldWakeLockActive(false)
   }, [role])
+
+  useEffect(() => {
+    if (!missionId || role !== 'member') return
+    const id = window.setInterval(() => {
+      void attemptMeshAutoReconnect()
+    }, MESH_AUTO_RECONNECT_MS)
+    return () => window.clearInterval(id)
+  }, [missionId, role, attemptMeshAutoReconnect])
+
+  useEffect(() => {
+    if (!missionId || role !== 'member') return
+    if (peers.length > 0) return
+    void attemptMeshAutoReconnect()
+  }, [missionId, role, peers.length, attemptMeshAutoReconnect])
 
   useEffect(() => {
     createJoinOfferRef.current = createJoinOffer
@@ -1558,6 +1859,7 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       if (offer.observerToken) setObserverToken(offer.observerToken)
       setMissionId(offer.missionId)
       setMissionName(offer.missionName)
+      setMissionHostDeviceId(offer.hostDeviceId)
       setRole('member')
       setPhase('connecting')
       const coord = new MissionSyncCoordinator({
@@ -1588,7 +1890,7 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       })
       return encoded
     },
-    [supported, endMission, callsign, deviceId, wireCoordinator, notify],
+    [supported, endMission, callsign, deviceId, wireCoordinator, notify, setJoinToken, setObserverToken],
   )
 
   const startJoinMission = useCallback(
@@ -1613,18 +1915,26 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
 
     observerSignalUnsubRef.current = ch.connect({
       onOffer: (msg) => {
-        if (!isObserver) return
+        if (roleRef.current !== 'observer') return
         if (waitingForMonitorOfferRef.current || !coordinatorRef.current?.peerCount) {
           void acceptMonitorOfferEncoded(msg.encoded)
         }
       },
       onAnswer: (msg) => {
-        if (!isFieldMember || msg.fromDeviceId === deviceId) return
-        void applyJoinAnswer(msg.encoded)
+        if (roleRef.current !== 'member' || msg.fromDeviceId === deviceId) return
+        const packet = decodeMissionPacket(msg.encoded)
+        if (packet?.t === 'mission-answer' && answerLinkRole(packet) === 'observer') {
+          const answer = packet as MissionAnswerPacket
+          setSessionWatchers((prev) =>
+            upsertSessionWatcher(prev, answer.peerId, answer.callsign?.trim() || 'Watcher', false),
+          )
+        }
+        void applyJoinAnswerRef.current(msg.encoded)
       },
       onRelay: (wire, fromDeviceId) => {
         if (fromDeviceId === deviceId) return
-        if (!isObserver && !isFieldMember) return
+        const r = roleRef.current
+        if (r !== 'observer' && r !== 'member') return
         handleRelayWire(wire)
       },
     })
@@ -1640,9 +1950,7 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     observerTokenState,
     observerSignalingAvailable,
     isFieldMember,
-    isObserver,
     deviceId,
-    applyJoinAnswer,
     acceptMonitorOfferEncoded,
     handleRelayWire,
     attachFieldMonitorRelay,
@@ -1760,16 +2068,21 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
   )
 
   const sendTeamBurst = useCallback(
-    (text: string, toCallsign?: string): boolean => {
+    (
+      text: string,
+      toCallsign?: string,
+      opts?: { skipCooldown?: boolean; skipTts?: boolean },
+    ): boolean => {
       const coord = coordinatorRef.current
       if (!coord || (role !== 'member' && role !== 'observer')) return false
       const linked = coord.connectedPeers
-      if (linked.length === 0 && !monitorRelayActive) {
-        notify('warn', 'No mission link yet — join mesh or wait for relay')
-        return false
-      }
+      const online = typeof navigator !== 'undefined' ? navigator.onLine : true
+      const canDeliver = linked.length > 0 || monitorRelayActive
       const now = Date.now()
-      if (now - lastBurstAtRef.current < BURST_MIN_INTERVAL_MS) {
+      if (
+        !opts?.skipCooldown &&
+        now - lastBurstAtRef.current < BURST_MIN_INTERVAL_MS
+      ) {
         notify('warn', 'Message cooldown — wait a few seconds')
         return false
       }
@@ -1790,22 +2103,135 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       }
       const payload = buildBurst(deviceId, callsign, text, target)
       if (!payload) return false
-      lastBurstAtRef.current = now
-      if (target?.scope === 'direct') {
-        coord.sendBurstToPeer(target.peerId, payload)
-      } else {
-        coord.sendBurst(payload)
-      }
-      setTeamBursts((prev) => filterRecentBursts([...prev, payload]))
+
+      stopMissionVoiceCapture()
+
+      const peerId = target?.scope === 'direct' ? target.peerId : undefined
       const label =
         target?.scope === 'direct'
           ? `Message sent to ${target.callsign}`
           : 'Message sent to whole mission'
+
+      trackOutboundPhase(payload, 'sending')
+
+      if (!canDeliver || !online) {
+        enqueueBurst(payload, peerId)
+        refreshQueuedBurstCount()
+        trackOutboundPhase(payload, 'queued_offline')
+        notify('info', 'Message queued — will send when link returns')
+        if (!opts?.skipTts) {
+          void speakMissionCommsPhrase('Message queued. Will send when connected.')
+        }
+        return true
+      }
+
+      const delivered = deliverBurstToMissionLink(coord, payload, peerId, monitorRelayActive)
+      if (!delivered) {
+        enqueueBurst(payload, peerId)
+        refreshQueuedBurstCount()
+        trackOutboundPhase(payload, 'queued_offline')
+        notify('info', 'Message queued — will send when link returns')
+        if (!opts?.skipTts) {
+          void speakMissionCommsPhrase('Message queued. Will send when connected.')
+        }
+        return true
+      }
+
+      lastBurstAtRef.current = now
+      trackOutboundPhase(payload, 'delivered')
+      setTeamBursts((prev) => filterRecentBursts([...prev, payload]))
       notify('success', label)
+      if (!opts?.skipTts) {
+        void speakMissionCommsPhrase(label)
+      }
       return true
     },
-    [deviceId, callsign, role, monitorRelayActive, notify],
+    [deviceId, callsign, role, monitorRelayActive, notify, trackOutboundPhase, refreshQueuedBurstCount],
   )
+
+  const sendTeamBurstMany = useCallback(
+    (text: string, callsigns: string[]): boolean => {
+      const unique = [...new Set(callsigns.map((c) => c.trim()).filter(Boolean))]
+      if (unique.length === 0) return sendTeamBurst(text)
+      let sent = 0
+      for (let i = 0; i < unique.length; i += 1) {
+        if (sendTeamBurst(text, unique[i], { skipCooldown: i > 0, skipTts: true })) {
+          sent += 1
+        }
+      }
+      if (sent > 0) {
+        void speakMissionCommsPhrase(`Message sent to ${unique.slice(0, sent).join(', ')}`)
+      }
+      return sent > 0
+    },
+    [sendTeamBurst],
+  )
+
+  const flushBurstOutbox = useCallback(() => {
+    if (flushOutboxLockRef.current) return
+    const coord = coordinatorRef.current
+    if (!coord) return
+    const online = typeof navigator !== 'undefined' ? navigator.onLine : true
+    if (!online) return
+    if (coord.connectedPeers.length === 0 && !monitorRelayActive) return
+
+    flushOutboxLockRef.current = true
+    try {
+      for (const q of dueQueuedBursts()) {
+        trackOutboundPhase(q.burst, 'sending')
+        const delivered = deliverBurstToMissionLink(
+          coord,
+          q.burst,
+          q.peerId,
+          monitorRelayActive,
+        )
+        const result = markBurstAttempt(q, delivered)
+        if (delivered) {
+          trackOutboundPhase(q.burst, 'delivered')
+          setTeamBursts((prev) => filterRecentBursts([...prev, q.burst]))
+          notify('success', 'Queued message delivered')
+        } else if (result === 'expired') {
+          trackOutboundPhase(q.burst, 'failed')
+          notify('warn', 'Queued message could not be delivered after retries')
+        }
+      }
+    } finally {
+      flushOutboxLockRef.current = false
+      refreshQueuedBurstCount()
+    }
+  }, [monitorRelayActive, notify, trackOutboundPhase, refreshQueuedBurstCount])
+
+  useEffect(() => {
+    flushBurstOutbox()
+    const onOnline = () => flushBurstOutbox()
+    if (typeof window !== 'undefined') {
+      window.addEventListener('online', onOnline)
+    }
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('online', onOnline)
+      }
+    }
+  }, [flushBurstOutbox, peers.length, teamCommsReady, monitorRelayActive])
+
+  useEffect(() => {
+    flushBurstOutboxRef.current = flushBurstOutbox
+  }, [flushBurstOutbox])
+
+  useEffect(() => {
+    if (role !== 'member' || !missionId || sessionWatchers.length === 0) return
+    const saved = loadMissionSession()
+    if (!saved || saved.missionId !== missionId) return
+    saveMissionSession({
+      ...saved,
+      sessionWatchers: sessionWatchers.map((w) => ({
+        deviceId: w.deviceId,
+        callsign: w.callsign,
+        live: w.live,
+      })),
+      updatedAt: Date.now(),
+    })
+  }, [sessionWatchers, role, missionId])
 
   const confirmOutboundMessage = useCallback((): boolean => {
     const flow = missionCommsFlowRef.current
@@ -1889,17 +2315,13 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
               clearOutboundFlow()
             }
             if (effect.type === 'confirm_send') {
-              if (!teamCommsReady) {
-                feedback = 'No mission link yet.'
-                await speakMissionCommsPhrase(feedback)
-                clearOutboundFlow()
-                return { handled: true, ok: false, feedback }
-              }
               const sent = sendTeamBurst(effect.body, effect.target.callsign)
               clearOutboundFlow()
               if (sent) {
                 emitHaptic('teamMessageSent')
-                feedback = `Sent to ${effect.target.label}.`
+                feedback = teamCommsReady
+                  ? `Sent to ${effect.target.label}.`
+                  : `Queued for ${effect.target.label} — will send when link is ready.`
                 await speakMissionCommsPhrase(feedback)
               } else {
                 feedback = 'Message not sent.'
@@ -1946,8 +2368,8 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
         token &&
         !joinCodesMatch(token, codeInput)
       ) {
-        notify('warn', 'End your current mission first, then join with the host code.')
-        return false
+        endMission()
+        notify('info', 'Switching mission — connecting with new code…')
       }
       const code = formatJoinCode(codeInput)
       const normalized = normalizeJoinCodeInput(codeInput)
@@ -2009,11 +2431,10 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
         joinCodeDiscoverPingRef.current = window.setInterval(pingHost, 1_500)
         joinCodeDiscoverTimeoutRef.current = window.setTimeout(() => {
           if (!joinCodeDiscoveringRef.current) return
-          notify(
-            'warn',
-            `No host for ${code} yet — confirm phone shows ${code}, Mission Link open, same Wi‑Fi + internet.`,
-          )
           stopJoinCodeDiscovery()
+          failJoinHandshakeRef.current(
+            `No host for ${code} — confirm host shows ${code}, Mission Link open, same Wi‑Fi + internet.`,
+          )
         }, 35_000)
         started = true
         notify('info', joinCodeSignalingHint(codeInput))
@@ -2040,8 +2461,13 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       notify,
       joinMissionFromOffer,
       stopJoinCodeDiscovery,
+      endMission,
     ],
   )
+
+  useEffect(() => {
+    discoverMissionOnLanRef.current = discoverMissionOnLan
+  }, [discoverMissionOnLan])
 
   useEffect(() => {
     void wireNativePayloadBridge()
@@ -2139,6 +2565,26 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
   }, [phase, pendingAnswerEncoded, deviceId])
 
   useEffect(() => {
+    if (phase !== 'connecting' && phase !== 'awaiting-host-answer') return
+    const poll = window.setInterval(() => {
+      if (syncPeersFromCoordinator()) {
+        pushSnapshotNow()
+      }
+    }, 2_000)
+    return () => window.clearInterval(poll)
+  }, [phase, syncPeersFromCoordinator, pushSnapshotNow])
+
+  useEffect(() => {
+    if (phase !== 'connecting' && phase !== 'awaiting-host-answer') return
+    const id = window.setTimeout(() => {
+      failJoinHandshake(
+        'Join timed out — keep host Mission Link open, then retry code or paste bundle on host.',
+      )
+    }, JOIN_HANDSHAKE_TIMEOUT_MS)
+    return () => window.clearTimeout(id)
+  }, [phase, failJoinHandshake])
+
+  useEffect(() => {
     if (!missionId || role !== 'member') return
     const onRemoved = (ev: Event) => {
       const id = (ev as CustomEvent<{ id: string }>).detail?.id
@@ -2196,12 +2642,24 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
 
     setMissionName(saved.missionName)
     setMissionId(saved.missionId)
+    setMissionHostDeviceId(
+      outcome === 'host_restore' ? saved.deviceId : (saved.hostDeviceId ?? null),
+    )
     setRole(saved.role === 'observer' ? 'observer' : 'member')
     setJoinToken(saved.joinToken ?? '')
     if (saved.observerToken) setObserverToken(saved.observerToken)
     setPhase('idle')
     refreshCorridorStatus()
     if (saved.role === 'member' && saved.observerToken) setWatchLinkShared(true)
+    if (saved.role === 'member' && saved.sessionWatchers?.length) {
+      setSessionWatchers(
+        saved.sessionWatchers.map((w) => ({
+          deviceId: w.deviceId,
+          callsign: w.callsign,
+          live: false,
+        })),
+      )
+    }
     recordMissionOperationalEvent('mission_restore', outcome)
 
     if (sessionCoordinatorReadyRef.current) return
@@ -2250,6 +2708,7 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       setPhase('connecting')
       notify('info', missionRestoreGuidance('joiner_restore'))
     }
+    nudgeMapViewport()
   }, [deviceId, setJoinToken, setObserverToken, callsign, wireCoordinator, notify, refreshCorridorStatus])
 
   const reconnectMesh = useCallback(async () => {
@@ -2257,8 +2716,19 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       notify('warn', 'Start or join a mission first')
       return
     }
-    await createJoinOffer()
-  }, [missionId, createJoinOffer, notify])
+    if (isMissionHost) {
+      await createJoinOffer()
+      return
+    }
+    if (missionJoinToken) {
+      const code = joinCodeFromToken(missionJoinToken)
+      if (code) {
+        await discoverMissionOnLan(code)
+        return
+      }
+    }
+    notify('warn', 'Re-enter mission code in Mission Link to reconnect')
+  }, [missionId, isMissionHost, createJoinOffer, missionJoinToken, discoverMissionOnLan, notify])
 
   useEffect(() => {
     return () => {
@@ -2304,11 +2774,15 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       relayLinkState,
       lastInboundTeamBurst,
       dismissTeamCommsAlert,
+      clearMissionLog,
       activeCommsTarget,
       openCommsForTeammate,
       clearActiveCommsTarget,
       sendTeamCheckIn,
       sendTeamBurst,
+      sendTeamBurstMany,
+      outboundMessagePhases,
+      queuedBurstCount,
       watchLinkShared,
       missionCommsPrefs,
       setMissionCommsPrefs,
@@ -2335,6 +2809,7 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       pushSnapshotNow,
       observerToken,
       observerCount,
+      watcherRoster,
       pendingObserverOfferEncoded,
       pendingObserverOfferFitsQr: qrFitFlags.pendingObserverOfferFitsQr,
       observerSignalingAvailable,
@@ -2349,6 +2824,9 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       applyObserverAnswer,
       endMonitor,
       dismissNotice,
+      isMissionHost,
+      missionHostDeviceId,
+      retryMissionLink,
     }),
     [
       supported,
@@ -2370,6 +2848,7 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       teamCorridorStatus,
       observerToken,
       observerCount,
+      watcherRoster,
       pendingObserverOfferEncoded,
       observerSignalingAvailable,
       filteredTeamComms,
@@ -2379,11 +2858,15 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       relayLinkState,
       lastInboundTeamBurst,
       dismissTeamCommsAlert,
+      clearMissionLog,
       activeCommsTarget,
       openCommsForTeammate,
       clearActiveCommsTarget,
       sendTeamCheckIn,
       sendTeamBurst,
+      sendTeamBurstMany,
+      outboundMessagePhases,
+      queuedBurstCount,
       watchLinkShared,
       missionCommsPrefs,
       setMissionCommsPrefs,
@@ -2421,6 +2904,9 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
       pushSnapshotNow,
       reconnectMesh,
       dismissNotice,
+      isMissionHost,
+      missionHostDeviceId,
+      retryMissionLink,
     ],
   )
 

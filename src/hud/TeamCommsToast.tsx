@@ -2,7 +2,7 @@ import type { CSSProperties, ReactNode } from 'react'
 import { useMissionSync } from '../context/MissionSyncContext'
 import { formatBurstLine } from '../lib/missionSync/teamComms'
 import { getDeviceProfile } from '../runtime/deviceProfile'
-import { teamCommsToastBottomCss } from './hudLayout'
+import { teamCommsToastBottomCss, HUD_Z_TEAM_COMMS } from './hudLayout'
 import { touchFontSm } from './tokens'
 
 /**
@@ -27,7 +27,7 @@ export default function TeamCommsToast() {
         left: 12,
         right: 12,
         bottom: teamCommsToastBottomCss(),
-        zIndex: 211,
+        zIndex: HUD_Z_TEAM_COMMS,
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'stretch',

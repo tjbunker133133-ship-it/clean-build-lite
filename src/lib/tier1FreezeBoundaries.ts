@@ -52,12 +52,16 @@ export const TIER2_EXCLUDED_PATHS = [
   'src/lib/wearables/wearablesFieldValidation.ts',
   'src/lib/wearables/wal',
   'src/lib/wearables/wcel',
+  'src/lib/wearables/dcrl',
   'plugins/capacitor-hud-health-connect',
   'src/hud/WearablesPanel.tsx',
   'src/hud/FieldStatusRail.tsx',
   'src/lib/missionSync/fieldConnectionStatus.ts',
   'src/lib/missionSync/missionReadiness.ts',
   'src/lib/missionSync/relayRecovery.ts',
+  'src/lib/missionSync/burstOutbox.ts',
+  'src/lib/missionSync/messageLifecycle.ts',
+  'src/lib/missionSync/missionCommsAudio.ts',
   'src/lib/missionSync/missionRestoreContract.ts',
   'src/lib/missionSync/operationalTelemetry.ts',
   'src/lib/missionSync/ownershipRegistry.ts',
@@ -72,6 +76,8 @@ export const TIER2_EXCLUDED_PATHS = [
   'src/lib/hudConsistency',
   'src/runtime/hudSystemHealth.ts',
   'src/runtime/HudSystemHealthBridge.tsx',
+  'src/runtime/dcrlRuntime.ts',
+  'src/runtime/runtimeActivityPolicy.ts',
 ] as const
 
 export const TIER2_EXCLUDED_CAPABILITIES = [

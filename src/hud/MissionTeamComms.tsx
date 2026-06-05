@@ -41,6 +41,7 @@ export default function MissionTeamComms({ isObserver }: Props) {
   const isMobile = getDeviceProfile().interactionMode === 'mobile'
   const [text, setText] = useState('')
   const [targetCallsign, setTargetCallsign] = useState('')
+  const [multiTargets, setMultiTargets] = useState<string[]>([])
 
   const teammates = useMemo(
     () => listMessageableTeammates(sync.peers, sync.teamPresence, sync.deviceId),
@@ -53,10 +54,42 @@ export default function MissionTeamComms({ isObserver }: Props) {
     }
   }, [sync.activeCommsTarget?.callsign])
 
+  useEffect(() => {
+    if (
+      targetCallsign &&
+      !teammates.find((t) => t.callsign === targetCallsign && t.meshLinked)
+    ) {
+      setTargetCallsign('')
+      sync.clearActiveCommsTarget()
+    }
+    setMultiTargets((prev) =>
+      prev.filter((c) => teammates.find((t) => t.callsign === c && t.meshLinked)),
+    )
+  }, [teammates, targetCallsign, sync.clearActiveCommsTarget])
+
+  const linkedTeammates = useMemo(
+    () => teammates.filter((t) => t.meshLinked),
+    [teammates],
+  )
+  const mapOnlyTeammates = useMemo(
+    () => teammates.filter((t) => t.onMap && !t.meshLinked),
+    [teammates],
+  )
+
   const thread = useMemo(() => sync.teamBursts.slice(0, 8), [sync.teamBursts])
 
-  const selected = teammates.find((t) => t.callsign === targetCallsign)
-  const canSendToTarget = !targetCallsign || (selected?.meshLinked ?? false)
+  const selected = linkedTeammates.find((t) => t.callsign === targetCallsign)
+  const canSendToTarget =
+    multiTargets.length > 0
+      ? multiTargets.every((c) => linkedTeammates.some((t) => t.callsign === c))
+      : !targetCallsign || Boolean(selected)
+
+  const recipientLabel =
+    multiTargets.length > 0
+      ? multiTargets.join(', ')
+      : targetCallsign.trim() || 'whole mission'
+
+  const inCommsRole = sync.role === 'member' || sync.role === 'observer'
 
   const readyLabel = sync.teamCommsReady
     ? isObserver
@@ -64,10 +97,17 @@ export default function MissionTeamComms({ isObserver }: Props) {
       : 'Works on local mesh without cell service when teammates are linked.'
     : isObserver
       ? 'Connect to the field mission to hear team messages.'
-      : 'Link a teammate (mission code or bundle) to enable mesh messages.'
+      : inCommsRole
+        ? 'Mission active — messages queue until a teammate links (mission code or join bundle above).'
+        : 'Link a teammate (mission code or bundle) to enable mesh messages.'
 
   const send = (body: string, to?: string) => {
-    if (to && !teammates.find((t) => t.callsign === to)?.meshLinked) {
+    if (multiTargets.length > 0) {
+      sync.sendTeamBurstMany(body, multiTargets)
+      setText('')
+      return
+    }
+    if (to && !linkedTeammates.some((t) => t.callsign === to)) {
       return
     }
     sync.sendTeamBurst(body, to)
@@ -77,6 +117,16 @@ export default function MissionTeamComms({ isObserver }: Props) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: touchGapSm(isMobile) }}>
       <p style={{ color: '#94a3b8', margin: 0, lineHeight: 1.45, fontSize: '0.88em' }}>{readyLabel}</p>
+      {sync.queuedBurstCount > 0 ? (
+        <p style={{ color: '#fde68a', margin: 0, fontSize: '0.82em' }}>
+          {sync.queuedBurstCount} message{sync.queuedBurstCount === 1 ? '' : 's'} queued — sends when mesh or relay returns.
+        </p>
+      ) : null}
+      {sync.linkRecoveryPending ? (
+        <p style={{ color: '#94a3b8', margin: 0, fontSize: '0.82em' }}>
+          Reconnecting mission link…
+        </p>
+      ) : null}
       {sync.missionCommsPrefs.handsFree ? (
         <p style={{ color: '#64748b', margin: 0, fontSize: '0.82em' }}>
           Hands-free confirm enabled — say accept to send after voice compose.
@@ -101,44 +151,75 @@ export default function MissionTeamComms({ isObserver }: Props) {
           <button
             type="button"
             style={btnStyle(true, !targetCallsign)}
-            disabled={!sync.teamCommsReady}
+            disabled={!inCommsRole}
             onClick={() => {
               setTargetCallsign('')
+              setMultiTargets([])
               sync.clearActiveCommsTarget()
             }}
           >
             Whole mission
           </button>
-          {teammates.map((t) => (
+          {linkedTeammates.map((t) => (
             <button
               key={t.deviceId}
               type="button"
-              style={btnStyle(false, targetCallsign === t.callsign)}
-              disabled={!sync.teamCommsReady && !t.onMap}
-              title={
-                t.meshLinked
-                  ? 'Mesh linked — tap map marker to message'
-                  : 'On map — link mission to send'
-              }
-              onClick={() => {
+              style={btnStyle(
+                false,
+                targetCallsign === t.callsign || multiTargets.includes(t.callsign),
+              )}
+              disabled={!inCommsRole}
+              title="Tap to select · Shift+tap for multi-select"
+              onClick={(e) => {
+                if (e.shiftKey) {
+                  setTargetCallsign('')
+                  setMultiTargets((prev) =>
+                    prev.includes(t.callsign)
+                      ? prev.filter((c) => c !== t.callsign)
+                      : [...prev, t.callsign],
+                  )
+                  return
+                }
+                setMultiTargets([])
                 setTargetCallsign(t.callsign)
                 sync.openCommsForTeammate(t.deviceId, t.callsign)
               }}
             >
               {t.callsign}
               {t.onMap ? ' 📍' : ''}
-              {!t.meshLinked ? ' (link)' : ''}
             </button>
           ))}
+          {mapOnlyTeammates.length > 0 ? (
+            <span style={{ fontSize: '0.78em', color: '#64748b', lineHeight: 1.35 }}>
+              On map only (link mission to send): {mapOnlyTeammates.map((t) => t.callsign).join(', ')}
+            </span>
+          ) : null}
         </div>
       ) : null}
 
-      {targetCallsign && !canSendToTarget ? (
+      {multiTargets.length > 0 ? (
+        <p style={{ color: '#94a3b8', margin: 0, fontSize: '0.82em' }}>
+          Sending to: {multiTargets.join(', ')} (Shift+tap teammates to adjust)
+        </p>
+      ) : null}
+
+      {targetCallsign && !canSendToTarget && multiTargets.length === 0 ? (
         <p style={{ color: '#fbbf24', margin: 0, fontSize: '0.85em', lineHeight: 1.4 }}>
           {targetCallsign} is on your map but not mesh-linked — use Mission Link above to finish joining.
         </p>
       ) : null}
 
+      {thread.length > 0 ? (
+        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <button
+            type="button"
+            style={{ ...btnStyle(), padding: '4px 10px', minHeight: 32 }}
+            onClick={() => sync.clearMissionLog()}
+          >
+            Clear mission log
+          </button>
+        </div>
+      ) : null}
       {thread.length > 0 ? (
         <ul
           style={{
@@ -177,7 +258,7 @@ export default function MissionTeamComms({ isObserver }: Props) {
                 key={phrase}
                 type="button"
                 style={btnStyle()}
-                disabled={!sync.teamCommsReady || !canSendToTarget}
+                disabled={!inCommsRole || !canSendToTarget}
                 onClick={() => send(phrase, targetCallsign.trim() || undefined)}
               >
                 {phrase}
@@ -187,7 +268,7 @@ export default function MissionTeamComms({ isObserver }: Props) {
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
             <MissionVoiceRecordButton
               toCallsign={targetCallsign.trim() || undefined}
-              disabled={!sync.teamCommsReady || !canSendToTarget}
+              disabled={!inCommsRole || !canSendToTarget}
             />
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
@@ -195,10 +276,14 @@ export default function MissionTeamComms({ isObserver }: Props) {
               value={text}
               onChange={(e) => setText(e.target.value)}
               placeholder={
-                targetCallsign ? `Message ${targetCallsign}…` : 'Message whole mission…'
+                multiTargets.length > 0
+                  ? `Message ${recipientLabel}…`
+                  : targetCallsign
+                    ? `Message ${targetCallsign}…`
+                    : 'Message whole mission…'
               }
               maxLength={BURST_MAX_CHARS}
-              disabled={!sync.teamCommsReady || !canSendToTarget}
+              disabled={!inCommsRole || !canSendToTarget}
               style={{
                 flex: 1,
                 padding: '8px 10px',
@@ -211,8 +296,10 @@ export default function MissionTeamComms({ isObserver }: Props) {
             <button
               type="button"
               style={btnStyle(true)}
-              disabled={!sync.teamCommsReady || !canSendToTarget || !text.trim()}
-              onClick={() => send(text, targetCallsign.trim() || undefined)}
+              disabled={!inCommsRole || !canSendToTarget || !text.trim()}
+              onClick={() =>
+                send(text, multiTargets.length > 0 ? undefined : targetCallsign.trim() || undefined)
+              }
             >
               Send
             </button>
@@ -220,7 +307,7 @@ export default function MissionTeamComms({ isObserver }: Props) {
           <button
             type="button"
             style={btnStyle(true)}
-            disabled={!sync.teamCommsReady}
+            disabled={!inCommsRole}
             onClick={() => sync.sendTeamCheckIn()}
           >
             Send check-in OK

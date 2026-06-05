@@ -42,7 +42,7 @@ describe('missionSyncDerived', () => {
   it('filters stale check-ins in derived comms slice', () => {
     const now = Date.now()
     const { teamCheckIns } = computeFilteredTeamComms(
-      [{ deviceId: 'd', callsign: 'A', sentAt: now - 400_000 }],
+      [{ deviceId: 'd', callsign: 'A', sentAt: now - 4_000_000 }],
       [],
     )
     expect(teamCheckIns).toHaveLength(0)

@@ -1,4 +1,5 @@
 import type { CSSProperties } from 'react'
+import { useState } from 'react'
 import HudPanel from './HudPanel'
 import { useAppContext } from '../context/AppContext'
 import { useCockpit } from '../context/CockpitContext'
@@ -32,6 +33,24 @@ const sectionLabelStyle: CSSProperties = {
   margin: 0,
 }
 
+function overlayLayerStatusLine(
+  st:
+    | {
+        loading?: boolean
+        fromCache?: boolean
+        error?: string | null
+        stale?: boolean
+      }
+    | undefined,
+  checked: boolean,
+): string | null {
+  if (st?.error) return st.error
+  if (st?.loading) return 'Loading…'
+  if (st?.fromCache || st?.stale) return 'Degraded — cached data'
+  if (checked) return 'Syncing…'
+  return null
+}
+
 export default function LayerPanel() {
   const { state, setLayer } = useAppContext()
   const { activeLayer } = state
@@ -46,6 +65,7 @@ export default function LayerPanel() {
   const gapMd = touchGapMd(isMobile)
   const tapMin = touchMinTarget(isMobile)
   const firmsReady = firmsMapKeyConfigured()
+  const [envExpanded, setEnvExpanded] = useState(false)
 
   const sliderStyle: CSSProperties = {
     width: '100%',
@@ -151,7 +171,26 @@ export default function LayerPanel() {
             paddingTop: gapMd,
           }}
         >
-          <p style={sectionLabelStyle}>SITUATIONAL OVERLAYS</p>
+          <button
+            type="button"
+            data-no-drag
+            onClick={() => setEnvExpanded((v) => !v)}
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              padding: 0,
+              border: 'none',
+              background: 'transparent',
+              cursor: 'pointer',
+              textAlign: 'left',
+            }}
+          >
+            <p style={sectionLabelStyle}>SITUATIONAL OVERLAYS</p>
+            <span style={{ fontSize: fontSm, color: '#9ea7a0' }}>{envExpanded ? '−' : '+'}</span>
+          </button>
+          {envExpanded ? (
+            <>
           <p style={{ margin: 0, fontSize: fontSm, color: '#8a948c', lineHeight: 1.4 }}>
             Drawn over the basemap. Does not change Streets/Topo/Outdoor/Satellite. OSM layers cache
             in this view for offline; raster layers need network. Zoom in if a layer says level 10+.
@@ -181,6 +220,7 @@ export default function LayerPanel() {
           {ENVIRONMENTAL_OVERLAY_CATALOG.map((def) => {
             const st = status[def.id]
             const checked = toggles[def.id]
+            const statusLine = overlayLayerStatusLine(st, checked)
             return (
               <label
                 key={def.id}
@@ -211,15 +251,16 @@ export default function LayerPanel() {
                     {def.label}
                   </span>
                   <span style={{ fontSize: fontSm, color: '#9ea7a0' }}>{def.hint}</span>
-                  {st?.loading && (
-                    <span style={{ fontSize: fontSm, color: '#9ea7a0' }}>Loading…</span>
-                  )}
-                  {st?.fromCache && (
-                    <span style={{ fontSize: fontSm, color: '#ffd166' }}>Cached / stale</span>
-                  )}
-                  {st?.error && (
-                    <span style={{ fontSize: fontSm, color: '#ff9aac' }}>{st.error}</span>
-                  )}
+                  {statusLine ? (
+                    <span
+                      style={{
+                        fontSize: fontSm,
+                        color: st?.error ? '#ff9aac' : st?.fromCache || st?.stale ? '#ffd166' : '#94a3b8',
+                      }}
+                    >
+                      {statusLine}
+                    </span>
+                  ) : null}
                   {def.signupUrl && !checked && (
                     <a
                       href={def.signupUrl}
@@ -238,6 +279,12 @@ export default function LayerPanel() {
           <p style={{ margin: 0, fontSize: 11, color: '#7a827a', lineHeight: 1.35 }}>
             Data: NASA FIRMS, USGS, USFS, BLM, OpenStreetMap. Planning aids only — verify locally.
           </p>
+            </>
+          ) : (
+            <p style={{ margin: 0, fontSize: fontSm, color: '#8a948c', lineHeight: 1.4 }}>
+              Collapsed — expand to toggle fire, topo, trails, and other situational layers.
+            </p>
+          )}
         </section>
 
         <section

@@ -12,6 +12,7 @@ import {
 } from './runtime/runtimeSnapshot'
 import { installHudSystemHealth } from './runtime/hudSystemHealth'
 import { installWcelDiagnostics } from './lib/wearables/wcel/store'
+import { installDcrlRuntime } from './runtime/dcrlRuntime'
 import { logInfo, logWarn } from './runtime/logger'
 import { getDeviceProfile } from './runtime/deviceProfile'
 import { reportPolicyAttempt } from './runtime/devicePolicy'
@@ -62,6 +63,7 @@ if (import.meta.env.DEV && typeof window !== 'undefined') {
 installRuntimeSnapshot()
 installHudSystemHealth()
 installWcelDiagnostics()
+installDcrlRuntime()
 if (import.meta.env.DEV) {
   void import('./runtime/RuntimeDebugOverlay').then(({ mountRuntimeDebugOverlay }) => {
     mountRuntimeDebugOverlay()

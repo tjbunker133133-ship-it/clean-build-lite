@@ -6,8 +6,14 @@ function readViteEnv(name: string): string {
   ).trim()
 }
 
+/** Read any Vite environment variable by name. */
+export function readEnvKey(name: string): string {
+  return readViteEnv(name)
+}
+
+/** @deprecated Use readEnvKey('VITE_FIRMS_MAP_KEY') for new code. */
 export function readFirmsMapKey(): string {
-  return readViteEnv('VITE_FIRMS_MAP_KEY')
+  return readEnvKey('VITE_FIRMS_MAP_KEY')
 }
 
 /** True when Vite inlined a FIRMS MAP_KEY at build time (production needs Vercel env + redeploy). */

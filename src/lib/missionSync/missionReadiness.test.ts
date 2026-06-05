@@ -52,7 +52,7 @@ describe('missionReadiness', () => {
       online: true,
     })
     const conn = r.checks.find((c) => c.id === 'connection')
-    expect(conn?.detail).toContain('Relay-only')
+    expect(conn?.detail).toContain('Relay linked')
     expect(conn?.severity).toBe('ok')
   })
 

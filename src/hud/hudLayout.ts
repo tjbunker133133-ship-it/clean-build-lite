@@ -32,6 +32,13 @@ export function teamCommsToastBottomCss(): string {
   return `calc(env(safe-area-inset-bottom, 0px) + ${lift}px)`
 }
 
+/** Canonical z-index stack: map < route < HUD panels < status rail < comms toast */
+export const HUD_Z_MAP = 0
+export const HUD_Z_ROUTE = 10
+export const HUD_Z_PANEL = 300
+export const HUD_Z_STATUS_RAIL = 204
+export const HUD_Z_TEAM_COMMS = 211
+
 /** Bottom-left field status card — clear dock peek strips and arrival strip on phones. */
 export function fieldStatusRailBottomCss(): string {
   const p = getDeviceProfile()

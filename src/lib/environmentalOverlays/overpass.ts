@@ -57,6 +57,9 @@ export function overpassQuery(id: EnvironmentalOverlayId, bbox: MapBbox): string
       return `[out:json][timeout:${timeout}];(node["man_made"="mineshaft"](${box});node["historic"="mine"](${box});way["man_made"="adit"](${box});way["abandoned"="mine"](${box}););out geom 80;`
     case 'hiking_trails':
       return `[out:json][timeout:${timeout}];(way["highway"~"path|footway"](${box})["sac_scale"];way["route"="hiking"](${box});way["highway"="path"]["foot"~"designated|yes"](${box}););out geom 120;`
+    case 'camping':
+      // Fetch both nodes (campground points) and ways/relations (dispersed camping zones)
+      return `[out:json][timeout:${timeout}];(node["tourism"="camp_site"](${box});way["tourism"="camp_site"](${box});relation["tourism"="camp_site"](${box}););out geom 100;`
     default:
       return null
   }
@@ -69,7 +72,51 @@ type OverpassElement = {
   geometry?: { lat: number; lon: number }[]
 }
 
-function elementToFeature(el: OverpassElement): GeoJSON.Feature | null {
+function elementToFeature(el: OverpassElement, id?: EnvironmentalOverlayId): GeoJSON.Feature | null {
+  // Camping overlay: handle nodes as Points, ways/relations as Polygons
+  if (id === 'camping') {
+    // Nodes become Point markers (official campgrounds)
+    if (el.type === 'node' && el.geometry && el.geometry.length === 1) {
+      const p = el.geometry[0]
+      const name = el.tags?.name?.trim()
+      const siteType = el.tags?.['camp_site'] ?? el.tags?.['site_type'] ?? ''
+      const capacity = el.tags?.capacity ?? ''
+      return {
+        type: 'Feature',
+        properties: {
+          name: name ?? '',
+          osm_id: el.id,
+          feature_type: 'campground',
+          site_type: siteType,
+          capacity: capacity,
+        },
+        geometry: { type: 'Point', coordinates: [p.lon, p.lat] },
+      }
+    }
+    // Ways/relations become Polygons (dispersed camping zones)
+    if ((el.type === 'way' || el.type === 'relation') && el.geometry && el.geometry.length >= 3) {
+      const coords = el.geometry.map((p) => [p.lon, p.lat] as [number, number])
+      // Close polygon if not closed
+      if (coords[0][0] !== coords[coords.length - 1][0] || coords[0][1] !== coords[coords.length - 1][1]) {
+        coords.push(coords[0])
+      }
+      const name = el.tags?.name?.trim()
+      const siteType = el.tags?.['camp_site'] ?? el.tags?.['site_type'] ?? ''
+      return {
+        type: 'Feature',
+        properties: {
+          name: name ?? 'Dispersed Camping Area',
+          osm_id: el.id,
+          feature_type: 'dispersed_zone',
+          site_type: siteType,
+        },
+        geometry: { type: 'Polygon', coordinates: [coords] },
+      }
+    }
+    return null
+  }
+
+  // Standard handling for other overlays (ways as LineString)
   if (el.type !== 'way' || !el.geometry || el.geometry.length < 2) return null
   const coords = el.geometry.map((p) => [p.lon, p.lat] as [number, number])
   const name = el.tags?.name?.trim()
@@ -80,7 +127,7 @@ function elementToFeature(el: OverpassElement): GeoJSON.Feature | null {
   }
 }
 
-export function overpassToGeojson(raw: unknown): GeoJSON.FeatureCollection {
+export function overpassToGeojson(raw: unknown, id?: EnvironmentalOverlayId): GeoJSON.FeatureCollection {
   if (!raw || typeof raw !== 'object') {
     return { type: 'FeatureCollection', features: [] }
   }
@@ -90,7 +137,7 @@ export function overpassToGeojson(raw: unknown): GeoJSON.FeatureCollection {
   }
   const features: GeoJSON.Feature[] = []
   for (const el of elements) {
-    const f = elementToFeature(el)
+    const f = elementToFeature(el, id)
     if (f) features.push(f)
   }
   return { type: 'FeatureCollection', features }
@@ -140,7 +187,7 @@ export async function fetchOverpassGeojson(
     for (const endpoint of OVERPASS_ENDPOINTS) {
       try {
         const json = await postOverpass(endpoint, q, signal)
-        return overpassToGeojson(json)
+        return overpassToGeojson(json, id)
       } catch (e) {
         lastErr = e
         if (signal?.aborted) throw e

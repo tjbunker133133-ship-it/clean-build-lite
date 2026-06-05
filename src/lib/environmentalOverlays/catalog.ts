@@ -85,6 +85,16 @@ export const ENVIRONMENTAL_OVERLAY_CATALOG: EnvironmentalOverlayDef[] = [
     attribution: 'OpenStreetMap contributors',
     minZoom: 11,
   },
+  {
+    id: 'camping',
+    label: 'Camping areas',
+    hint: 'Campgrounds & dispersed camping zones · cached when offline',
+    delivery: 'geojson-overpass',
+    onlinePreferred: false,
+    offlineCacheable: true,
+    attribution: 'OpenStreetMap contributors',
+    minZoom: 9,
+  },
 ]
 
 export const ENVIRONMENTAL_OVERLAY_IDS: EnvironmentalOverlayId[] = ENVIRONMENTAL_OVERLAY_CATALOG.map(

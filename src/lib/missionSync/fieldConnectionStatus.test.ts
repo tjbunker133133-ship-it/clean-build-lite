@@ -29,7 +29,7 @@ describe('fieldConnectionStatus', () => {
       teamCommsReady: true,
       mapReady: false,
     })
-    expect(s.label).toBe('Relay-only · internet link')
+    expect(s.label).toBe('Relay linked · team comms active')
     expect(s.live).toBe(true)
     expect(s.supplement).toContain('internet relay')
   })
@@ -44,7 +44,7 @@ describe('fieldConnectionStatus', () => {
       monitorTransport: 'relay',
     })
     expect(s.label).toBe('Monitor · relay linked')
-    expect(s.supplement).toContain('not live')
+    expect(s.supplement).toContain('Team comms active')
   })
 
   it('includes transport supplement when observer is live', () => {

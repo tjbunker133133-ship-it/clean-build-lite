@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import HudPanel from './HudPanel'
 import { useMissionSync } from '../context/MissionSyncContext'
+import { useCockpit } from '../context/CockpitContext'
 import {
   readMissionBundleFromClipboard,
   shareBundleResultMessage,
@@ -8,13 +9,18 @@ import {
 } from '../lib/missionSync/shareBundle'
 import { formatJoinCode, isValidJoinCodeInput } from '../lib/missionSync/joinCode'
 import { filterTeammatePresence } from '../lib/missionSync/presence'
-import { missionPacketToQrDataUrl, scanMissionPacketFromCamera } from '../lib/missionSync/qr'
+import { missionPacketToQrDataUrl, scanMissionPacketWithPreview } from '../lib/missionSync/qr'
 import { isMissionTurnConfigured } from '../lib/missionSync/turnConfig'
 import { FIELD_WALK_WATCHER_STEPS, fieldWalkWatcherSummary } from '../lib/missionSync/fieldTestGuide'
 import { formatPresenceAge, monitorTransportLabel } from '../lib/missionSync/monitorUx'
 import MissionTeamComms from './MissionTeamComms'
 import MissionReadinessStrip from './MissionReadinessStrip'
+import {
+  deriveMissionConnectionTier,
+  missionConnectionTierLabel,
+} from '../lib/missionSync/fieldConnectionStatus'
 import { getDeviceProfile } from '../runtime/deviceProfile'
+import { dockTopOffsetPx } from './hudLayout'
 import { touchFontSm, touchGapMd, touchGapSm, touchMinTarget } from './tokens'
 
 function btnStyle(primary = false, danger = false): React.CSSProperties {
@@ -92,6 +98,7 @@ function StepCard({
 
 export default function MissionLinkPanel() {
   const sync = useMissionSync()
+  const { panels, updatePanel } = useCockpit()
   const isMobile = getDeviceProfile().interactionMode === 'mobile'
   const fontSm = touchFontSm(isMobile)
   const [missionNameInput, setMissionNameInput] = useState(sync.missionName)
@@ -99,12 +106,39 @@ export default function MissionLinkPanel() {
   const [pasteAnswer, setPasteAnswer] = useState('')
   const [joinCodeInput, setJoinCodeInput] = useState('')
   const [qrUrl, setQrUrl] = useState<string | null>(null)
-  const [scanning, setScanning] = useState(false)
   const [pasteMonitor, setPasteMonitor] = useState('')
   const [monitorMissionId, setMonitorMissionId] = useState('')
   const [monitorToken, setMonitorToken] = useState('')
   const [pasteObserverAnswer, setPasteObserverAnswer] = useState('')
   const [linkHelp, setLinkHelp] = useState<string | null>(null)
+  const [shareWatchBusy, setShareWatchBusy] = useState(false)
+  const [scanMode, setScanMode] = useState<'host-offer' | 'host-answer' | null>(null)
+  const [scanError, setScanError] = useState<string | null>(null)
+  const scanVideoRef = useRef<HTMLVideoElement>(null)
+  const scanAbortRef = useRef<AbortController | null>(null)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const layout = panels.missionLink
+    const vw = window.innerWidth
+    const vh = window.innerHeight
+    const w = layout?.w ?? 360
+    const offScreen =
+      !layout ||
+      layout.x > vw - 48 ||
+      layout.y > vh - 48 ||
+      layout.x + w < 48 ||
+      layout.y < 24
+    if (offScreen) {
+      updatePanel('missionLink', {
+        x: 16,
+        y: dockTopOffsetPx() + 180,
+        w: Math.min(360, vw - 32),
+        minimized: false,
+        docked: false,
+      })
+    }
+  }, [panels.missionLink, updatePanel])
 
   const fieldPeers = useMemo(
     () => sync.peers.filter((p) => p.linkRole === 'member'),
@@ -125,6 +159,8 @@ export default function MissionLinkPanel() {
   const isFieldMember = sync.role === 'member'
   const lanReady = sync.nativeLink.available
   const codeJoinReady = sync.joinCodeSignalingAvailable || lanReady
+  const showJoinControls =
+    !isObserver && (!inMission || (inMission && !fieldLinked && !sync.isMissionHost))
 
   const phaseLabel = useMemo(() => {
     if (isObserver) {
@@ -150,6 +186,7 @@ export default function MissionLinkPanel() {
     if (sync.phase === 'awaiting-joiner') return 'Waiting for teammate to join'
     if (sync.phase === 'awaiting-host-answer') return 'Connecting to mission host…'
     if (sync.phase === 'connecting') return 'Joining mission…'
+    if (sync.phase === 'failed') return 'Link failed — retry below'
     if (inMission) return 'Mission active — finishing link…'
     return 'Not in a mission'
   }, [
@@ -218,6 +255,7 @@ export default function MissionLinkPanel() {
         setLinkHelp('Nothing to share yet — start a mission or tap Prepare link for next teammate.')
         return
       }
+      setLinkHelp('Opening share…')
       const result = await shareMissionBundle(text, {
         title: label,
         alsoCopy: false,
@@ -249,23 +287,59 @@ export default function MissionLinkPanel() {
     [],
   )
 
-  const runScan = useCallback(
-    async (target: 'host-offer' | 'host-answer') => {
-      setScanning(true)
-      try {
-        const hit = await scanMissionPacketFromCamera()
-        if (!hit?.raw) return
-        if (target === 'host-offer') {
-          await sync.startJoinMission(hit.raw)
+  const runScan = useCallback((target: 'host-offer' | 'host-answer') => {
+    setScanError(null)
+    setScanMode(target)
+  }, [])
+
+  const cancelScan = useCallback(() => {
+    scanAbortRef.current?.abort()
+    scanAbortRef.current = null
+    setScanMode(null)
+    setScanError(null)
+  }, [])
+
+  useEffect(() => {
+    if (!scanMode) return
+    let cancelled = false
+    const ac = new AbortController()
+    scanAbortRef.current = ac
+
+    const run = async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+      })
+      const video = scanVideoRef.current
+      if (!video || cancelled) return
+      const result = await scanMissionPacketWithPreview(video, ac.signal)
+      if (cancelled) return
+      if (result.ok) {
+        setScanError(null)
+        if (scanMode === 'host-offer') {
+          await sync.startJoinMission(result.raw)
         } else {
-          await sync.applyJoinerAnswer(hit.raw)
+          await sync.applyJoinerAnswer(result.raw)
         }
-      } finally {
-        setScanning(false)
+        setScanMode(null)
+        return
       }
-    },
-    [sync],
-  )
+      if (result.reason !== 'cancelled') {
+        setScanError(result.message)
+      }
+      setScanMode(null)
+    }
+
+    void run().catch(() => {
+      if (!cancelled) setScanError('Camera scan failed — paste join bundle instead.')
+      setScanMode(null)
+    })
+
+    return () => {
+      cancelled = true
+      ac.abort()
+      scanAbortRef.current = null
+    }
+  }, [scanMode, sync])
 
   const runLanJoin = useCallback(async () => {
     await sync.discoverMissionOnLan(joinCodeInput)
@@ -274,6 +348,34 @@ export default function MissionLinkPanel() {
   const joinCodePreview = isValidJoinCodeInput(joinCodeInput)
     ? formatJoinCode(joinCodeInput)
     : null
+
+  const connectionTier = useMemo(
+    () =>
+      deriveMissionConnectionTier({
+        role: sync.role,
+        online: typeof navigator !== 'undefined' ? navigator.onLine : true,
+        peerCount: sync.peers.length,
+        teamCommsReady: sync.teamCommsReady,
+        linkRecoveryPending: sync.linkRecoveryPending,
+        relayLinkState: sync.relayLinkState,
+        phase: sync.phase,
+      }),
+    [
+      sync.role,
+      sync.peers.length,
+      sync.teamCommsReady,
+      sync.linkRecoveryPending,
+      sync.relayLinkState,
+      sync.phase,
+    ],
+  )
+
+  const tierColor =
+    connectionTier === 'connected'
+      ? '#86efac'
+      : connectionTier === 'degraded'
+        ? '#fde68a'
+        : '#94a3b8'
 
   return (
     <HudPanel panelId="missionLink" title="Mission Link" initialPos={{ x: 16, y: 420 }} initialWidth={360}>
@@ -285,7 +387,86 @@ export default function MissionLinkPanel() {
           </p>
         ) : null}
 
-        <MissionReadinessStrip mode={inMission ? 'in-mission' : 'pre-mission'} />
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 8,
+            padding: '8px 10px',
+            borderRadius: 8,
+            border: `1px solid ${tierColor}55`,
+            background: 'rgba(8, 12, 14, 0.85)',
+          }}
+        >
+          <span style={{ color: tierColor, fontWeight: 800, fontSize: 12, letterSpacing: '0.08em' }}>
+            MISSION LINK · {missionConnectionTierLabel(connectionTier).toUpperCase()}
+          </span>
+          <span style={{ color: '#64748b', fontSize: '0.82em' }}>{phaseLabel}</span>
+        </div>
+
+        <details>
+          <summary style={{ color: '#64748b', cursor: 'pointer', fontSize: '0.88em' }}>
+            Diagnostics & readiness
+          </summary>
+          <div style={{ marginTop: 8 }}>
+            <MissionReadinessStrip mode={inMission ? 'in-mission' : 'pre-mission'} />
+          </div>
+        </details>
+
+        {sync.phase === 'failed' ? (
+          <div
+            style={{
+              padding: '10px 12px',
+              borderRadius: 8,
+              border: '1px solid rgba(251, 191, 36, 0.45)',
+              background: 'rgba(69, 52, 8, 0.35)',
+            }}
+          >
+            <p style={{ color: '#fde68a', margin: '0 0 8px', lineHeight: 1.45, fontSize: '0.92em' }}>
+              Link did not complete. Keep host Mission Link open on the same Wi‑Fi, then retry.
+            </p>
+            <button type="button" style={{ ...btnStyle(true), width: '100%' }} onClick={() => sync.retryMissionLink()}>
+              Retry join
+            </button>
+          </div>
+        ) : null}
+
+        {scanMode ? (
+          <div
+            style={{
+              display: 'grid',
+              gap: 8,
+              padding: '10px 12px',
+              borderRadius: 10,
+              border: '1px solid rgba(94, 234, 212, 0.35)',
+              background: 'rgba(8, 12, 14, 0.92)',
+            }}
+          >
+            <div style={{ color: '#a7f3d0', fontWeight: 700, fontSize: 12 }}>Point camera at join QR</div>
+            <video
+              ref={scanVideoRef}
+              playsInline
+              muted
+              autoPlay
+              style={{
+                width: '100%',
+                maxHeight: 240,
+                borderRadius: 8,
+                background: '#000',
+                objectFit: 'cover',
+              }}
+            />
+            {scanError ? (
+              <p style={{ color: '#fbbf24', margin: 0, fontSize: '0.88em', lineHeight: 1.45 }}>{scanError}</p>
+            ) : (
+              <p style={{ color: '#64748b', margin: 0, fontSize: '0.85em' }}>Live preview — hold QR in frame</p>
+            )}
+            <button type="button" style={{ ...btnStyle(), width: '100%' }} onClick={cancelScan}>
+              Cancel scan
+            </button>
+          </div>
+        ) : null}
 
         {!inMission ? (
           <div
@@ -299,7 +480,7 @@ export default function MissionLinkPanel() {
             }}
           >
             <div style={{ color: '#a7f3d0', fontWeight: 800, fontSize: 12, letterSpacing: '0.08em' }}>
-              QUICK START
+              HOST MISSION
             </div>
             <button
               type="button"
@@ -307,7 +488,7 @@ export default function MissionLinkPanel() {
               disabled={!sync.supported}
               onClick={() => void sync.startMission(missionNameInput)}
             >
-              1 · Start field mission (host)
+              Start new mission (host)
             </button>
             <p style={{ color: '#64748b', margin: 0, fontSize: '0.88em', lineHeight: 1.4 }}>
               Same Wi‑Fi hotspot for everyone. Host shares the mission code or join link; teammates
@@ -330,8 +511,6 @@ export default function MissionLinkPanel() {
               ? ' · Rebuild APK if Bluetooth/Nearby missing'
               : ' · Browser: Share / QR / paste'}
         </p>
-
-        <div style={{ color: '#5eead4', fontWeight: 700, fontSize: 13 }}>{phaseLabel}</div>
 
         {isFieldMember && inMission ? (
           <div
@@ -457,9 +636,20 @@ export default function MissionLinkPanel() {
               >
                 Start new mission
               </button>
-              <p style={{ color: '#64748b', margin: '10px 0 8px', fontSize: '0.92em' }}>
-                Or join a teammate&apos;s mission (your callsign is yours only — only the code must match
-                the host):
+            </StepCard>
+          </>
+        ) : null}
+
+        {showJoinControls ? (
+          <StepCard
+            step={inMission ? 1 : 1}
+            title={inMission ? 'Join host mission' : 'Join a mission'}
+            active
+          >
+              <p style={{ color: '#64748b', margin: '0 0 8px', fontSize: '0.92em' }}>
+                {inMission
+                  ? 'Not mesh-linked yet — enter the host code, scan QR, or paste join bundle:'
+                  : 'Join a teammate\'s mission (your callsign is yours only — only the code must match the host):'}
               </p>
               <input
                 value={joinCodeInput}
@@ -480,7 +670,7 @@ export default function MissionLinkPanel() {
               />
               {joinCodePreview && !codeJoinBusy ? (
                 <div style={{ color: '#94a3b8', fontSize: '0.88em', marginTop: 6, textAlign: 'center' }}>
-                  Code entered: <strong style={{ color: '#5eead4' }}>{joinCodePreview}</strong> — tap Join below
+                  Code entered: <strong style={{ color: '#5eead4' }}>{joinCodePreview}</strong> — tap below to join
                 </div>
               ) : null}
               {codeJoinBusy ? (
@@ -493,18 +683,31 @@ export default function MissionLinkPanel() {
               <button
                 type="button"
                 style={{ ...btnStyle(true), width: '100%', marginTop: 10 }}
-                disabled={!isValidJoinCodeInput(joinCodeInput) || codeJoinBusy || !codeJoinReady}
-                onClick={() => void runLanJoin()}
+                disabled={
+                  codeJoinBusy ||
+                  (codeJoinReady ? !isValidJoinCodeInput(joinCodeInput) : false)
+                }
+                onClick={() => {
+                  if (codeJoinReady) {
+                    void runLanJoin()
+                    return
+                  }
+                  if (pasteHost.trim()) {
+                    void sync.startJoinMission(pasteHost.trim())
+                    return
+                  }
+                  runScan('host-offer')
+                }}
               >
                 {codeJoinBusy
                   ? 'Connecting…'
                   : codeJoinReady
-                    ? 'Join with mission code'
-                    : 'Code join unavailable'}
+                    ? 'Tap to join mission'
+                    : 'Scan QR or paste join bundle'}
               </button>
               {!codeJoinReady ? (
                 <p style={{ color: '#fbbf24', margin: '8px 0 0', fontSize: '0.88em', lineHeight: 1.45 }}>
-                  Mission code needs production Supabase (Wi‑Fi + internet). Or paste join bundle below.
+                  Wi‑Fi code join needs production Supabase. Use paste bundle or scan QR below.
                 </p>
               ) : (
                 <p style={{ color: '#64748b', margin: '8px 0 0', fontSize: '0.88em', lineHeight: 1.45 }}>
@@ -542,15 +745,17 @@ export default function MissionLinkPanel() {
                 >
                   Join from bundle
                 </button>
-                <button type="button" style={btnStyle()} disabled={scanning} onClick={() => void runScan('host-offer')}>
-                  {scanning ? 'Scanning…' : 'Scan join QR'}
+                <button type="button" style={btnStyle()} disabled={Boolean(scanMode)} onClick={() => runScan('host-offer')}>
+                  {scanMode === 'host-offer' ? 'Scanning…' : 'Scan join QR'}
                 </button>
                 <button type="button" style={btnStyle()} onClick={() => void tryClipboardIntoBox('host')}>
                   Try auto-paste
                 </button>
               </div>
-            </StepCard>
+          </StepCard>
+        ) : null}
 
+        {!inMission ? (
             <StepCard step={2} title="Watch someone (live map link)" active>
               <p style={{ color: '#94a3b8', margin: 0, lineHeight: 1.45, fontSize: '0.92em' }}>
                 They tap <strong style={{ color: '#cbd5e1' }}>Share live map link</strong> and text you one
@@ -631,7 +836,6 @@ export default function MissionLinkPanel() {
                 </button>
               </details>
             </StepCard>
-          </>
         ) : null}
 
         {isObserver ? (
@@ -679,7 +883,7 @@ export default function MissionLinkPanel() {
           </StepCard>
         ) : null}
 
-        {isFieldMember && inMission && !linked ? (
+        {sync.isMissionHost && inMission ? (
           <>
             <StepCard step={2} title="Share mission code" active={sync.phase === 'awaiting-joiner'} done={linked}>
               {sync.joinCode ? (
@@ -697,8 +901,36 @@ export default function MissionLinkPanel() {
               ) : null}
               {sync.pendingOfferEncoded ? (
                 <div style={{ marginTop: 10, display: 'grid', gap: 8 }}>
+                  <button
+                    type="button"
+                    style={{ ...btnStyle(true), width: '100%' }}
+                    onClick={() =>
+                      void shareBundle(sync.pendingOfferEncoded, 'Signal One — join mission')
+                    }
+                  >
+                    Connect device
+                  </button>
                   {qrUrl ? (
-                    <img src={qrUrl} alt="Join QR" style={{ width: 180, height: 180, alignSelf: 'center' }} />
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void shareBundle(sync.pendingOfferEncoded, 'Signal One — join mission')
+                      }
+                      style={{
+                        border: 'none',
+                        background: 'transparent',
+                        padding: 0,
+                        cursor: 'pointer',
+                        display: 'grid',
+                        gap: 6,
+                        justifyItems: 'center',
+                      }}
+                    >
+                      <img src={qrUrl} alt="Join QR — tap to share" style={{ width: 180, height: 180 }} />
+                      <span style={{ color: '#5eead4', fontSize: '0.88em', fontWeight: 700 }}>
+                        Tap QR to share join link
+                      </span>
+                    </button>
                   ) : (
                     <span style={{ color: '#94a3b8' }}>
                       QR skipped — teammates use the mission code above (no paste).
@@ -808,11 +1040,13 @@ export default function MissionLinkPanel() {
               </p>
             ) : null}
             <MissionTeamComms isObserver={sync.role === 'observer'} />
-            {monitorPeers.length > 0 ? (
+            {sync.watcherRoster.length > 0 ? (
               <p style={{ color: '#94a3b8', margin: '12px 0 0', fontSize: '0.88em' }}>
                 Watchers:{' '}
                 <strong style={{ color: '#bae6fd' }}>
-                  {monitorPeers.map((p) => p.callsign?.trim() || 'Watcher').join(', ')}
+                  {sync.watcherRoster
+                    .map((w) => (w.live ? w.callsign : `${w.callsign} (relay)`))
+                    .join(', ')}
                 </strong>
               </p>
             ) : null}
@@ -831,14 +1065,20 @@ export default function MissionLinkPanel() {
           <StepCard step={4} title="Let someone watch you" active>
             <p style={{ color: '#94a3b8', margin: 0, lineHeight: 1.45, fontSize: '0.92em' }}>
               Send one <strong style={{ color: '#cbd5e1' }}>live map link</strong> — parent or friend taps it
-              and sees your GPS on their phone (read-only, anywhere with signal).
+              and sees your GPS on their phone (read-only, anywhere with signal). Sharing again replaces the
+              previous link so only the latest invite is active.
             </p>
             <button
               type="button"
               style={{ ...btnStyle(true), width: '100%', marginTop: 10 }}
-              onClick={() => void sync.shareMonitorInvite()}
+              disabled={shareWatchBusy}
+              onClick={() => {
+                setLinkHelp('Preparing live map link…')
+                setShareWatchBusy(true)
+                void sync.shareMonitorInvite().finally(() => setShareWatchBusy(false))
+              }}
             >
-              Share live map link
+              {shareWatchBusy ? 'Preparing link…' : 'Share live map link'}
             </button>
             <p style={{ color: '#64748b', margin: '8px 0 0', fontSize: '0.85em', lineHeight: 1.45 }}>
               Creates the watch session and opens your share sheet (Messages, etc.). They only tap the link —
@@ -903,13 +1143,12 @@ export default function MissionLinkPanel() {
                 </div>
               ) : null}
             </details>
-            {sync.observerCount > 0 ? (
+            {sync.watcherRoster.length > 0 ? (
               <p style={{ color: '#86efac', margin: '8px 0 0', fontSize: '0.9em', fontWeight: 700 }}>
-                {sync.peers
-                  .filter((p) => p.linkRole === 'observer')
-                  .map((p) => p.callsign?.trim() || 'Watcher')
+                {sync.watcherRoster
+                  .map((w) => (w.live ? w.callsign : `${w.callsign} (relay)`))
                   .join(', ')}{' '}
-                — watching your live map (see pill top-right)
+                — watching your live map (see status rail)
               </p>
             ) : null}
             {!isMissionTurnConfigured() ? (
@@ -931,9 +1170,11 @@ export default function MissionLinkPanel() {
         ) : null}
 
         {filterTeammatePresence(sync.teamPresence, sync.deviceId).length > 0 ? (
-          <div>
-            <div style={{ color: '#94a3b8', marginBottom: 6 }}>Teammate GPS on map</div>
-            <ul style={{ margin: 0, paddingLeft: 18, color: '#bae6fd', fontSize: '0.95em' }}>
+          <details>
+            <summary style={{ color: '#64748b', cursor: 'pointer', fontSize: '0.88em' }}>
+              Teammates on map (presence)
+            </summary>
+            <ul style={{ margin: '8px 0 0', paddingLeft: 18, color: '#bae6fd', fontSize: '0.95em' }}>
               {filterTeammatePresence(sync.teamPresence, sync.deviceId).map((p) => (
                 <li key={p.deviceId}>
                   {p.callsign}
@@ -941,7 +1182,7 @@ export default function MissionLinkPanel() {
                 </li>
               ))}
             </ul>
-          </div>
+          </details>
         ) : null}
 
         {sync.lastSyncAt ? (

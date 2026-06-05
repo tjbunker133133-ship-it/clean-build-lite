@@ -59,7 +59,11 @@ export default function TeammateMessageSheet() {
   if (!target || sync.role === 'idle') return null
 
   const send = (body: string) => {
-    if (!meshLinked) return
+    if (!meshLinked) {
+      sync.queueOutboundConfirm(body, target.callsign)
+      setText('')
+      return
+    }
     sync.sendTeamBurst(body, target.callsign)
     setText('')
     sync.clearActiveCommsTarget()
@@ -131,7 +135,7 @@ export default function TeammateMessageSheet() {
 
         {!meshLinked ? (
           <p style={{ color: '#fbbf24', margin: 0, fontSize: fontSm, lineHeight: 1.35 }}>
-            GPS on map — finish mission link to send text or voice on mesh (works offline on Wi‑Fi).
+            Teammate on map — use Mission Link to finish mesh join. You can still draft messages; they queue until linked.
           </p>
         ) : (
           <p style={{ color: '#94a3b8', margin: 0, fontSize: fontSm, lineHeight: 1.35 }}>
@@ -145,7 +149,7 @@ export default function TeammateMessageSheet() {
               key={phrase}
               type="button"
               style={btn()}
-              disabled={!meshLinked || !sync.teamCommsReady}
+              disabled={false}
               onClick={() => send(phrase)}
             >
               {phrase}
@@ -153,10 +157,7 @@ export default function TeammateMessageSheet() {
           ))}
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <MissionVoiceRecordButton
-            toCallsign={target.callsign}
-            disabled={!meshLinked || !sync.teamCommsReady}
-          />
+          <MissionVoiceRecordButton toCallsign={target.callsign} disabled={false} />
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <input
@@ -164,7 +165,6 @@ export default function TeammateMessageSheet() {
             onChange={(e) => setText(e.target.value)}
             placeholder="Custom message…"
             maxLength={BURST_MAX_CHARS}
-            disabled={!meshLinked || !sync.teamCommsReady}
             style={{
               flex: 1,
               padding: '10px 12px',
@@ -178,7 +178,7 @@ export default function TeammateMessageSheet() {
           <button
             type="button"
             style={btn(true)}
-            disabled={!meshLinked || !sync.teamCommsReady || !text.trim()}
+            disabled={!text.trim()}
             onClick={() => send(text)}
           >
             Send

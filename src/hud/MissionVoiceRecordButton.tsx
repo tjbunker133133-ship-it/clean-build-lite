@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from 'react'
 import { useMissionSync } from '../context/MissionSyncContext'
 import { parseTeamMessageVoice } from '../lib/missionSync/teamComms'
-import { captureMissionVoiceTranscript } from '../lib/missionSync/missionVoiceMessage'
+import { captureMissionVoiceTranscript, stopMissionVoiceCapture } from '../lib/missionSync/missionVoiceMessage'
 import { touchMinTarget } from './tokens'
 
 type Props = {
@@ -29,6 +29,7 @@ export default function MissionVoiceRecordButton({ toCallsign, disabled, compact
         : 'Hold to speak to mission'
 
   const endRecord = useCallback(async () => {
+    stopMissionVoiceCapture()
     setRecording(false)
     const pending = sessionRef.current
     sessionRef.current = null
@@ -55,6 +56,7 @@ export default function MissionVoiceRecordButton({ toCallsign, disabled, compact
   }, [disabled, recording])
 
   const cancel = useCallback(() => {
+    stopMissionVoiceCapture()
     sessionRef.current = null
     setRecording(false)
     busyRef.current = false

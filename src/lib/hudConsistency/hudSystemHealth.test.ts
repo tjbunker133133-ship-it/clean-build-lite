@@ -5,6 +5,7 @@ import {
   evaluateOverlayHealth,
   evaluateRouteHealth,
   evaluateSnapHealth,
+  aggregateTier2Usability,
 } from './evaluators'
 
 describe('hudConsistency evaluators', () => {
@@ -122,5 +123,35 @@ describe('hudConsistency evaluators', () => {
       lastQuadrantJumpMs: null,
     })
     expect(c.level).toBe('ok')
+  })
+
+  it('aggregates domain health into overall usability', () => {
+    expect(
+      aggregateTier2Usability({
+        compass: 'ok',
+        route: 'ok',
+        snap: 'ok',
+        overlay: 'ok',
+        layout: 'ok',
+      }),
+    ).toBe('ok')
+    expect(
+      aggregateTier2Usability({
+        compass: 'degraded',
+        route: 'ok',
+        snap: 'ok',
+        overlay: 'ok',
+        layout: 'ok',
+      }),
+    ).toBe('degraded')
+    expect(
+      aggregateTier2Usability({
+        compass: 'unstable',
+        route: 'missing',
+        snap: 'blocked',
+        overlay: 'ok',
+        layout: 'overlapping',
+      }),
+    ).toBe('unstable')
   })
 })

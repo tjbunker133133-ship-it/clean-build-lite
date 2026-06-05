@@ -128,6 +128,12 @@ export type ConnectedPeer = {
   linkRole: MissionLinkRole
 }
 
+export type PersistedSessionWatcher = {
+  deviceId: string
+  callsign: string
+  live: boolean
+}
+
 export type MissionSyncPersistedSession = {
   missionId: string
   missionName: string
@@ -138,6 +144,8 @@ export type MissionSyncPersistedSession = {
   hostDeviceId?: string
   /** Observer waiting for field lead to create monitor link (token-only join). */
   observerWaitMode?: boolean
+  /** Host-side watcher roster — survives refresh (live flags refreshed on reconnect). */
+  sessionWatchers?: PersistedSessionWatcher[]
   updatedAt: number
 }
 

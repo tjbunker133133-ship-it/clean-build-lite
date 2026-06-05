@@ -59,6 +59,45 @@ describe('MissionSyncCoordinator observer', () => {
     expect(isObserverOffer(packet)).toBe(true)
   })
 
+  it('replaces pending observer offers when sharing a fresh watch link', async () => {
+    const coord = new MissionSyncCoordinator({
+      missionId: 'm1',
+      missionName: 'Test',
+      joinToken: 'join123',
+      observerToken: 'obs_secret_token',
+      hostDeviceId: 'host1',
+      hostCallsign: 'Alpha',
+      role: 'member',
+      callbacks: {},
+    })
+    const closePending = vi.fn()
+    ;(coord as unknown as { closePendingForRole: typeof closePending }).closePendingForRole =
+      closePending
+    const createOfferSlot = vi.fn().mockResolvedValue({
+      packet: {
+        t: 'mission-offer' as const,
+        v: 1,
+        missionId: 'm1',
+        missionName: 'Test',
+        joinToken: '',
+        observerToken: 'obs_secret_token',
+        linkRole: 'observer' as const,
+        hostDeviceId: 'host1',
+        hostCallsign: 'Alpha',
+        peerId: 'peer_obs_1',
+        sdp: { type: 'offer' as const, sdp: '' },
+      },
+      encoded: 'HUDMS1:obs1',
+      peerId: 'peer_obs_1',
+    })
+    ;(coord as unknown as { createOfferSlot: typeof createOfferSlot }).createOfferSlot =
+      createOfferSlot
+
+    await coord.createObserverOffer()
+    expect(closePending).toHaveBeenCalledWith('observer')
+    expect(createOfferSlot).toHaveBeenCalledWith('observer', 'internet')
+  })
+
   it('ignores inbound wire messages from observer peers', () => {
     const onSnapshot = vi.fn()
     const coord = new MissionSyncCoordinator({

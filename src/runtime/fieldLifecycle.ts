@@ -28,6 +28,17 @@ export function isFieldSessionBackgrounded(): boolean {
   return document.visibilityState === 'hidden'
 }
 
+/** Nudge MapLibre canvas layout after mission/HUD transitions (no MapCanvas import). */
+export function nudgeMapViewport(): void {
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(new Event('resize'))
+  try {
+    window.visualViewport?.dispatchEvent(new Event('resize'))
+  } catch {
+    /* ignore */
+  }
+}
+
 /** Capacitor / Android foreground rules — audit checklist for native trajectory. */
 export function auditNativeLifecycleCompatibility(): NativeLifecycleAuditItem[] {
   const surface = detectFieldLifecycleSurface()

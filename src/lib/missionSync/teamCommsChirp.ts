@@ -1,5 +1,8 @@
 /** Short operational chirp — no dependency on VoicePanel / SOS audio paths. */
+import { shouldPlayMissionCommsAudio } from './missionCommsAudio'
+
 export function playTeamCommsChirp(directed = false): void {
+  if (!shouldPlayMissionCommsAudio()) return
   try {
     const Ctx =
       window.AudioContext ||

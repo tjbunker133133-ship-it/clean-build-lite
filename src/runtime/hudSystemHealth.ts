@@ -73,12 +73,10 @@ function logHealthWarnings(next: HudSystemHealth): void {
   lastWarnKey = key
   hudDevLog('system-health', next)
   if (
-    next.compass_health === 'unstable' ||
-    next.route_health === 'missing' ||
-    next.snap_health === 'blocked' ||
-    next.layout_health === 'overlapping'
+    next.overall_health === 'unstable'
   ) {
-    logWarn('RUNTIME', 'hud consistency guard', {
+    logWarn('RUNTIME', 'tier2 usability unstable', {
+      overall: next.overall_health,
       compass: next.compass_health,
       route: next.route_health,
       snap: next.snap_health,
@@ -193,10 +191,15 @@ export function installHudSystemHealth(): void {
   const w = window as Window & {
     __hudSystemHealth?: HudSystemHealth
     __hudSystemHealthGet?: () => HudSystemHealth
+    __tier2RuntimeHealth?: HudSystemHealth
+    __tier2RuntimeHealthGet?: () => HudSystemHealth
   }
   w.__hudSystemHealth = health
   w.__hudSystemHealthGet = () => health
+  w.__tier2RuntimeHealth = health
+  w.__tier2RuntimeHealthGet = () => health
   subscribeHudSystemHealth((h) => {
     w.__hudSystemHealth = h
+    w.__tier2RuntimeHealth = h
   })
 }

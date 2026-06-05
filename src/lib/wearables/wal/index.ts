@@ -140,3 +140,12 @@ export {
   getWcelDiagnostics,
 } from '../wcel'
 export type { WearableDeviceType, WcelDiagnostics, WcelValidationResult } from '../wcel'
+
+export {
+  safeProjectToWearable,
+  safeProjectEscalationToChannel,
+  applyDcrlShaping,
+  getDeviceCapability,
+  getDcrlDiagnostics,
+} from '../dcrl'
+export type { DcrlDeviceType, DcrlDiagnostics, WearableOutboundPayload } from '../dcrl'

@@ -16,7 +16,7 @@
     "src/controllers/resolveDockIntent.ts": "a824b236092ce85e7b230380d3a0904546d299920e3714b28e6faee387e08549",
     "src/context/AppContext.tsx": "15671759eec83bb1a138e428447bb6e95a63ccf7886aad7b5b1080f426c99765",
     "src/App.tsx": "c368c39ebf7f0086c6e965d77ef9887dfe8515499745cd7c5f9499136bc4b6b8",
-    "src/main.tsx": "9a66ebecf46d55c9fe1ef18a07a3e3f9a1d30ed39f23f5ba7f5ae9d83d595c89",
+    "src/main.tsx": "beb7ad5c07c95ccf228100f138953d998f8e6c40d48fb0d96a6174c05d081b0c",
     "vite.config.ts": "5d087285cec0b23b2b2d1eb112253af675233c7ff73a2c0fbec60c46e829d976",
     "index.html": "05d4c5091478975d6c67b5859302f97c8a222088a6f5052343884906344eda2e",
     "src/lib/rescue/buildRescuePacket.ts": "c6f407455db0018ef00dd37f6f426c3b68c105208f1ac0ce65f99d438407a9bd",

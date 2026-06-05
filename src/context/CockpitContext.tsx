@@ -348,6 +348,7 @@ function firstRunPreset(device: DevicePreset): {
         voice: { x: 8, y: 348, w: 320, h: null, z: 433, minimized: false, docked: true, dockSide: 'right' },
         sos: { x: 8, y: 448, w: 264, h: null, z: 434, minimized: false, docked: true, dockSide: 'right' },
         weather: { x: 8, y: 548, w: 300, h: null, z: 435, minimized: false, docked: true, dockSide: 'right' },
+        missionLink: { x: 16, y: 420, w: 360, h: null, z: 436, minimized: false, docked: false, dockSide: 'left' },
       },
     }
   }
@@ -367,6 +368,7 @@ function firstRunPreset(device: DevicePreset): {
         voice: { x: 8, y: 348, w: 320, h: null, z: 433, minimized: false, docked: true, dockSide: 'right' },
         sos: { x: 8, y: 448, w: 264, h: null, z: 434, minimized: false, docked: true, dockSide: 'right' },
         weather: { x: 8, y: 548, w: 300, h: null, z: 435, minimized: false, docked: true, dockSide: 'right' },
+        missionLink: { x: 16, y: 420, w: 360, h: null, z: 436, minimized: false, docked: false, dockSide: 'left' },
       },
     }
   }
@@ -386,6 +388,7 @@ function firstRunPreset(device: DevicePreset): {
         voice: { x: 8, y: 348, w: 330, h: null, z: 433, minimized: false, docked: true, dockSide: 'right' },
         sos: { x: 8, y: 448, w: 280, h: null, z: 434, minimized: false, docked: true, dockSide: 'right' },
         weather: { x: 8, y: 548, w: 320, h: null, z: 435, minimized: false, docked: true, dockSide: 'right' },
+        missionLink: { x: 16, y: 420, w: 360, h: null, z: 436, minimized: false, docked: false, dockSide: 'left' },
       },
     }
   }
@@ -712,6 +715,16 @@ const DEFAULT_PANELS = (): PanelMap => ({
     docked: true,
     dockSide: 'right',
   },
+  missionLink: {
+    x: 16,
+    y: 420,
+    w: 360,
+    h: null,
+    z: 415,
+    minimized: false,
+    docked: false,
+    dockSide: 'left',
+  },
 })
 
 export function CockpitProvider({ children }: { children: ReactNode }) {
@@ -866,6 +879,12 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     updateGestureActive(mapInteractionBlocked)
+  }, [mapInteractionBlocked])
+
+  useEffect(() => {
+    if (!mapInteractionBlocked) return
+    const t = window.setTimeout(() => setMapInteractionBlocked(false), 12_000)
+    return () => window.clearTimeout(t)
   }, [mapInteractionBlocked])
 
   const accent = useMemo(() => {

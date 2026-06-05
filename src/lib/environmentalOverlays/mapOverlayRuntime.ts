@@ -35,6 +35,35 @@ function findBeforeTacticalLayer(map: Map): string | undefined {
 export function removeEnvironmentalOverlay(map: Map, id: EnvironmentalOverlayId): void {
   const layerId = envLayerId(id)
   const sourceId = envSourceId(id)
+
+  // Camping overlay has multiple layers: points, polygon fill, polygon outline
+  if (id === 'camping') {
+    const pointLayerId = `${layerId}-points`
+    const polygonFillLayerId = `${layerId}-polygons-fill`
+    const polygonOutlineLayerId = `${layerId}-polygons-outline`
+    try {
+      if (map.getLayer(pointLayerId)) map.removeLayer(pointLayerId)
+    } catch {
+      /* ignore */
+    }
+    try {
+      if (map.getLayer(polygonFillLayerId)) map.removeLayer(polygonFillLayerId)
+    } catch {
+      /* ignore */
+    }
+    try {
+      if (map.getLayer(polygonOutlineLayerId)) map.removeLayer(polygonOutlineLayerId)
+    } catch {
+      /* ignore */
+    }
+    try {
+      if (map.getSource(sourceId)) map.removeSource(sourceId)
+    } catch {
+      /* ignore */
+    }
+    return
+  }
+
   try {
     if (map.getLayer(layerId)) map.removeLayer(layerId)
   } catch {
@@ -95,7 +124,6 @@ export function applyGeojsonOverlay(
     if (!mapStyleMutable(map)) return false
     const def = overlayDef(id)
     const sourceId = envSourceId(id)
-    const layerId = envLayerId(id)
     const beforeId = findBeforeTacticalLayer(map)
 
     const existing = map.getSource(sourceId) as GeoJSONSource | undefined
@@ -105,6 +133,76 @@ export function applyGeojsonOverlay(
       map.addSource(sourceId, { type: 'geojson', data: geojson })
     }
 
+    // Camping overlay: render points (campgrounds) + polygons (dispersed zones)
+    if (id === 'camping') {
+      const pointLayerId = `${envLayerId(id)}-points`
+      const polygonFillLayerId = `${envLayerId(id)}-polygons-fill`
+      const polygonOutlineLayerId = `${envLayerId(id)}-polygons-outline`
+
+      // Point markers for official campgrounds
+      if (!map.getLayer(pointLayerId)) {
+        map.addLayer(
+          {
+            id: pointLayerId,
+            type: 'circle',
+            source: sourceId,
+            filter: ['==', ['get', 'feature_type'], 'campground'],
+            minzoom: def.minZoom ?? 0,
+            paint: {
+              'circle-radius': 8,
+              'circle-color': '#7cb342',
+              'circle-stroke-color': '#ffffff',
+              'circle-stroke-width': 2,
+              'circle-opacity': 0.9,
+            },
+          },
+          beforeId,
+        )
+      }
+
+      // Polygon fill for dispersed camping zones
+      if (!map.getLayer(polygonFillLayerId)) {
+        map.addLayer(
+          {
+            id: polygonFillLayerId,
+            type: 'fill',
+            source: sourceId,
+            filter: ['==', ['get', 'feature_type'], 'dispersed_zone'],
+            minzoom: def.minZoom ?? 0,
+            paint: {
+              'fill-color': '#7cb342',
+              'fill-opacity': 0.15,
+            },
+          },
+          beforeId,
+        )
+      }
+
+      // Polygon outline for dispersed camping zones
+      if (!map.getLayer(polygonOutlineLayerId)) {
+        map.addLayer(
+          {
+            id: polygonOutlineLayerId,
+            type: 'line',
+            source: sourceId,
+            filter: ['==', ['get', 'feature_type'], 'dispersed_zone'],
+            minzoom: def.minZoom ?? 0,
+            layout: { 'line-join': 'round' },
+            paint: {
+              'line-color': '#7cb342',
+              'line-width': 2,
+              'line-opacity': 0.6,
+              'line-dasharray': [4, 2],
+            },
+          },
+          beforeId,
+        )
+      }
+      return true
+    }
+
+    // Standard line overlay for other types
+    const layerId = envLayerId(id)
     if (!map.getLayer(layerId)) {
       const lineColor =
         id === 'bike_paths'

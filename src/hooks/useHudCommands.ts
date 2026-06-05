@@ -51,6 +51,15 @@ import {
   invokeVoiceContinuous,
   invokeVoiceSleep,
 } from '../runtime/voicePanelCommandBridge'
+import {
+  stopAllSpeech,
+  clearAllSpeech,
+} from '../runtime/voiceAudioArbitration'
+import {
+  getSpeechHistory,
+  repeatLastSpeech,
+  VOICE_PRIORITY,
+} from '../lib/voice/voiceAuthorityController'
 
 /**
  * Single source of truth for HUD commands.
@@ -130,6 +139,14 @@ export function useHudCommands(): {
   const [morseEnabled, setMorseEnabled] = useState(false)
   const [flashlightEnabled, setFlashlightEnabled] = useState(false)
 
+  // Confirmation context for voice-only confirmation flows (hands-free critical)
+  const [confirmationContext, setConfirmationContext] = useState<{
+    active: boolean
+    prompt: string
+    actionId: string
+    expiresAt: number
+  } | null>(null)
+
   // Listen for SOS panel state echoes so spoken/textual responses stay accurate.
   useEffect(() => {
     const onMorseState = (ev: Event) => {
@@ -140,11 +157,32 @@ export function useHudCommands(): {
       const detail = (ev as CustomEvent<{ enabled?: boolean }>).detail
       if (typeof detail?.enabled === 'boolean') setFlashlightEnabled(detail.enabled)
     }
+    // Confirmation context events for voice-only flows (hands-free critical)
+    const onSetConfirmation = (ev: Event) => {
+      const detail = (ev as CustomEvent<{
+        active: boolean
+        prompt?: string
+        actionId?: string
+        expiresAt?: number
+      }>).detail
+      if (detail?.active) {
+        setConfirmationContext({
+          active: true,
+          prompt: detail.prompt ?? '',
+          actionId: detail.actionId ?? '',
+          expiresAt: detail.expiresAt ?? Date.now() + 30000,
+        })
+      } else {
+        setConfirmationContext(null)
+      }
+    }
     window.addEventListener('hud:sos-morse-state', onMorseState)
     window.addEventListener('hud:sos-flashlight-state', onFlashlightState)
+    window.addEventListener('hud:set-confirmation-context', onSetConfirmation)
     return () => {
       window.removeEventListener('hud:sos-morse-state', onMorseState)
       window.removeEventListener('hud:sos-flashlight-state', onFlashlightState)
+      window.removeEventListener('hud:set-confirmation-context', onSetConfirmation)
     }
   }, [])
 
@@ -1065,6 +1103,102 @@ export function useHudCommands(): {
         group: 'Display (preview)',
         run: () => ok(buildArVoiceMessage()),
       },
+
+      // VOICE CONTROL — Emergency speech management (hands-free critical)
+      {
+        id: 'stop speaking',
+        label: 'Stop all speech immediately',
+        aliases: ['stop', 'quiet', 'silence', 'shut up', 'cancel'],
+        paletteVisible: true,
+        group: 'Voice Control',
+        run: () => {
+          stopAllSpeech('voice_command_stop')
+          clearAllSpeech('voice_command_clear')
+          return ok('Speech stopped.')
+        },
+      },
+      {
+        id: 'repeat last',
+        label: 'Repeat the last announcement',
+        aliases: ['repeat', 'say again', 'what was that'],
+        paletteVisible: true,
+        group: 'Voice Control',
+        run: () => {
+          const result = repeatLastSpeech()
+          if (result.success) {
+            return ok(`Repeating: ${result.text}`)
+          }
+          return fail('Nothing to repeat.')
+        },
+      },
+
+      // CONFIRMATION FLOW — Hands-free action confirmation (gloves/cold/wet critical)
+      {
+        id: 'confirm',
+        label: 'Confirm pending action',
+        aliases: ['yes', 'accept', 'proceed', 'do it'],
+        group: 'Confirmation',
+        run: () => {
+          if (!confirmationContext?.active || Date.now() > confirmationContext.expiresAt) {
+            return fail('No pending action to confirm.')
+          }
+          // Dispatch confirmation event
+          window.dispatchEvent(new CustomEvent('hud:voice-confirm', {
+            detail: { actionId: confirmationContext.actionId, confirmed: true },
+          }))
+          const ctx = confirmationContext
+          setConfirmationContext(null)
+          return ok(`Confirmed: ${ctx.prompt}`)
+        },
+      },
+      {
+        id: 'deny',
+        label: 'Cancel pending action',
+        aliases: ['no', 'reject', 'cancel that', 'never mind', 'abort'],
+        group: 'Confirmation',
+        run: () => {
+          if (!confirmationContext?.active || Date.now() > confirmationContext.expiresAt) {
+            return fail('No pending action to cancel.')
+          }
+          // Dispatch cancellation event
+          window.dispatchEvent(new CustomEvent('hud:voice-confirm', {
+            detail: { actionId: confirmationContext.actionId, confirmed: false },
+          }))
+          const ctx = confirmationContext
+          setConfirmationContext(null)
+          return ok(`Cancelled: ${ctx.prompt}`)
+        },
+      },
+
+      // CONTEXT-AWARE HELP — Dynamic based on current state
+      {
+        id: 'help',
+        label: 'Context-aware help',
+        aliases: ['what can i say', 'what do i do', 'commands', 'help me'],
+        paletteVisible: true,
+        group: 'Help',
+        run: () => {
+          const parts: string[] = ['Help.']
+
+          // State-aware suggestions
+          if (gps.locationState !== 'granted') {
+            parts.push('GPS is off. Say HUD center after enabling location.')
+          }
+          if (state.waypoints.length === 0) {
+            parts.push('No route pins. Say HUD add pin at your GPS location.')
+          } else {
+            parts.push(`Route has ${state.waypoints.length} pins. Say HUD next waypoint or HUD route stats.`)
+          }
+          if (confirmationContext?.active) {
+            parts.push(`You have a pending confirmation: ${confirmationContext.prompt}. Say HUD confirm or HUD deny.`)
+          }
+
+          // Always-available critical commands
+          parts.push('Emergency: say HUD S O S. Stop speaking: say HUD quiet. Navigation: HUD center, HUD zoom in.')
+
+          return ok(parts.join(' '))
+        },
+      },
     ]
   }, [
     addWaypoint,
@@ -1093,6 +1227,7 @@ export function useHudCommands(): {
     state.snapToTrailEnabled,
     updatePanel,
     missionSync,
+    confirmationContext,
   ])
 
   const dispatch = useCallback(

@@ -5,7 +5,7 @@
 
 import type { EscalationProjection, EscalationSnapshot, OutputChannelKind } from './types'
 import type { WalPresetConfig } from './userPresets'
-import { enforceChannelProjection } from '../wcel/enforce'
+import { safeProjectEscalationToChannel } from '../dcrl/safeProject'
 
 export type OutputChannel = {
   kind: OutputChannelKind
@@ -79,33 +79,9 @@ export function buildEscalationProjection(
 export const WAL_ESCALATION_NOTIFICATION_TAG = 'signal-one-wal-escalation'
 
 export async function projectToWatchNotification(projection: EscalationProjection): Promise<void> {
-  if (!enforceChannelProjection('watch_notification', projection)) return
-  if (typeof window === 'undefined' || typeof Notification === 'undefined') return
-  if (Notification.permission !== 'granted') return
-  const payload = {
-    title: projection.title,
-    body: projection.body,
-    tag: WAL_ESCALATION_NOTIFICATION_TAG,
-    renotify: projection.urgency === 'critical',
-  }
-  try {
-    if ('serviceWorker' in navigator) {
-      const reg = await navigator.serviceWorker.ready
-      await reg.showNotification(payload.title, {
-        body: payload.body,
-        tag: payload.tag,
-        icon: '/hud-icon-192.png',
-      })
-      return
-    }
-  } catch {
-    /* fallback */
-  }
-  try {
-    new Notification(payload.title, { body: payload.body, tag: payload.tag })
-  } catch {
-    /* ignore */
-  }
+  if (!projection.channels.includes('watch_notification')) return
+  const result = await safeProjectEscalationToChannel(projection, 'watch_notification')
+  if (result.blocked) return
 }
 
 export function createDefaultOutputChannels(): OutputChannel[] {

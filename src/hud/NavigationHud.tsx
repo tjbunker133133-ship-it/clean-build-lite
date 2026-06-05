@@ -6,12 +6,14 @@ import { useNavigationMonitor } from '../hooks/useNavigationMonitor'
 import { useTrailInspect } from '../hooks/useTrailInspect'
 import { setTeammateTapHandler } from '../lib/missionSync/teamCommsBridge'
 import { getDeviceProfile } from '../runtime/deviceProfile'
+import { markRuntimeUserEngagement } from '../runtime/runtimeActivityPolicy'
 import TrailInspectCard from './TrailInspectCard'
 import FieldStatusRail from './FieldStatusRail'
 import TeamCommsToast from './TeamCommsToast'
 import TeammateMessageSheet from './TeammateMessageSheet'
 import { mapBannerTopCss } from './hudLayout'
 import { touchFontSm, touchMinTarget } from './tokens'
+import { nudgeMapViewport } from '../runtime/fieldLifecycle'
 
 export default function NavigationHud() {
   const { confirmWaypointArrival, state } = useAppContext()
@@ -23,6 +25,18 @@ export default function NavigationHud() {
   const isMobile = getDeviceProfile().interactionMode === 'mobile'
   const fontSm = touchFontSm(isMobile)
   const tapMin = touchMinTarget(isMobile)
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    const onEngage = () => markRuntimeUserEngagement()
+    document.addEventListener('pointerdown', onEngage, { capture: true, passive: true })
+    return () => document.removeEventListener('pointerdown', onEngage, { capture: true })
+  }, [])
+
+  useEffect(() => {
+    if (sync.role === 'idle') return
+    nudgeMapViewport()
+  }, [sync.role, sync.missionId])
 
   useEffect(() => {
     setTeammateTapHandler(({ deviceId, callsign }) => {

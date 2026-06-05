@@ -136,6 +136,8 @@ export class MissionSyncCoordinator {
 
   async createObserverOffer(): Promise<{ packet: MissionOfferPacket; encoded: string; peerId: string }> {
     this.ensureObserverToken()
+    /** One active watch invite at a time — same as field member join offers. */
+    this.closePendingForRole('observer')
     if (this.observerPeers.length >= MAX_OBSERVER_PEERS) {
       throw new Error(`Observer limit reached (${MAX_OBSERVER_PEERS})`)
     }

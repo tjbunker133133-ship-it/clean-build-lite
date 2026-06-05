@@ -4,12 +4,22 @@
  * Single authority for:
  * - TTS vs SpeechRecognition mutual exclusion (no self-listening loops)
  * - Authoritative stop-all teardown (alarms, TTS, registered timers/contexts)
+ * - PRIORITY-BASED VOICE AUTHORITY (via voiceAuthorityController)
  *
  * Listen modes (OFF / POWER SAVE / HARD LISTEN) remain in VoicePanel +
  * voiceListenProfile; this module owns output + mic-gate state only.
  */
 
-import { logInfo } from './logger'
+import { logInfo, logWarn } from './logger'
+import {
+  startSpeech as authorityStartSpeech,
+  stopSpeech as authorityStopSpeech,
+  clearSpeechQueue as authorityClearQueue,
+  isSpeaking as authorityIsSpeaking,
+  VOICE_PRIORITY,
+  type VoicePriority,
+  subscribeToSpeechState,
+} from '../lib/voice/voiceAuthorityController'
 
 export type VoiceAudioMode = 'off' | 'powerSave' | 'hardListen'
 
@@ -111,11 +121,69 @@ function markSpeechEnded(): void {
 }
 
 /**
- * Speak one phrase via Web Speech API. Resolves only after utterance end/error
- * (or a generous safety timeout) — never on an optimistic timer that clears
- * the speech gate while audio is still playing.
+ * Determine voice priority based on content heuristics.
+ * This is a best-effort classification for legacy call paths.
  */
-export function speakHudPhrase(text: string, rate: number): Promise<void> {
+function inferPriorityFromText(text: string): VoicePriority {
+  const lower = text.toLowerCase()
+  // Safety patterns
+  if (
+    lower.includes('emergency') ||
+    lower.includes('sos') ||
+    lower.includes('heart rate') ||
+    lower.includes('battery critical') ||
+    lower.includes('heat stress') ||
+    lower.includes('cold stress') ||
+    lower.includes('stop and assess') ||
+    lower.includes('check in')
+  ) {
+    return VOICE_PRIORITY.SAFETY
+  }
+  // Command results (user-initiated actions)
+  if (
+    lower.includes('centered') ||
+    lower.includes('zooming') ||
+    lower.includes('zoomed') ||
+    lower.includes('flashlight') ||
+    lower.includes('morse') ||
+    lower.includes('panel opened') ||
+    lower.includes('pin added') ||
+    lower.includes('route cleared') ||
+    lower.match(/^(ok\.|done\.|confirmed\.)/)
+  ) {
+    return VOICE_PRIORITY.USER_COMMAND
+  }
+  // Help/guidance patterns
+  if (
+    lower.includes('commands are available') ||
+    lower.includes('say') ||
+    lower.includes('example') ||
+    lower.includes('you can say')
+  ) {
+    return VOICE_PRIORITY.HELP_GUIDANCE
+  }
+  // Environment readouts
+  if (
+    lower.includes('weather') ||
+    lower.includes('conditions') ||
+    lower.includes('elevation') ||
+    lower.includes('humidity') ||
+    lower.includes('wind')
+  ) {
+    return VOICE_PRIORITY.ENVIRONMENT_READOUT
+  }
+  // Default to system feedback
+  return VOICE_PRIORITY.SYSTEM_FEEDBACK
+}
+
+/**
+ * Speak one phrase via Voice Authority Controller with priority enforcement.
+ * This is the PRIMARY entry point for all HUD speech.
+ *
+ * Resolves only after utterance end/error (or safety timeout).
+ * Respects priority: lower priority may be dropped if higher is speaking.
+ */
+export function speakHudPhrase(text: string, rate: number, priority?: VoicePriority): Promise<void> {
   return new Promise((resolve) => {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
       resolve()
@@ -126,31 +194,114 @@ export function speakHudPhrase(text: string, rate: number): Promise<void> {
       resolve()
       return
     }
+
+    const effectivePriority = priority ?? inferPriorityFromText(trimmed)
+
     markSpeechStarted()
-    const synth = window.speechSynthesis
-    try {
-      synth.cancel()
-    } catch {
-      // ignore
-    }
-    const utterance = new SpeechSynthesisUtterance(trimmed)
-    utterance.rate = rate
+
+    // Subscribe to know when speech ends
+    let unsub: (() => void) | null = null
     let settled = false
+
     const finish = () => {
       if (settled) return
       settled = true
+      if (unsub) {
+        unsub()
+        unsub = null
+      }
       markSpeechEnded()
       resolve()
     }
-    utterance.onend = finish
-    utterance.onerror = finish
-    try {
-      synth.speak(utterance)
-    } catch {
+
+    // Watch state changes
+    unsub = subscribeToSpeechState((state) => {
+      if (!state.speaking && settled) {
+        // Already finished
+        return
+      }
+      if (!state.speaking && !settled) {
+        // Speech stopped (could be interrupt or natural end)
+        finish()
+      }
+    })
+
+    // Attempt to start speech through authority controller
+    const result = authorityStartSpeech(trimmed, effectivePriority, 'voiceAudioArbitration')
+
+    if (!result.started) {
+      // Blocked by priority — resolve immediately with log
+      logInfo('VOICE_ARBITRATION', `Speech dropped by authority: ${result.reason}`, {
+        text: trimmed.slice(0, 60),
+        priority: effectivePriority,
+      })
       finish()
       return
     }
-    // Safety only when platform never fires onend/onerror (Android WebView edge).
-    window.setTimeout(finish, Math.min(25_000, trimmed.length * 120 + 3000))
+
+    // Safety timeout in case authority callbacks fail
+    window.setTimeout(() => {
+      if (!settled) {
+        logWarn('VOICE_ARBITRATION', 'Speech safety timeout fired', { text: trimmed.slice(0, 40) })
+        authorityStopSpeech('safety_timeout')
+        finish()
+      }
+    }, Math.min(30_000, trimmed.length * 120 + 3000))
+
+    // Apply rate by creating a temporary utterance to set defaults
+    // (Actual TTS is managed by authority controller)
+    if (rate !== 1.0) {
+      try {
+        const tempUtter = new SpeechSynthesisUtterance('')
+        tempUtter.rate = rate
+        // This sets the default rate for subsequent utterances in some engines
+        window.speechSynthesis.speak(tempUtter)
+        window.speechSynthesis.cancel() // Cancel the empty utterance
+      } catch {
+        // Ignore rate-setting errors
+      }
+    }
   })
+}
+
+/**
+ * Emergency stop all speech immediately.
+ * Use for: user "stop speaking" command, safety alerts that must speak NOW,
+ * system reset, critical interruptions.
+ */
+export function stopAllSpeech(reason = 'emergency_stop'): void {
+  logInfo('VOICE_ARBITRATION', `stopAllSpeech: ${reason}`)
+  authorityStopSpeech(reason)
+  try {
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel()
+    }
+  } catch {
+    // Ignore
+  }
+}
+
+/**
+ * Clear speech queue and stop current.
+ * More aggressive than stopAllSpeech — also clears any pending items.
+ */
+export function clearAllSpeech(reason = 'clear_all'): void {
+  logInfo('VOICE_ARBITRATION', `clearAllSpeech: ${reason}`)
+  authorityClearQueue(reason)
+}
+
+/**
+ * Interrupt current speech with higher priority.
+ * Returns true if interrupt succeeded.
+ */
+export function interruptSpeech(priority: VoicePriority, reason: string): boolean {
+  logInfo('VOICE_ARBITRATION', `interruptSpeech requested: priority ${priority}, ${reason}`)
+  return authorityStopSpeech(`interrupt_${reason}`)
+}
+
+/**
+ * Check if TTS is currently active.
+ */
+export function isSpeaking(): boolean {
+  return authorityIsSpeaking()
 }

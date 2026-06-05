@@ -227,7 +227,7 @@ export function evaluateInMissionReadiness(args: {
       detail: args.wakeLockHeld
         ? 'Wake lock active'
         : args.wakeLockSupported
-          ? 'Wake lock lost — tap screen; OS auto-lock may still apply'
+          ? 'Wake lock inactive — display may sleep (informational)'
           : 'Wake lock unsupported on this device',
       severity: args.wakeLockHeld ? 'ok' : 'warn',
     })

@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { useAppContext } from '../context/AppContext'
 import { useCockpit } from '../context/CockpitContext'
 import { useMapContext } from '../context/MapContext'
@@ -55,6 +55,7 @@ export default function HudSystemHealthBridge() {
         loading: st?.loading ?? false,
         error: st?.error ?? null,
         layerOnMap,
+        stale: st?.stale ?? false,
       }
     })
   }, [map, toggles, overlayStatus])
@@ -100,8 +101,18 @@ export default function HudSystemHealthBridge() {
     reportRouteLayerObservation({ waypointCount: visibleWaypointCount })
   }, [visibleWaypointCount])
 
+  const panelsRef = useRef(panels)
+  panelsRef.current = panels
+  const panelLayoutSig = useMemo(() => {
+    return Object.entries(panels)
+      .filter(([, p]) => p?.docked)
+      .map(([id, p]) => `${id}:${p!.x}:${p!.y}:${p!.w}:${p!.h}`)
+      .sort()
+      .join('|')
+  }, [panels])
+
   useEffect(() => {
-    recomputeHudSystemHealth({
+    const base = {
       heading,
       compassStatus: status,
       snapToggleCapable: trailSnapAssistCapable,
@@ -109,7 +120,6 @@ export default function HudSystemHealthBridge() {
       trailLegCount: trailRoute.legs.length,
       trailLegTrailModeCount,
       overlayLayers,
-      panels,
       vw: profile.width,
       vh: profile.height,
       isMobile: profile.interactionMode === 'mobile',
@@ -118,7 +128,12 @@ export default function HudSystemHealthBridge() {
       styleHasVectorTrails: mapSignals.styleHasVectorTrails,
       overlaySnapLayersActive: mapSignals.overlaySnapLayersActive,
       mapPresent: mapSignals.mapPresent,
-    })
+    }
+    recomputeHudSystemHealth({ ...base, panels: panelsRef.current })
+    const timer = window.setTimeout(() => {
+      recomputeHudSystemHealth({ ...base, panels: panelsRef.current })
+    }, 450)
+    return () => window.clearTimeout(timer)
   }, [
     heading,
     status,
@@ -127,7 +142,7 @@ export default function HudSystemHealthBridge() {
     trailRoute.legs.length,
     trailLegTrailModeCount,
     overlayLayers,
-    panels,
+    panelLayoutSig,
     profile.width,
     profile.height,
     profile.interactionMode,

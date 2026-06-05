@@ -5,6 +5,48 @@ import { monitorTransportLabel } from './monitorUx'
 import type { RelayLinkState } from './relayRecovery'
 import { relayLinkStateDetail } from './relayRecovery'
 
+export type MissionConnectionTier = 'connected' | 'degraded' | 'offline'
+
+/** Single mission link status for operator UI — connected / degraded / offline only. */
+export function deriveMissionConnectionTier(args: {
+  role: 'idle' | 'member' | 'observer'
+  online: boolean
+  peerCount: number
+  teamCommsReady: boolean
+  linkRecoveryPending: boolean
+  relayLinkState: RelayLinkState
+  phase?: MissionSyncConnectionPhase
+}): MissionConnectionTier {
+  if (args.role === 'idle') return 'offline'
+  if (args.phase === 'failed') return 'offline'
+  if (
+    args.phase === 'connecting' ||
+    args.phase === 'awaiting-host-answer' ||
+    args.phase === 'awaiting-joiner'
+  ) {
+    return 'degraded'
+  }
+  if (!args.online && args.peerCount === 0 && !args.teamCommsReady) return 'offline'
+  if (
+    args.peerCount > 0 &&
+    args.teamCommsReady &&
+    !args.linkRecoveryPending &&
+    args.relayLinkState === 'active'
+  ) {
+    return 'connected'
+  }
+  if (args.teamCommsReady || args.peerCount > 0 || args.linkRecoveryPending) {
+    return 'degraded'
+  }
+  return 'offline'
+}
+
+export function missionConnectionTierLabel(tier: MissionConnectionTier): string {
+  if (tier === 'connected') return 'Connected'
+  if (tier === 'degraded') return 'Degraded'
+  return 'Offline'
+}
+
 export { isFieldSessionBackgrounded }
 
 export type MemberConnectionStatus = {
@@ -45,9 +87,9 @@ export function buildMemberConnectionStatus(args: {
 
   if (args.teamCommsReady && args.peerCount === 0) {
     return {
-      label: 'Relay-only · internet link',
+      label: 'Relay linked · team comms active',
       live: true,
-      supplement: 'No local mesh peers — comms via internet relay',
+      supplement: 'No local mesh peers — map and messages via internet relay',
     }
   }
 
@@ -99,7 +141,7 @@ export function buildObserverConnectionStatus(args: {
     return {
       label: 'Monitor · relay linked',
       live: false,
-      supplement: 'Waiting for field update — not live yet',
+      supplement: 'Team comms active — waiting for live map update',
     }
   }
 

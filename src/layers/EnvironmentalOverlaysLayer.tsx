@@ -13,11 +13,28 @@ import {
 } from '../lib/environmentalOverlays/mapOverlayRuntime'
 import { readCachedOverlayGeo, writeCachedOverlayGeo } from '../lib/environmentalOverlays/overlayCache'
 import { fetchOverpassGeojson } from '../lib/environmentalOverlays/overpass'
-import { readFirmsMapKey } from '../lib/environmentalOverlays/sources'
+import { readEnvKey } from '../lib/environmentalOverlays/sources'
 import type { EnvironmentalOverlayId } from '../lib/environmentalOverlays/types'
+import {
+  clearLoadingTimeout,
+  clearOverlaySession,
+  createOverlaySession,
+  isSessionActive,
+  resolveOverlay,
+  startLoading,
+  stateMachineToLegacy,
+  type TerminalState,
+} from '../lib/environmentalOverlays/overlayStateMachine'
+import { runtimePollIntervalMs } from '../runtime/runtimeActivityPolicy'
+import { logWarn } from '../runtime/logger'
 
-const MOVE_DEBOUNCE_MS = 650
-
+/**
+ * Sync overlay with strict state machine enforcement.
+ * GUARANTEE: Loading always resolves to terminal state within 30s.
+ * 
+ * Every activation gets a unique session ID to prevent race conditions.
+ * Every path MUST resolve to a terminal state via resolveOverlay.
+ */
 function syncOverlay(
   map: Map,
   id: EnvironmentalOverlayId,
@@ -27,18 +44,46 @@ function syncOverlay(
 ): () => void {
   if (!enabled) {
     removeEnvironmentalOverlay(map, id)
+    clearLoadingTimeout(id)
+    clearOverlaySession(id)
     patchStatus(id, { loading: false, error: null, stale: false, fromCache: false })
     return () => {}
   }
 
   const def = overlayDef(id)
-  let cancelled = false
+  
+  // Create unique session for this activation to prevent race conditions
+  const sessionId = createOverlaySession(id)
+  
   let styleWaitCleanup: (() => void) | null = null
 
+  // Central state resolver - ALL paths MUST use this
+  const resolveState = (state: TerminalState) => {
+    resolveOverlay(id, sessionId, state)
+    // Convert to legacy format for React state
+    patchStatus(id, stateMachineToLegacy(state))
+  }
+
+  // Start loading with automatic 30s timeout enforcement
+  // Timeout will automatically call resolveState on expiry
+  patchStatus(id, stateMachineToLegacy(startLoading(id, sessionId, resolveState)))
+
   const run = async () => {
+    // Validate session before proceeding
+    if (!isSessionActive(id, sessionId)) {
+      return // Session invalidated, abort
+    }
+
+    // Wait for map style to be ready
     if (!mapStyleMutable(map)) {
       const onReady = () => {
-        if (cancelled || !mapStyleMutable(map)) return
+        // Validate session before proceeding
+        if (!isSessionActive(id, sessionId) || !mapStyleMutable(map)) {
+          if (isSessionActive(id, sessionId)) {
+            resolveState({ state: 'ERROR', enabled: true, error: 'Map style not ready' })
+          }
+          return
+        }
         void run()
       }
       map.once('styledata', onReady)
@@ -51,144 +96,134 @@ function syncOverlay(
           /* ignore */
         }
       }
-      return
+      // Set up a fallback timeout for style wait (5s max)
+      const styleWaitTimeout = window.setTimeout(() => {
+        if (isSessionActive(id, sessionId) && !mapStyleMutable(map)) {
+          logWarn('OVERLAY', `${id}: Style wait timeout, forcing error state [session: ${sessionId.slice(0, 8)}]`)
+          resolveState({ state: 'ERROR', enabled: true, error: 'Map initialization timeout' })
+        }
+      }, 5000)
+      return () => {
+        window.clearTimeout(styleWaitTimeout)
+        styleWaitCleanup?.()
+        styleWaitCleanup = null
+      }
     }
     styleWaitCleanup?.()
     styleWaitCleanup = null
 
+    // Validate session before proceeding with zoom check
+    if (!isSessionActive(id, sessionId)) {
+      return
+    }
+
+    // Check zoom gate
     const zoomGate = overlayZoomBlocked(map, id)
     if (zoomGate.blocked) {
       removeEnvironmentalOverlay(map, id)
-      patchStatus(id, {
-        loading: false,
-        error: zoomGate.message ?? 'Zoom in to load this layer',
-        stale: false,
-        fromCache: false,
-      })
+      resolveState({ state: 'EMPTY', enabled: true, message: zoomGate.message ?? 'Zoom in to load this layer' })
       return
     }
 
     const bbox = mapBboxFromMap(map)
 
+    // Raster WMS overlays
     if (def.delivery === 'raster-wms') {
       if (!online) {
         removeEnvironmentalOverlay(map, id)
-        patchStatus(id, {
-          loading: false,
-          error: 'Requires network (not cached)',
-          stale: false,
-          fromCache: false,
-        })
+        resolveState({ state: 'ERROR', enabled: true, error: 'Requires network (not cached)' })
         return
       }
-      if (id === 'fire_firms' && !readFirmsMapKey()) {
+      // Config-driven API key check (any overlay can require an env key)
+      if (def.envKey && !readEnvKey(def.envKey)) {
         removeEnvironmentalOverlay(map, id)
-        patchStatus(id, {
-          loading: false,
-          error: 'FIRMS MAP_KEY missing in this build — add VITE_FIRMS_MAP_KEY and redeploy',
-          stale: false,
-          fromCache: false,
-        })
+        resolveState({ state: 'ERROR', enabled: false, error: `${def.label} API key missing — add ${def.envKey} and redeploy` })
         return
       }
       const ok = applyRasterOverlay(map, id)
-      patchStatus(id, {
-        loading: false,
-        error: ok ? null : 'Layer unavailable — retry or check network',
-        stale: false,
-        fromCache: false,
-      })
+      if (ok) {
+        resolveState({ state: 'READY', enabled: true, featureCount: 0 }) // Raster overlays don't have feature count
+      } else {
+        resolveState({ state: 'ERROR', enabled: true, error: 'Layer unavailable — retry or check network' })
+      }
       return
     }
 
-    patchStatus(id, { loading: true, error: null })
-
+    // GeoJSON overlays
     if (!online && def.offlineCacheable) {
       const cached = readCachedOverlayGeo(id, bbox)
       if (cached) {
         if (applyGeojsonOverlay(map, id, cached.geojson)) {
-          patchStatus(id, {
-            loading: false,
-            error: null,
-            stale: true,
-            fromCache: true,
+          resolveState({
+            state: 'OFFLINE_FALLBACK',
+            enabled: true,
+            cachedAt: cached.fetchedAt,
+            message: 'Offline — showing cached data'
           })
         } else {
-          patchStatus(id, {
-            loading: false,
-            error: 'Map still loading — try again',
-            stale: false,
-            fromCache: false,
-          })
+          resolveState({ state: 'ERROR', enabled: true, error: 'Map still loading — try again' })
         }
         return
       }
       removeEnvironmentalOverlay(map, id)
-      patchStatus(id, {
-        loading: false,
-        error: 'Offline — pan here online once to cache',
-        stale: false,
-        fromCache: false,
-      })
+      resolveState({ state: 'EMPTY', enabled: true, message: 'Offline — pan here online once to cache' })
       return
     }
 
     if (!online) {
       removeEnvironmentalOverlay(map, id)
-      patchStatus(id, { loading: false, error: 'Requires network', stale: false, fromCache: false })
+      resolveState({ state: 'ERROR', enabled: true, error: 'Requires network' })
       return
     }
 
+    // Fetch online data
     try {
       const geojson = await fetchOverpassGeojson(id, bbox)
-      if (cancelled) return
+      
+      // Validate session before applying result
+      if (!isSessionActive(id, sessionId)) {
+        return // Stale session, abort without state change
+      }
+      
       if (!applyGeojsonOverlay(map, id, geojson)) {
-        patchStatus(id, {
-          loading: false,
-          error: 'Map still loading — try again',
-          stale: false,
-          fromCache: false,
-        })
+        resolveState({ state: 'ERROR', enabled: true, error: 'Map still loading — try again' })
         return
       }
       if (def.offlineCacheable) {
         writeCachedOverlayGeo({ overlayId: id, bbox, fetchedAt: Date.now(), geojson })
       }
-      patchStatus(id, {
-        loading: false,
-        error:
-          geojson.features.length === 0
-            ? 'No features in this view — zoom in or pan to trail/bike areas'
-            : null,
-        stale: false,
-        fromCache: false,
-      })
+      if (geojson.features.length === 0) {
+        resolveState({ state: 'EMPTY', enabled: true, message: 'No features in this view — zoom in or pan to trail/bike areas' })
+      } else {
+        resolveState({ state: 'READY', enabled: true, featureCount: geojson.features.length })
+      }
     } catch (e) {
-      if (cancelled) return
+      // Validate session before applying error
+      if (!isSessionActive(id, sessionId)) {
+        return // Stale session, abort without state change
+      }
+      
+      // Try fallback to cached
       const cached = def.offlineCacheable ? readCachedOverlayGeo(id, bbox) : null
       if (cached && applyGeojsonOverlay(map, id, cached.geojson)) {
-        patchStatus(id, {
-          loading: false,
-          error: null,
-          stale: true,
-          fromCache: true,
-        })
+        resolveState({ state: 'OFFLINE_FALLBACK', enabled: true, cachedAt: cached.fetchedAt })
         return
       }
       removeEnvironmentalOverlay(map, id)
-      patchStatus(id, {
-        loading: false,
-        error: e instanceof Error ? e.message : 'Load failed',
-        stale: false,
-        fromCache: false,
-      })
+      const errorMsg = e instanceof Error ? e.message : 'Load failed'
+      resolveState({ state: 'ERROR', enabled: true, error: errorMsg })
     }
   }
 
   void run()
 
   return () => {
-    cancelled = true
+    // ALWAYS resolve to IDLE on cleanup - guarantees terminal state
+    if (isSessionActive(id, sessionId)) {
+      resolveState({ state: 'IDLE', enabled: false })
+    }
+    clearLoadingTimeout(id)
+    clearOverlaySession(id)
     styleWaitCleanup?.()
     styleWaitCleanup = null
   }
@@ -247,12 +282,20 @@ export default function EnvironmentalOverlaysLayer() {
           cleanupRef.current[def.id]?.()
           cleanupRef.current[def.id] = syncOverlay(map, def.id, true, online, patchRef.current)
         }
-      }, MOVE_DEBOUNCE_MS)
+      }, runtimePollIntervalMs('overlay_debounce'))
     }
 
     map.on('moveend', onMoveEnd)
 
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        scheduleRefreshAll()
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+
     return () => {
+      document.removeEventListener('visibilitychange', onVisibility)
       map.off('styledata', onStyleData)
       map.off('moveend', onMoveEnd)
       if (moveTimerRef.current != null) {

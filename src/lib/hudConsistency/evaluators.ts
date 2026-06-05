@@ -8,6 +8,7 @@ import type {
   RouteRenderMode,
   SnapEligibility,
   SnapHealthLevel,
+  Tier2UsabilityLevel,
 } from './types'
 
 const COMPASS_STALL_MS = 12_000
@@ -200,6 +201,7 @@ export type OverlayLayerEval = {
   loading: boolean
   error: string | null
   layerOnMap: boolean
+  stale?: boolean
 }
 
 export function evaluateOverlayHealth(layers: OverlayLayerEval[]): {
@@ -221,6 +223,9 @@ export function evaluateOverlayHealth(layers: OverlayLayerEval[]): {
 
     layerStatus[layer.id] = { toggle: layer.toggle, status, error: layer.error }
 
+    if (layer.toggle && layer.stale && layer.layerOnMap) {
+      warnings.push(`overlay_stale:${layer.id}`)
+    }
     if (layer.toggle && !layer.loading && !layer.error && !layer.layerOnMap) {
       warnings.push(`overlay_silent_failure:${layer.id}`)
     }
@@ -314,6 +319,34 @@ export function evaluateLayoutHealth(input: LayoutEvalInput): {
   return { level, dockedCount, overlapCount, misalignedCount, warnings }
 }
 
+/** Collapse domain diagnostics into one usability answer. */
+export function aggregateTier2Usability(parts: {
+  compass: CompassHealthLevel
+  route: RouteHealthLevel
+  snap: SnapHealthLevel
+  overlay: 'ok' | 'degraded'
+  layout: LayoutHealthLevel
+}): Tier2UsabilityLevel {
+  if (
+    parts.compass === 'unstable' ||
+    parts.route === 'missing' ||
+    parts.snap === 'blocked' ||
+    parts.layout === 'overlapping'
+  ) {
+    return 'unstable'
+  }
+  if (
+    parts.compass === 'degraded' ||
+    parts.route === 'degraded' ||
+    parts.snap === 'degraded' ||
+    parts.overlay === 'degraded' ||
+    parts.layout === 'misaligned'
+  ) {
+    return 'degraded'
+  }
+  return 'ok'
+}
+
 export function buildHudSystemHealth(parts: {
   nowMs: number
   compass: ReturnType<typeof evaluateCompassHealth> & {
@@ -333,6 +366,13 @@ export function buildHudSystemHealth(parts: {
 
   return {
     updatedAt: parts.nowMs,
+    overall_health: aggregateTier2Usability({
+      compass: parts.compass.level,
+      route: parts.route.level,
+      snap: parts.snap.level,
+      overlay: parts.overlay.level,
+      layout: parts.layout.level,
+    }),
     compass_health: parts.compass.level,
     route_health: parts.route.level,
     snap_health: parts.snap.level,

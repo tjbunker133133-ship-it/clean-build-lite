@@ -14,6 +14,7 @@ import {
   setOverlayToggle,
   type OverlayToggleState,
 } from '../lib/environmentalOverlays/overlayState'
+import { readEnvKey } from '../lib/environmentalOverlays/sources'
 import type { EnvironmentalOverlayId, OverlayRuntimeStatus } from '../lib/environmentalOverlays/types'
 
 type OverlayContextValue = {
@@ -84,31 +85,41 @@ export function OverlayProvider({ children }: { children: ReactNode }) {
   const setEnabled = useCallback((id: EnvironmentalOverlayId, enabled: boolean) => {
     if (enabled) {
       const def = overlayDef(id)
-      if (def.envKey === 'VITE_FIRMS_MAP_KEY') {
-        const key = (
-          import.meta as unknown as { env?: Record<string, string | undefined> }
-        ).env?.VITE_FIRMS_MAP_KEY?.trim()
-        if (!key) {
-          const error =
-            'FIRMS MAP_KEY not in this build — add VITE_FIRMS_MAP_KEY to .env.local, sync Vercel, redeploy'
-          patchStatus(id, {
-            enabled: false,
-            error,
-            loading: false,
-          })
-          return { applied: false, error }
-        }
+      // Config-driven API key check (any overlay can require an env key)
+      if (def.envKey && !readEnvKey(def.envKey)) {
+        const error =
+          `${def.label} API key missing — add ${def.envKey} to .env.local, sync Vercel, redeploy`
+        // CRITICAL: Always clear loading and set enabled false when key missing
+        patchStatus(id, {
+          enabled: false,
+          error,
+          loading: false,
+          stale: false,
+          fromCache: false,
+        })
+        return { applied: false, error }
       }
     }
     setToggles((t) => setOverlayToggle(t, id, enabled))
+    // When disabling, clear all state
+    if (!enabled) {
+      patchStatus(id, {
+        enabled: false,
+        error: null,
+        loading: false,
+        stale: false,
+        fromCache: false,
+      })
+      return { applied: true }
+    }
+    // When enabling, set loading true (will be cleared by EnvironmentalOverlaysLayer)
     patchStatus(id, {
-      enabled,
+      enabled: true,
       error: null,
-      loading: false,
+      loading: true,  // Loading will be cleared by syncOverlay
       stale: false,
       fromCache: false,
     })
-    if (enabled) patchStatus(id, { loading: true })
     return { applied: true }
   }, [patchStatus])
 

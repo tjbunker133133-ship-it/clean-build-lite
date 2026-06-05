@@ -2,9 +2,11 @@ import type { MissionBurst, MissionCheckIn } from './types'
 import type { TeamBurstTarget } from './teamComms'
 
 export const BURST_MAX_CHARS = 120
-export const BURST_MIN_INTERVAL_MS = 3_000
+export const BURST_MIN_INTERVAL_MS = 2_000
 export const CHECKIN_MIN_INTERVAL_MS = 5_000
-export const TEAM_MESSAGE_STALE_MS = 300_000
+/** Rolling mission message log window (60 minutes). */
+export const TEAM_MESSAGE_STALE_MS = 3_600_000
+export const MISSION_BURST_LOG_MAX = 100
 
 export function sanitizeBurstText(raw: string): string {
   const trimmed = raw.trim().replace(/\s+/g, ' ')
@@ -66,5 +68,5 @@ export function filterRecentBursts(items: MissionBurst[], nowMs = Date.now()): M
   return items
     .filter((b) => nowMs - b.sentAt <= TEAM_MESSAGE_STALE_MS)
     .sort((a, b) => b.sentAt - a.sentAt)
-    .slice(0, 24)
+    .slice(0, MISSION_BURST_LOG_MAX)
 }

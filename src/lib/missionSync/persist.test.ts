@@ -48,6 +48,23 @@ describe('mission persist', () => {
     expect(loaded?.joinToken).toBe('tok')
   })
 
+  it('round-trips session watcher roster on host session', () => {
+    saveMissionSession({
+      missionId: 'm1',
+      missionName: 'Test',
+      role: 'member',
+      deviceId: 'dev_abc',
+      joinToken: 'tok',
+      hostDeviceId: 'dev_abc',
+      sessionWatchers: [{ deviceId: 'w1', callsign: 'Home', live: false }],
+      updatedAt: Date.now(),
+    })
+    const loaded = loadMissionSession()
+    expect(loaded?.sessionWatchers).toEqual([
+      { deviceId: 'w1', callsign: 'Home', live: false },
+    ])
+  })
+
   it('clears session on null save', () => {
     saveMissionSession({
       missionId: 'm1',

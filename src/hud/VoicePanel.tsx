@@ -40,7 +40,7 @@ import {
   getVoiceListenProfile,
   type VoiceListenMode,
 } from '../lib/voice/voiceListenProfile'
-import { useLongPressVoiceArm, useVolumeUpVoiceArm } from '../hooks/useVolumeUpVoiceArm'
+import { useLongPressVoiceArm } from '../hooks/useLongPressVoiceArm'
 import {
   armRecognitionIgnoreUntil,
   isRecognitionOutputHeld,
@@ -49,7 +49,15 @@ import {
   speechRecognitionBlockRemainingMs,
   speakHudPhrase,
   stopVoiceOutputOnly,
+  stopAllSpeech,
+  clearAllSpeech,
 } from '../runtime/voiceAudioArbitration'
+// C3 FIX: VoicePanel MUST respect authority controller — no priority inversion
+import {
+  isSpeaking,
+  getCurrentSpeech,
+  VOICE_PRIORITY,
+} from '../lib/voice/voiceAuthorityController'
 import { setVoicePanelCommandHandlers } from '../runtime/voicePanelCommandBridge'
 
 type VoiceState = 'sleeping' | 'listening' | 'processing' | 'success' | 'failure'
@@ -341,6 +349,10 @@ export default function VoicePanel() {
   }, [armed, listenMode])
 
   const hardDisarm = useCallback(() => {
+    // H1 FIX: Stop ALL TTS immediately on disarm — no orphan speech
+    stopAllSpeech('hard-disarm')
+    clearAllSpeech('hard-disarm')
+
     stopVoiceOutputOnly('hard-disarm')
     listenModeRef.current = 'off'
     setListenMode('off')
@@ -443,6 +455,23 @@ export default function VoicePanel() {
   ) => {
     const trimmed = text.trim()
     if (!trimmed) return
+
+    // C3 FIX: Check authority controller — NEVER bypass higher priority speech
+    // VoicePanel commands are USER_COMMAND priority (80)
+    // SAFETY priority (100) must NOT be interrupted by panel feedback
+    if (isSpeaking()) {
+      const current = getCurrentSpeech()
+      if (current && current.priority > VOICE_PRIORITY.USER_COMMAND) {
+        // Higher priority speech active (SAFETY) — skip panel feedback
+        logInfo('VOICE', 'VoicePanel TTS deferred: higher priority speech active', {
+          currentPriority: current.priority,
+          panelPriority: VOICE_PRIORITY.USER_COMMAND,
+          text: trimmed.slice(0, 40),
+        })
+        return
+      }
+    }
+
     const pauseRecognition =
       opts?.pauseRecognition !== undefined
         ? opts.pauseRecognition
@@ -462,7 +491,9 @@ export default function VoicePanel() {
     }
     const rate = getDeviceProfile().isIOS ? 0.92 : 0.95
     try {
-      await speakHudPhrase(trimmed, rate)
+      // C3 FIX: Route through authority controller with explicit priority
+      // This prevents VoicePanel from overriding safety alerts
+      await speakHudPhrase(trimmed, rate, VOICE_PRIORITY.USER_COMMAND)
     } finally {
       if (pauseRecognition) {
         setRecognitionOutputHold(false)
@@ -1038,10 +1069,6 @@ export default function VoicePanel() {
     logInfo('VOICE', 'hardware-hold.armed-hardListen')
   }, [supportsRec, requestMicGranted])
 
-  useVolumeUpVoiceArm(() => {
-    void armFromHardwareShortcut()
-  }, { enabled: isMobileHud && supportsRec })
-
   const longPressArm = useLongPressVoiceArm(() => {
     void armFromHardwareShortcut()
   })
@@ -1241,7 +1268,7 @@ export default function VoicePanel() {
               <span style={{ fontFamily: 'var(--font-mono, monospace)', color: '#e2eae2' }}>HUD weather</span>
               — or <span style={{ fontFamily: 'var(--font-mono, monospace)', color: '#e2eae2' }}>HUD</span> → Yes? →{' '}
               <span style={{ fontFamily: 'var(--font-mono, monospace)', color: '#e2eae2' }}>weather</span>.
-              Volume-up 3s rarely works in mobile browsers — use the hold button above.
+              Hold the mic button ~3s for hands-free when wake word is off.
               <div style={{ marginTop: 6, fontSize: labelPx(10), color: 'var(--cockpit-panel-subtle)' }}>
                 Last heard: {lastHeard || '—'}
               </div>

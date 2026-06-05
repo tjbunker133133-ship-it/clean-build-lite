@@ -32,6 +32,9 @@ export type LogCategory =
   | 'DEADMAN'
   | 'MOBILE_UI'
   | 'PWA'
+  | 'SVS'
+  | 'OVERLAY'
+  | 'CRO'
 
 const isDev = (() => {
   try {

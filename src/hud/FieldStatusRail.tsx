@@ -17,10 +17,19 @@ import {
   isFieldWakeLockWanted,
   subscribeFieldWakeLock,
 } from '../runtime/fieldWakeLock'
-import { fieldStatusRailBottomCss } from './hudLayout'
+import { fieldStatusRailBottomCss, HUD_Z_STATUS_RAIL } from './hudLayout'
 import { touchFontSm } from './tokens'
+import { getRuntimeActivityLevel } from '../runtime/runtimeActivityPolicy'
 
 type RowTone = 'mesh' | 'observer' | 'ready' | 'warn' | 'nav'
+
+const ROW_PRIORITY: Record<RowTone, number> = {
+  nav: 0,
+  warn: 1,
+  mesh: 2,
+  observer: 3,
+  ready: 4,
+}
 
 type StatusRow = {
   id: string
@@ -109,7 +118,7 @@ export default function FieldStatusRail() {
         id: 'wake-lock',
         label: wakeHeld
           ? 'Screen awake for mission'
-          : 'Wake lock recovering — tap screen; OS lock may override',
+          : 'Display sleep possible — informational only',
         live: wakeHeld,
         tone: wakeHeld ? 'ready' : 'warn',
       })
@@ -138,7 +147,7 @@ export default function FieldStatusRail() {
     if (
       sync.role === 'member' &&
       (sync.watchLinkShared || sync.pendingObserverOfferEncoded) &&
-      sync.peers.filter((p) => p.linkRole === 'observer').length === 0
+      sync.observerCount === 0
     ) {
       list.push({
         id: 'watch-wait',
@@ -150,9 +159,9 @@ export default function FieldStatusRail() {
     const showMesh = sync.supported && sync.role !== 'idle'
     if (showMesh) {
       const isObserver = sync.role === 'observer'
-      const observerCallsigns = sync.peers
-        .filter((p) => p.linkRole === 'observer')
-        .map((p) => p.callsign?.trim() || 'Watcher')
+      const observerCallsigns = sync.watcherRoster.map((w) =>
+        w.live ? w.callsign : `${w.callsign} (relay)`,
+      )
       const fieldMemberCount = sync.peers.filter((p) => p.linkRole === 'member').length
 
       if (isObserver) {
@@ -230,6 +239,7 @@ export default function FieldStatusRail() {
     sync.monitorTargetCallsign,
     sync.monitorTransport,
     sync.observerCount,
+    sync.watcherRoster,
     sync.peers,
     sync.phase,
     sync.pendingObserverOfferEncoded,
@@ -244,10 +254,29 @@ export default function FieldStatusRail() {
     wakeHeld,
   ])
 
-  if (rows.length === 0) return null
+  const visibleRows = useMemo(() => {
+    const activity = getRuntimeActivityLevel()
+    const sorted = [...rows].sort((a, b) => ROW_PRIORITY[a.tone] - ROW_PRIORITY[b.tone])
+    if (activity === 'BACKGROUND') {
+      return sorted.filter(
+        (r) =>
+          r.tone === 'nav' ||
+          r.tone === 'warn' ||
+          r.id === 'background' ||
+          r.id === 'offline-miss' ||
+          r.id === 'link-recovery',
+      )
+    }
+    if (activity === 'IDLE') {
+      return sorted.filter((r) => r.tone !== 'ready' || r.live === true)
+    }
+    return sorted
+  }, [rows])
 
-  const primary = rows[0]
-  const secondary = rows.slice(1)
+  if (visibleRows.length === 0) return null
+
+  const primary = visibleRows[0]!
+  const secondary = visibleRows.slice(1)
   const hasMore = secondary.length > 0
 
   return (
@@ -256,7 +285,7 @@ export default function FieldStatusRail() {
         position: 'absolute',
         left: 12,
         bottom: fieldStatusRailBottomCss(),
-        zIndex: 204,
+        zIndex: HUD_Z_STATUS_RAIL,
         pointerEvents: 'auto',
         maxWidth: 'min(78vw, 300px)',
       }}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildBurst, isBurstValid, sanitizeBurstText } from './comms'
+import { buildBurst, filterRecentBursts, isBurstValid, sanitizeBurstText } from './comms'
 
 describe('mission comms', () => {
   it('sanitizes and caps burst text', () => {
@@ -24,5 +24,18 @@ describe('mission comms', () => {
     })
     expect(b?.toDeviceId).toBe('d2')
     expect(b?.toCallsign).toBe('Bravo')
+  })
+
+  it('prunes mission log to 60 minutes and caps count', () => {
+    const now = Date.now()
+    const items = Array.from({ length: 120 }, (_, i) => ({
+      deviceId: 'a',
+      callsign: 'Alpha',
+      text: `m${i}`,
+      sentAt: now - i * 60_000,
+    }))
+    const pruned = filterRecentBursts(items, now)
+    expect(pruned.length).toBeLessThanOrEqual(100)
+    expect(pruned.every((b) => now - b.sentAt <= 3_600_000)).toBe(true)
   })
 })

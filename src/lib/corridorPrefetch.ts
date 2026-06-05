@@ -267,20 +267,7 @@ export function getOutdoorCorridorTileTemplates(): string[] {
   return maptilerRasterTileTemplates('outdoor')
 }
 
-/** @deprecated Prefer `getOutdoorCorridorTileTemplates` for corridor warm-up. */
-export function extractOutdoorTileUrls(style: unknown): string[] {
-  if (!style || typeof style !== 'object') return []
-  const spec = style as { sources?: Record<string, { type?: string; tiles?: string[] }> }
-  const urls: string[] = []
-  for (const src of Object.values(spec.sources ?? {})) {
-    if (src.type === 'raster' && Array.isArray(src.tiles)) {
-      urls.push(...src.tiles.filter((t) => typeof t === 'string'))
-    }
-  }
-  const outdoor = getOutdoorCorridorTileTemplates()
-  if (outdoor.length > 0) return outdoor
-  return urls.filter((u) => u.includes('maptiler') || u.includes('openstreetmap'))
-}
+// extractOutdoorTileUrls removed - use getOutdoorCorridorTileTemplates for corridor warm-up
 
 function lngLatToTile(lng: number, lat: number, zoom: number): { x: number; y: number } {
   const n = 2 ** zoom
