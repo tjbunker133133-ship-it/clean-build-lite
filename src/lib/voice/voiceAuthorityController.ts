@@ -13,6 +13,10 @@
 
 import { logInfo, logWarn } from '../../runtime/logger'
 import { traceTTS } from '../../runtime/runtimeForensics'
+import {
+  debugConfig,
+  instrumentedCancel,
+} from '../../runtime/voiceRegressionDebug'
 const LOG_CAT = 'VOICE' as const
 
 // ============================================================================
@@ -123,6 +127,16 @@ export function startSpeech(
     return { started: false, interrupted: false, reason: 'empty_text' }
   }
 
+  // REGRESSION ISOLATION: Bypass authority controller when disabled
+  if (debugConfig.disableVoiceAuthority || debugConfig.voiceSafeMode) {
+    traceTTS('authority_bypassed', { reason: debugConfig.voiceSafeMode ? 'safe_mode' : 'authority_disabled', sourceId })
+    // Direct execution without priority logic
+    const now = Date.now()
+    const speechId = `sp-bypass-${++speechIdCounter}-${now}`
+    executeTTS(trimmed, speechId)
+    return { started: true, interrupted: false }
+  }
+
   const now = Date.now()
   const speechId = `sp-${++speechIdCounter}-${now}`
 
@@ -201,13 +215,14 @@ export function stopSpeech(reason: string): boolean {
     speechTimeouts.delete(speechId)
   }
 
-  // Cancel browser TTS
+  // Cancel browser TTS - INSTRUMENTED for regression isolation
   if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-    try {
-      window.speechSynthesis.cancel()
-    } catch {
-      // Ignore cancel errors
-    }
+    instrumentedCancel(
+      window.speechSynthesis,
+      'stopSpeech',
+      speechId,
+      currentSpeech?.id
+    )
   }
 
   // Don't invoke completion callback since this is an interruption
@@ -317,14 +332,14 @@ function performInterrupt(
     recordToHistory(currentSpeech.text, currentSpeech.priority, currentSpeech.sourceId)
   }
 
-  // Cancel current
+  // Cancel current - INSTRUMENTED for regression isolation
   if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-    try {
-      traceTTS('synth_cancel_called', { reason: 'interrupt', newId })
-      window.speechSynthesis.cancel()
-    } catch {
-      // Ignore
-    }
+    instrumentedCancel(
+      window.speechSynthesis,
+      'performInterrupt',
+      newId,
+      currentSpeech?.id
+    )
   }
 
   currentSpeech = null
@@ -419,20 +434,8 @@ function executeTTS(text: string, speechId: string): void {
     traceTTS('synth_pending_true', { speechId, reason: 'previous_utterance_stuck' })
   }
 
-  try {
-    traceTTS('synth_cancel_called', { speechId, reason: 'pre_speak_cleanup', speakingBefore: stateBefore.speaking })
-    synth.cancel() // Ensure clean state
-  } catch {
-    // Ignore
-  }
-
-  // Double-check state after cancel
-  const stateAfterCancel = {
-    speaking: synth.speaking,
-    pending: synth.pending,
-  }
-  traceTTS('synth_cancel_called', { speechId, stateAfterCancel })
-
+  // CRITICAL FIX: Create utterance and set up handlers BEFORE any cancel/speak sequence
+  // This ensures the utterance object is fully constructed before Android async operations
   const utterance = new SpeechSynthesisUtterance(text)
   traceTTS('utterance_created', { speechId, textLength: text.length })
 
@@ -474,6 +477,55 @@ function executeTTS(text: string, speechId: string): void {
   // C1 FIX: Register timeout in stable Map — no function reassignment, no closure accumulation
   speechTimeouts.set(speechId, safetyTimeout)
 
+  // REGRESSION FIX: Conditional cancel with Android delay
+  // HYPOTHESIS: Unconditional cancel() immediately before speak() creates race on Android
+  // FIX: Only cancel if something is actually active, then delay speak on Android
+  const needsCancel = stateBefore.speaking || stateBefore.pending
+
+  if (needsCancel) {
+    // Log the cancel for regression analysis
+    traceTTS('synth_cancel_needed', {
+      speechId,
+      reason: 'active_speech_detected',
+      speaking: stateBefore.speaking,
+      pending: stateBefore.pending,
+    })
+    instrumentedCancel(
+      synth,
+      'executeTTS.conditional_cleanup',
+      speechId,
+      currentSpeech?.id
+    )
+
+    // ANDROID FIX: Delay speak() after cancel to let browser complete async cleanup
+    // 50ms is sufficient for Chrome/Android to process cancel without killing new utterance
+    const isAndroid = /Android/i.test(navigator.userAgent)
+    const delayMs = isAndroid ? 50 : 0
+
+    if (delayMs > 0) {
+      traceTTS('android_speak_delay', { speechId, delayMs, reason: 'cancel_race_mitigation' })
+      window.setTimeout(() => {
+        performSpeak(synth, utterance, speechId, text, startupWindowOpen)
+      }, delayMs)
+      return
+    }
+  }
+
+  // Direct speak path (no cancel needed, or non-Android with immediate execution)
+  performSpeak(synth, utterance, speechId, text, startupWindowOpen)
+}
+
+/**
+ * Perform the actual speak() call with full instrumentation.
+ * Separated to handle both immediate and delayed execution paths.
+ */
+function performSpeak(
+  synth: SpeechSynthesis,
+  utterance: SpeechSynthesisUtterance,
+  speechId: string,
+  text: string,
+  startupWindowOpen: boolean,
+): void {
   try {
     traceTTS('synth_speak_called', { speechId, textLength: text.length, voiceCount: synth.getVoices().length })
     synth.speak(utterance)

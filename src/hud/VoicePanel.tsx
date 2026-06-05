@@ -60,6 +60,7 @@ import {
 } from '../lib/voice/voiceAuthorityController'
 import { setVoicePanelCommandHandlers } from '../runtime/voicePanelCommandBridge'
 import { traceVoice, traceCommand } from '../runtime/runtimeForensics'
+import { debugConfig } from '../runtime/voiceRegressionDebug'
 
 type VoiceState = 'sleeping' | 'listening' | 'processing' | 'success' | 'failure'
 
@@ -476,10 +477,21 @@ export default function VoicePanel() {
 
     traceVoice('tts_requested', { text: trimmed.slice(0, 40), pauseRecognition: opts?.pauseRecognition })
 
+    // REGRESSION ISOLATION: Check if SR pause/resume should be disabled
+    const pauseRecognitionDisabled = debugConfig.disableSrPause || debugConfig.voiceSafeMode
+    if (pauseRecognitionDisabled) {
+      traceVoice('sr_pause_bypassed', {
+        text: trimmed.slice(0, 40),
+        reason: debugConfig.voiceSafeMode ? 'safe_mode' : 'disable_sr_pause',
+      })
+    }
+
     const pauseRecognition =
-      opts?.pauseRecognition !== undefined
-        ? opts.pauseRecognition
-        : listenProfile.pauseSrDuringTts
+      pauseRecognitionDisabled
+        ? false // FORCE DISABLED for regression isolation
+        : opts?.pauseRecognition !== undefined
+          ? opts.pauseRecognition
+          : listenProfile.pauseSrDuringTts
     const rec = recognitionRef.current
     if (pauseRecognition && rec && armedRef.current) {
       traceVoice('recognition_paused_for_tts', { text: trimmed.slice(0, 40) })
@@ -510,12 +522,28 @@ export default function VoicePanel() {
       if (pauseRecognition) {
         traceVoice('recognition_resumed_post_tts', { text: trimmed.slice(0, 40) })
         setRecognitionOutputHold(false)
-        const cooldownUntil = performance.now() + listenProfile.outputCooldownMs
+
+        // ANDROID FIX: Extend cooldown to ensure TTS startup window completes before SR restart
+        // HYPOTHESIS: Rapid SR restart steals audio focus and prevents next TTS from starting
+        const isAndroid = /Android/i.test(navigator.userAgent)
+        const baseCooldownMs = listenProfile.outputCooldownMs
+        const androidExtraCooldownMs = isAndroid ? 400 : 0 // Extra 400ms on Android
+        const totalCooldownMs = baseCooldownMs + androidExtraCooldownMs
+
+        const cooldownUntil = performance.now() + totalCooldownMs
         ignoreSrUntilRef.current = cooldownUntil
         armRecognitionIgnoreUntil(cooldownUntil)
+
         if (armedRef.current) {
-          traceVoice('recognition_restart_scheduled', { delayMs: listenProfile.outputCooldownMs + 300 })
-          scheduleMicRestartRef.current(listenProfile.outputCooldownMs + 300)
+          const restartDelayMs = totalCooldownMs + 300
+          traceVoice('recognition_restart_scheduled', {
+            delayMs: restartDelayMs,
+            baseCooldownMs,
+            androidExtraCooldownMs,
+            isAndroid,
+            reason: androidExtraCooldownMs > 0 ? 'android_audio_focus_protection' : 'standard',
+          })
+          scheduleMicRestartRef.current(restartDelayMs)
         }
       }
     }

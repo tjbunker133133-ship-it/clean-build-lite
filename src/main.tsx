@@ -29,6 +29,8 @@ import { hardReloadWithCacheBust } from './runtime/pwaForceUpdate'
 import { forceUpdateApp } from './utils/forceUpdate'
 import { traceAction } from './runtime/actionTrace'
 import { hudDevLog } from './lib/tier1DebugLog'
+// Voice regression isolation debug - loaded early for diagnostic access
+import './runtime/voiceRegressionDebug'
 import { migrateTacticalProfileIfNeeded } from './lib/tacticalProfile'
 import { captureAlertWatchFromLocation } from './lib/push/pendingAlertSubscribe'
 

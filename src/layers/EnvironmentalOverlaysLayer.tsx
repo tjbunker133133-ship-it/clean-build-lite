@@ -70,6 +70,9 @@ function syncOverlay(
       case 'READY':
         traceOverlay('ready_committed', { overlayId: id, sessionId: sessionId.slice(0, 8), featureCount: state.featureCount })
         break
+      case 'SYNCING':
+        traceOverlay('syncing_committed', { overlayId: id, sessionId: sessionId.slice(0, 8), message: state.message, featureCount: state.featureCount })
+        break
       case 'EMPTY':
         traceOverlay('empty_committed', { overlayId: id, sessionId: sessionId.slice(0, 8), message: state.message })
         break
@@ -255,37 +258,55 @@ function syncOverlay(
         return
       }
 
-      // VERIFY ACTUAL RENDER: Schedule a delayed check to confirm features rendered
-      window.setTimeout(async () => {
-        if (!isSessionActive(id, sessionId)) return
-        const renderCheck = await verifyOverlayRendered(map, id)
-        traceOverlay('delayed_render_verification', {
-          overlayId: id,
-          sessionId: sessionId.slice(0, 8),
-          renderCount: renderCheck.renderCount,
-          sourceFeatureCount: renderCheck.sourceFeatureCount,
-          visible: renderCheck.visible,
-          issues: renderCheck.issues,
-        })
-
-        // If source has features but none rendered, log specific diagnostic
-        if (renderCheck.sourceFeatureCount > 0 && renderCheck.renderCount === 0) {
-          traceOverlay('features_not_rendering', {
-            overlayId: id,
-            possibleCauses: renderCheck.issues,
-            zoom: renderCheck.zoom,
-            minZoom: renderCheck.minZoom,
-          })
-        }
-      }, 500) // Allow time for MapLibre to render
-
       if (def.offlineCacheable) {
         writeCachedOverlayGeo({ overlayId: id, bbox, fetchedAt: Date.now(), geojson })
       }
+
+      // RENDER VERIFICATION FIX: Don't commit to READY until we verify actual rendered features
+      // This prevents false-positive READY state when layers attach but don't render
       if (geojson.features.length === 0) {
         safeResolve({ state: 'EMPTY', enabled: true, message: 'No features in this view — zoom in or pan to trail/bike areas' })
       } else {
-        safeResolve({ state: 'READY', enabled: true, featureCount: geojson.features.length })
+        // Initial state: SYNCING (not READY yet)
+        safeResolve({ state: 'SYNCING', enabled: true, message: 'Rendering features...', featureCount: geojson.features.length })
+
+        // VERIFY ACTUAL RENDER before committing to READY
+        window.setTimeout(async () => {
+          if (!isSessionActive(id, sessionId)) return
+          const renderCheck = await verifyOverlayRendered(map, id)
+          traceOverlay('delayed_render_verification', {
+            overlayId: id,
+            sessionId: sessionId.slice(0, 8),
+            renderCount: renderCheck.renderCount,
+            sourceFeatureCount: renderCheck.sourceFeatureCount,
+            visible: renderCheck.visible,
+            issues: renderCheck.issues,
+          })
+
+          // Re-check session validity before committing state update
+          if (!isSessionActive(id, sessionId)) return
+
+          // State transition based on actual render verification
+          if (renderCheck.renderCount > 0) {
+            // SUCCESS: Features actually rendered
+            traceOverlay('render_confirmed', { overlayId: id, sessionId: sessionId.slice(0, 8), renderCount: renderCheck.renderCount })
+            safeResolve({ state: 'READY', enabled: true, featureCount: renderCheck.sourceFeatureCount })
+          } else if (renderCheck.sourceFeatureCount > 0) {
+            // FAIL: Source has features but none rendered in viewport
+            traceOverlay('features_not_rendering', {
+              overlayId: id,
+              sessionId: sessionId.slice(0, 8),
+              possibleCauses: renderCheck.issues,
+              zoom: renderCheck.zoom,
+              minZoom: renderCheck.minZoom,
+            })
+            // Stay in SYNCING state with guidance - user may need to zoom/pan
+            safeResolve({ state: 'SYNCING', enabled: true, message: `Features loaded but not visible — ${renderCheck.issues.join(', ')}`, featureCount: renderCheck.sourceFeatureCount })
+          } else {
+            // Source empty (shouldn't happen given earlier check, but handle gracefully)
+            safeResolve({ state: 'EMPTY', enabled: true, message: 'No features in this view — zoom in or pan to trail/bike areas' })
+          }
+        }, 500) // Allow time for MapLibre to render
       }
     } catch (e) {
       traceOverlay('fetch_threw', { overlayId: id, sessionId: sessionId.slice(0, 8), error: (e as Error).message })

@@ -33,19 +33,22 @@ export type EnvironmentalOverlayDef = {
  * States:
  * - IDLE: Initial, disabled, or reset state
  * - LOADING: Async operation in progress (MUST transition to terminal state within 30s)
+ * - SYNCING: Layer attached but awaiting visual render confirmation
  * - READY: Successfully loaded and displayed
  * - EMPTY: Loaded but no data/features in view
  * - ERROR: Failed to load with error message
  * - OFFLINE_FALLBACK: Using cached/stale data due to offline/network failure
  *
  * Rules:
- * - LOADING must always transition to a terminal state (READY/EMPTY/ERROR/OFFLINE_FALLBACK)
+ * - LOADING must always transition to a terminal state (READY/EMPTY/ERROR/OFFLINE_FALLBACK/SYNCING)
+ * - SYNCING must transition to READY, EMPTY, or ERROR once render verification completes
  * - No indefinite LOADING allowed - 30s global timeout enforced
  * - State transitions are explicit and logged
  */
 export type OverlayStateMachine =
   | { state: 'IDLE'; enabled: boolean }
   | { state: 'LOADING'; enabled: true; startedAt: number }
+  | { state: 'SYNCING'; enabled: true; message?: string; featureCount?: number }
   | { state: 'READY'; enabled: true; featureCount: number }
   | { state: 'EMPTY'; enabled: true; message: string }
   | { state: 'ERROR'; enabled: boolean; error: string }

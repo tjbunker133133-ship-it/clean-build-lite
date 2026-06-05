@@ -21,13 +21,16 @@ export type TTSTraceEvent =
   | 'utterance_onerror'
   | 'utterance_cancelled'
   | 'synth_cancel_called'
+  | 'synth_cancel_needed'
   | 'synth_speak_called'
   | 'synth_speak_threw'
   | 'synth_state_before'
   | 'synth_state_after_speak'
+  | 'synth_state_after_cancel'
   | 'synth_pending_true'
   | 'synth_speaking_true'
   | 'synth_speaking_never_true'
+  | 'android_speak_delay'
   | 'audio_focus_lost'
   | 'mobile_gesture_blocked'
   | 'cleanup_speech'
@@ -40,6 +43,7 @@ export type TTSTraceEvent =
   | 'tts_completed'
   | 'completion_callback_invoked'
   | 'recognition_restart_during_startup'
+  | 'authority_bypassed'
 
 export function traceTTS(event: TTSTraceEvent, details?: Record<string, unknown>): void {
   logInfo('RUNTIME', `FORENSIC[TTS] ${event}`, details)
@@ -91,6 +95,8 @@ export type OverlayTraceEvent =
   | 'attached_but_not_rendering'
   | 'delayed_render_verification'
   | 'features_not_rendering'
+  | 'render_confirmed'
+  | 'syncing_committed'
 
 export function traceOverlay(event: OverlayTraceEvent, details?: Record<string, unknown>): void {
   logInfo('RUNTIME', `FORENSIC[OVERLAY] ${event}`, details)
@@ -119,6 +125,7 @@ export type VoiceTraceEvent =
   | 'recognition_onerror'
   | 'recognition_paused_for_tts'
   | 'recognition_resumed_post_tts'
+  | 'sr_pause_bypassed'
   | 'disarm_triggered'
   | 'hard_off_called'
   | 'continuation_window_opened'

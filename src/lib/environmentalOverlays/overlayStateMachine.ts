@@ -17,6 +17,7 @@ const OVERLAY_TIMEOUT_MS = 30_000
 type SessionId = string
 export type TerminalState =
   | { state: 'READY'; enabled: true; featureCount: number }
+  | { state: 'SYNCING'; enabled: true; message?: string; featureCount?: number }
   | { state: 'EMPTY'; enabled: true; message: string }
   | { state: 'ERROR'; enabled: boolean; error: string }
   | { state: 'OFFLINE_FALLBACK'; enabled: true; cachedAt: number; message?: string }
@@ -245,6 +246,9 @@ export function stateMachineToLegacy(status: OverlayStateMachine): {
       return { enabled: status.enabled, loading: false, error: null, stale: false, fromCache: false }
     case 'LOADING':
       return { enabled: true, loading: true, error: null, stale: false, fromCache: false }
+    case 'SYNCING':
+      // SYNCING is visually treated as loading but with optional status message
+      return { enabled: true, loading: true, error: status.message ?? null, stale: false, fromCache: false }
     case 'READY':
       return { enabled: true, loading: false, error: null, stale: false, fromCache: false }
     case 'EMPTY':
@@ -259,6 +263,9 @@ export function stateMachineToLegacy(status: OverlayStateMachine): {
         stale: true,
         fromCache: true,
       }
+    default:
+      // Exhaustive check - all states handled above
+      return { enabled: false, loading: false, error: null, stale: false, fromCache: false }
   }
 }
 
