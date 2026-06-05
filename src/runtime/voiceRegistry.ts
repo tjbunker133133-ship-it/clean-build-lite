@@ -19,6 +19,7 @@
  *   - unknown              : no id/alias matched
  *   - handler-fail         : handler returned ok=false (capability/state)
  *   - error                : handler threw
+ *   - timeout              : command safety timeout (10s) triggered
  *
  * `validateVoiceRegistry()` is intended to be called once per registry
  * change. The result is mirrored into `runtimeSnapshot.voiceRegistry` and
@@ -166,6 +167,7 @@ export type VoiceParserReasonCode =
   | 'handler-fail'
   | 'error'
   | 'wake-word-missing'
+  | 'timeout'
 
 export interface VoiceParserEvent {
   ts: number

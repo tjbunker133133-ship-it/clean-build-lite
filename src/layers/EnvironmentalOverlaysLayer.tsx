@@ -27,6 +27,8 @@ import {
 } from '../lib/environmentalOverlays/overlayStateMachine'
 import { runtimePollIntervalMs } from '../runtime/runtimeActivityPolicy'
 import { logWarn } from '../runtime/logger'
+import { verifyOverlayRendered } from '../lib/environmentalOverlays/mapOverlayRuntime'
+import { traceOverlay } from '../runtime/runtimeForensics'
 
 /**
  * Sync overlay with strict state machine enforcement.
@@ -43,22 +45,44 @@ function syncOverlay(
   patchStatus: ReturnType<typeof useOverlayContext>['patchStatus'],
 ): () => void {
   if (!enabled) {
+    traceOverlay('overlay_disabled', { overlayId: id })
     removeEnvironmentalOverlay(map, id)
     clearLoadingTimeout(id)
     clearOverlaySession(id)
     patchStatus(id, { loading: false, error: null, stale: false, fromCache: false })
+    traceOverlay('cleanup_called', { overlayId: id, reason: 'disabled' })
     return () => {}
   }
 
+  traceOverlay('overlay_enabled', { overlayId: id, online })
   const def = overlayDef(id)
-  
+
   // Create unique session for this activation to prevent race conditions
   const sessionId = createOverlaySession(id)
-  
+  traceOverlay('session_created', { overlayId: id, sessionId: sessionId.slice(0, 8) })
+
   let styleWaitCleanup: (() => void) | null = null
 
   // Central state resolver - ALL paths MUST use this
   const resolveState = (state: TerminalState) => {
+    // Trace specific terminal state
+    switch (state.state) {
+      case 'READY':
+        traceOverlay('ready_committed', { overlayId: id, sessionId: sessionId.slice(0, 8), featureCount: state.featureCount })
+        break
+      case 'EMPTY':
+        traceOverlay('empty_committed', { overlayId: id, sessionId: sessionId.slice(0, 8), message: state.message })
+        break
+      case 'ERROR':
+        traceOverlay('error_committed', { overlayId: id, sessionId: sessionId.slice(0, 8), error: state.error.slice(0, 50) })
+        break
+      case 'OFFLINE_FALLBACK':
+        traceOverlay('offline_fallback_committed', { overlayId: id, sessionId: sessionId.slice(0, 8), cachedAt: state.cachedAt })
+        break
+      case 'IDLE':
+        traceOverlay('idle_committed', { overlayId: id, sessionId: sessionId.slice(0, 8) })
+        break
+    }
     resolveOverlay(id, sessionId, state)
     // Convert to legacy format for React state
     patchStatus(id, stateMachineToLegacy(state))
@@ -68,19 +92,35 @@ function syncOverlay(
   // Timeout will automatically call resolveState on expiry
   patchStatus(id, stateMachineToLegacy(startLoading(id, sessionId, resolveState)))
 
+  // Track if cleanup was called to prevent double-resolution
+  let isCleanedUp = false
+  const safeResolve = (state: TerminalState) => {
+    if (isCleanedUp) {
+      traceOverlay('stale_result_ignored', { overlayId: id, sessionId: sessionId.slice(0, 8), attemptedState: state.state })
+      return
+    }
+    isCleanedUp = true
+    resolveState(state)
+  }
+
   const run = async () => {
     // Validate session before proceeding
     if (!isSessionActive(id, sessionId)) {
+      safeResolve({ state: 'IDLE', enabled: false })
       return // Session invalidated, abort
     }
 
     // Wait for map style to be ready
     if (!mapStyleMutable(map)) {
+      traceOverlay('style_wait_started', { overlayId: id, sessionId: sessionId.slice(0, 8) })
+      let styleWaitTimeout: number | null = null
       const onReady = () => {
+        traceOverlay('style_wait_resolved', { overlayId: id, sessionId: sessionId.slice(0, 8), event: 'styledata/idle' })
         // Validate session before proceeding
         if (!isSessionActive(id, sessionId) || !mapStyleMutable(map)) {
           if (isSessionActive(id, sessionId)) {
-            resolveState({ state: 'ERROR', enabled: true, error: 'Map style not ready' })
+            traceOverlay('session_invalidated', { overlayId: id, sessionId: sessionId.slice(0, 8), reason: 'style_ready_but_session_dead' })
+            safeResolve({ state: 'ERROR', enabled: true, error: 'Map style not ready' })
           }
           return
         }
@@ -95,33 +135,41 @@ function syncOverlay(
         } catch {
           /* ignore */
         }
+        if (styleWaitTimeout !== null) {
+          window.clearTimeout(styleWaitTimeout)
+          styleWaitTimeout = null
+        }
       }
       // Set up a fallback timeout for style wait (5s max)
-      const styleWaitTimeout = window.setTimeout(() => {
+      styleWaitTimeout = window.setTimeout(() => {
+        styleWaitTimeout = null
         if (isSessionActive(id, sessionId) && !mapStyleMutable(map)) {
+          traceOverlay('style_wait_timeout', { overlayId: id, sessionId: sessionId.slice(0, 8) })
           logWarn('OVERLAY', `${id}: Style wait timeout, forcing error state [session: ${sessionId.slice(0, 8)}]`)
-          resolveState({ state: 'ERROR', enabled: true, error: 'Map initialization timeout' })
+          safeResolve({ state: 'ERROR', enabled: true, error: 'Map initialization timeout' })
         }
-      }, 5000)
-      return () => {
-        window.clearTimeout(styleWaitTimeout)
         styleWaitCleanup?.()
         styleWaitCleanup = null
-      }
+      }, 5000)
+      return
     }
     styleWaitCleanup?.()
     styleWaitCleanup = null
+    traceOverlay('style_wait_resolved', { overlayId: id, sessionId: sessionId.slice(0, 8), reason: 'already_ready' })
 
     // Validate session before proceeding with zoom check
     if (!isSessionActive(id, sessionId)) {
+      traceOverlay('session_invalidated', { overlayId: id, sessionId: sessionId.slice(0, 8), phase: 'pre_zoom_check' })
+      safeResolve({ state: 'IDLE', enabled: false })
       return
     }
 
     // Check zoom gate
     const zoomGate = overlayZoomBlocked(map, id)
     if (zoomGate.blocked) {
+      traceOverlay('zoom_blocked', { overlayId: id, sessionId: sessionId.slice(0, 8), message: zoomGate.message })
       removeEnvironmentalOverlay(map, id)
-      resolveState({ state: 'EMPTY', enabled: true, message: zoomGate.message ?? 'Zoom in to load this layer' })
+      safeResolve({ state: 'EMPTY', enabled: true, message: zoomGate.message ?? 'Zoom in to load this layer' })
       return
     }
 
@@ -129,99 +177,145 @@ function syncOverlay(
 
     // Raster WMS overlays
     if (def.delivery === 'raster-wms') {
+      traceOverlay('fetch_started', { overlayId: id, sessionId: sessionId.slice(0, 8), delivery: 'raster-wms' })
       if (!online) {
+        traceOverlay('fetch_threw', { overlayId: id, sessionId: sessionId.slice(0, 8), reason: 'offline_no_cache' })
         removeEnvironmentalOverlay(map, id)
-        resolveState({ state: 'ERROR', enabled: true, error: 'Requires network (not cached)' })
+        safeResolve({ state: 'ERROR', enabled: true, error: 'Requires network (not cached)' })
         return
       }
       // Config-driven API key check (any overlay can require an env key)
       if (def.envKey && !readEnvKey(def.envKey)) {
+        traceOverlay('fetch_threw', { overlayId: id, sessionId: sessionId.slice(0, 8), reason: 'api_key_missing' })
         removeEnvironmentalOverlay(map, id)
-        resolveState({ state: 'ERROR', enabled: false, error: `${def.label} API key missing — add ${def.envKey} and redeploy` })
+        safeResolve({ state: 'ERROR', enabled: false, error: `${def.label} API key missing — add ${def.envKey} and redeploy` })
         return
       }
+      traceOverlay('raster_apply_attempt', { overlayId: id, sessionId: sessionId.slice(0, 8) })
       const ok = applyRasterOverlay(map, id)
+      traceOverlay(ok ? 'raster_apply_success' : 'raster_apply_fail', { overlayId: id, sessionId: sessionId.slice(0, 8) })
       if (ok) {
-        resolveState({ state: 'READY', enabled: true, featureCount: 0 }) // Raster overlays don't have feature count
+        safeResolve({ state: 'READY', enabled: true, featureCount: 0 }) // Raster overlays don't have feature count
       } else {
-        resolveState({ state: 'ERROR', enabled: true, error: 'Layer unavailable — retry or check network' })
+        safeResolve({ state: 'ERROR', enabled: true, error: 'Layer unavailable — retry or check network' })
       }
       return
     }
 
     // GeoJSON overlays
     if (!online && def.offlineCacheable) {
+      traceOverlay('fetch_started', { overlayId: id, sessionId: sessionId.slice(0, 8), delivery: 'geojson-cache', online: false })
       const cached = readCachedOverlayGeo(id, bbox)
       if (cached) {
+        traceOverlay('fetch_resolved', { overlayId: id, sessionId: sessionId.slice(0, 8), fromCache: true, cachedAt: cached.fetchedAt })
+        traceOverlay('geojson_apply_attempt', { overlayId: id, sessionId: sessionId.slice(0, 8), fromCache: true })
         if (applyGeojsonOverlay(map, id, cached.geojson)) {
-          resolveState({
+          safeResolve({
             state: 'OFFLINE_FALLBACK',
             enabled: true,
             cachedAt: cached.fetchedAt,
             message: 'Offline — showing cached data'
           })
         } else {
-          resolveState({ state: 'ERROR', enabled: true, error: 'Map still loading — try again' })
+          traceOverlay('raster_apply_fail', { overlayId: id, sessionId: sessionId.slice(0, 8), reason: 'applyGeojsonOverlay_returned_false' })
+          safeResolve({ state: 'ERROR', enabled: true, error: 'Map still loading — try again' })
         }
         return
       }
+      traceOverlay('fetch_threw', { overlayId: id, sessionId: sessionId.slice(0, 8), reason: 'no_cache_available' })
       removeEnvironmentalOverlay(map, id)
-      resolveState({ state: 'EMPTY', enabled: true, message: 'Offline — pan here online once to cache' })
+      safeResolve({ state: 'EMPTY', enabled: true, message: 'Offline — pan here online once to cache' })
       return
     }
 
     if (!online) {
+      traceOverlay('fetch_threw', { overlayId: id, sessionId: sessionId.slice(0, 8), reason: 'offline_not_cacheable' })
       removeEnvironmentalOverlay(map, id)
-      resolveState({ state: 'ERROR', enabled: true, error: 'Requires network' })
+      safeResolve({ state: 'ERROR', enabled: true, error: 'Requires network' })
       return
     }
 
     // Fetch online data
+    traceOverlay('fetch_started', { overlayId: id, sessionId: sessionId.slice(0, 8), delivery: 'geojson-overpass', bbox })
     try {
       const geojson = await fetchOverpassGeojson(id, bbox)
-      
+      traceOverlay('fetch_resolved', { overlayId: id, sessionId: sessionId.slice(0, 8), featureCount: geojson.features.length })
+
       // Validate session before applying result
       if (!isSessionActive(id, sessionId)) {
-        return // Stale session, abort without state change
+        traceOverlay('session_invalidated', { overlayId: id, sessionId: sessionId.slice(0, 8), phase: 'post_fetch' })
+        safeResolve({ state: 'IDLE', enabled: false })
+        return // Stale session, abort
       }
-      
+
+      traceOverlay('geojson_apply_attempt', { overlayId: id, sessionId: sessionId.slice(0, 8) })
       if (!applyGeojsonOverlay(map, id, geojson)) {
-        resolveState({ state: 'ERROR', enabled: true, error: 'Map still loading — try again' })
+        traceOverlay('raster_apply_fail', { overlayId: id, sessionId: sessionId.slice(0, 8), reason: 'applyGeojsonOverlay_returned_false' })
+        safeResolve({ state: 'ERROR', enabled: true, error: 'Map still loading — try again' })
         return
       }
+
+      // VERIFY ACTUAL RENDER: Schedule a delayed check to confirm features rendered
+      window.setTimeout(async () => {
+        if (!isSessionActive(id, sessionId)) return
+        const renderCheck = await verifyOverlayRendered(map, id)
+        traceOverlay('delayed_render_verification', {
+          overlayId: id,
+          sessionId: sessionId.slice(0, 8),
+          renderCount: renderCheck.renderCount,
+          sourceFeatureCount: renderCheck.sourceFeatureCount,
+          visible: renderCheck.visible,
+          issues: renderCheck.issues,
+        })
+
+        // If source has features but none rendered, log specific diagnostic
+        if (renderCheck.sourceFeatureCount > 0 && renderCheck.renderCount === 0) {
+          traceOverlay('features_not_rendering', {
+            overlayId: id,
+            possibleCauses: renderCheck.issues,
+            zoom: renderCheck.zoom,
+            minZoom: renderCheck.minZoom,
+          })
+        }
+      }, 500) // Allow time for MapLibre to render
+
       if (def.offlineCacheable) {
         writeCachedOverlayGeo({ overlayId: id, bbox, fetchedAt: Date.now(), geojson })
       }
       if (geojson.features.length === 0) {
-        resolveState({ state: 'EMPTY', enabled: true, message: 'No features in this view — zoom in or pan to trail/bike areas' })
+        safeResolve({ state: 'EMPTY', enabled: true, message: 'No features in this view — zoom in or pan to trail/bike areas' })
       } else {
-        resolveState({ state: 'READY', enabled: true, featureCount: geojson.features.length })
+        safeResolve({ state: 'READY', enabled: true, featureCount: geojson.features.length })
       }
     } catch (e) {
+      traceOverlay('fetch_threw', { overlayId: id, sessionId: sessionId.slice(0, 8), error: (e as Error).message })
       // Validate session before applying error
       if (!isSessionActive(id, sessionId)) {
-        return // Stale session, abort without state change
+        traceOverlay('session_invalidated', { overlayId: id, sessionId: sessionId.slice(0, 8), phase: 'post_fetch_error' })
+        safeResolve({ state: 'IDLE', enabled: false })
+        return // Stale session, abort
       }
-      
+
       // Try fallback to cached
+      traceOverlay('offline_fallback_attempt', { overlayId: id, sessionId: sessionId.slice(0, 8) })
       const cached = def.offlineCacheable ? readCachedOverlayGeo(id, bbox) : null
       if (cached && applyGeojsonOverlay(map, id, cached.geojson)) {
-        resolveState({ state: 'OFFLINE_FALLBACK', enabled: true, cachedAt: cached.fetchedAt })
+        safeResolve({ state: 'OFFLINE_FALLBACK', enabled: true, cachedAt: cached.fetchedAt })
         return
       }
       removeEnvironmentalOverlay(map, id)
       const errorMsg = e instanceof Error ? e.message : 'Load failed'
-      resolveState({ state: 'ERROR', enabled: true, error: errorMsg })
+      safeResolve({ state: 'ERROR', enabled: true, error: errorMsg })
     }
   }
 
   void run()
+  traceOverlay('run_started', { overlayId: id, sessionId: sessionId.slice(0, 8) })
 
   return () => {
-    // ALWAYS resolve to IDLE on cleanup - guarantees terminal state
-    if (isSessionActive(id, sessionId)) {
-      resolveState({ state: 'IDLE', enabled: false })
-    }
+    traceOverlay('cleanup_called', { overlayId: id, sessionId: sessionId.slice(0, 8) })
+    // ALWAYS resolve to terminal state on cleanup - guarantees no stuck loading
+    safeResolve({ state: 'IDLE', enabled: false })
     clearLoadingTimeout(id)
     clearOverlaySession(id)
     styleWaitCleanup?.()

@@ -83,26 +83,9 @@ export function OverlayProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const setEnabled = useCallback((id: EnvironmentalOverlayId, enabled: boolean) => {
-    if (enabled) {
-      const def = overlayDef(id)
-      // Config-driven API key check (any overlay can require an env key)
-      if (def.envKey && !readEnvKey(def.envKey)) {
-        const error =
-          `${def.label} API key missing — add ${def.envKey} to .env.local, sync Vercel, redeploy`
-        // CRITICAL: Always clear loading and set enabled false when key missing
-        patchStatus(id, {
-          enabled: false,
-          error,
-          loading: false,
-          stale: false,
-          fromCache: false,
-        })
-        return { applied: false, error }
-      }
-    }
-    setToggles((t) => setOverlayToggle(t, id, enabled))
-    // When disabling, clear all state
+    // When disabling, IMMEDIATELY clear all loading state and let cleanup resolve the terminal state
     if (!enabled) {
+      setToggles((t) => setOverlayToggle(t, id, enabled))
       patchStatus(id, {
         enabled: false,
         error: null,
@@ -112,11 +95,30 @@ export function OverlayProvider({ children }: { children: ReactNode }) {
       })
       return { applied: true }
     }
-    // When enabling, set loading true (will be cleared by EnvironmentalOverlaysLayer)
+
+    // Enabling path
+    const def = overlayDef(id)
+    // Config-driven API key check (any overlay can require an env key)
+    if (def.envKey && !readEnvKey(def.envKey)) {
+      const error =
+        `${def.label} API key missing — add ${def.envKey} to .env.local, sync Vercel, redeploy`
+      // CRITICAL: Always clear loading and set enabled false when key missing
+      patchStatus(id, {
+        enabled: false,
+        error,
+        loading: false,
+        stale: false,
+        fromCache: false,
+      })
+      return { applied: false, error }
+    }
+
+    setToggles((t) => setOverlayToggle(t, id, enabled))
+    // When enabling, set loading true (will be resolved to terminal state by EnvironmentalOverlaysLayer)
     patchStatus(id, {
       enabled: true,
       error: null,
-      loading: true,  // Loading will be cleared by syncOverlay
+      loading: true,  // Loading will be resolved to terminal state by syncOverlay
       stale: false,
       fromCache: false,
     })

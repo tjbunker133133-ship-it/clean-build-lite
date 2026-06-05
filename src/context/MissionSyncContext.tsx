@@ -820,7 +820,10 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
         } else {
           notify(forMe ? 'success' : 'info', directed ? `Team message ${arrow ?? ''}: ${burst.text}`.trim() : line)
           if (shouldPlayMissionCommsAudio()) {
-            void speakInboundTeamMessage(burst.callsign, burst.text)
+            // AUTO-DISMISS after playback completes (hands-free UX)
+            void speakInboundTeamMessage(burst.callsign, burst.text, () => {
+              setLastInboundTeamBurst(null)
+            })
           } else {
             void showInboundTeamMessageNotification(burst.callsign, burst.text)
           }
@@ -858,7 +861,11 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     const b = pendingInboundBurst
     if (!b) return
     setPendingInboundBurst(null)
-    void speakInboundTeamMessage(b.callsign, b.text)
+    // AUTO-DISMISS: Clear the toast after message finishes playing (hands-free UX)
+    // Pass dismiss callback as completion handler - invoked on natural completion, not on interrupt/error
+    void speakInboundTeamMessage(b.callsign, b.text, () => {
+      setLastInboundTeamBurst(null)
+    })
   }, [pendingInboundBurst])
 
   const skipInboundMessage = useCallback(() => {

@@ -59,6 +59,7 @@ import {
   VOICE_PRIORITY,
 } from '../lib/voice/voiceAuthorityController'
 import { setVoicePanelCommandHandlers } from '../runtime/voicePanelCommandBridge'
+import { traceVoice, traceCommand } from '../runtime/runtimeForensics'
 
 type VoiceState = 'sleeping' | 'listening' | 'processing' | 'success' | 'failure'
 
@@ -468,9 +469,12 @@ export default function VoicePanel() {
           panelPriority: VOICE_PRIORITY.USER_COMMAND,
           text: trimmed.slice(0, 40),
         })
+        traceVoice('tts_requested', { text: trimmed.slice(0, 40), deferred: true, reason: 'higher_priority_speaking' })
         return
       }
     }
+
+    traceVoice('tts_requested', { text: trimmed.slice(0, 40), pauseRecognition: opts?.pauseRecognition })
 
     const pauseRecognition =
       opts?.pauseRecognition !== undefined
@@ -478,12 +482,14 @@ export default function VoicePanel() {
         : listenProfile.pauseSrDuringTts
     const rec = recognitionRef.current
     if (pauseRecognition && rec && armedRef.current) {
+      traceVoice('recognition_paused_for_tts', { text: trimmed.slice(0, 40) })
       setRecognitionOutputHold(true)
       if (restartTimerRef.current != null) {
         window.clearTimeout(restartTimerRef.current)
         restartTimerRef.current = null
       }
       try {
+        traceVoice('recognition_restart_cancelled', { reason: 'tts_pause' })
         rec.stop()
       } catch {
         // onend may fire; output hold blocks immediate mic restart
@@ -493,14 +499,22 @@ export default function VoicePanel() {
     try {
       // C3 FIX: Route through authority controller with explicit priority
       // This prevents VoicePanel from overriding safety alerts
+      traceVoice('tts_requested', { text: trimmed.slice(0, 40), rate, priority: VOICE_PRIORITY.USER_COMMAND })
       await speakHudPhrase(trimmed, rate, VOICE_PRIORITY.USER_COMMAND)
+      traceVoice('tts_completed', { text: trimmed.slice(0, 40) })
+    } catch (err) {
+      traceVoice('dispatch_threw', { context: 'tts', error: (err as Error).message })
+      // Log TTS errors but don't throw - command execution must not fail due to speech errors
+      logWarn('VOICE', `TTS error: ${(err as Error)?.message ?? 'unknown'}`, { text: trimmed.slice(0, 40) })
     } finally {
       if (pauseRecognition) {
+        traceVoice('recognition_resumed_post_tts', { text: trimmed.slice(0, 40) })
         setRecognitionOutputHold(false)
         const cooldownUntil = performance.now() + listenProfile.outputCooldownMs
         ignoreSrUntilRef.current = cooldownUntil
         armRecognitionIgnoreUntil(cooldownUntil)
         if (armedRef.current) {
+          traceVoice('recognition_restart_scheduled', { delayMs: listenProfile.outputCooldownMs + 300 })
           scheduleMicRestartRef.current(listenProfile.outputCooldownMs + 300)
         }
       }
@@ -508,11 +522,13 @@ export default function VoicePanel() {
   }
 
   const report = (text: string, ok = true) => {
-    setStatusText(text)
+    const trimmedText = text.trim()
+    setStatusText(trimmedText || (ok ? 'Done' : 'Failed'))
     setVoiceState(ok ? 'success' : 'failure')
-    if (text.trim()) {
-      void speakHandsFree(text)
-    }
+    // GUARANTEE: TTS always fires for command results, even with empty text (uses default)
+    // This ensures voice feedback is never silently dropped
+    const ttsText = trimmedText || (ok ? 'Command complete' : 'Command failed')
+    void speakHandsFree(ttsText)
     if (uiResetTimerRef.current != null) {
       window.clearTimeout(uiResetTimerRef.current)
     }
@@ -530,6 +546,9 @@ export default function VoicePanel() {
    * "HUD" wake word) so the structured `[VOICE]` log records the
    * user-facing phrase in `heard`, while `cmd` carries the post-wake-word
    * normalized form used for dispatch matching.
+   *
+   * GUARANTEE: This function ALWAYS calls report() with a terminal state,
+   * ensuring voice state exits 'processing' and TTS is triggered.
    */
   const dispatchAndReport = async (
     rawCmd: string,
@@ -537,25 +556,53 @@ export default function VoicePanel() {
     rawTranscript?: string,
   ) => {
     const cmd = normalizeVoiceTranscript(rawCmd)
-    if (!cmd) return
+    traceVoice('dispatch_started', { cmd: cmd.slice(0, 40), source })
+    traceCommand('command_received', { cmd: cmd.slice(0, 40), source })
+    if (!cmd) {
+      traceCommand('handler_not_found', { reason: 'empty_normalized' })
+      // Empty command - treat as failure with explicit TTS feedback
+      setVoiceState('failure')
+      setLastHeard('—')
+      report('Command not recognized. Please try again.', false)
+      return
+    }
     setVoiceState('processing')
     setLastHeard(formatVoicePhraseForDisplay(rawTranscript ?? `hud ${cmd}`))
-    const res = await dispatch(cmd, source, rawTranscript ?? `HUD ${cmd}`)
-    report(res.message, res.ok)
+
+    try {
+      traceCommand('handler_started', { cmd: cmd.slice(0, 40), source })
+      // dispatch() has internal 10s safety timeout - this cannot hang indefinitely
+      const res = await dispatch(cmd, source, rawTranscript ?? `HUD ${cmd}`)
+      traceVoice('dispatch_resolved', { cmd: cmd.slice(0, 40), ok: res.ok })
+      traceCommand(res.ok ? 'handler_resolved' : 'handler_rejected', { cmd: cmd.slice(0, 40), message: res.message.slice(0, 60) })
+      // report() triggers TTS for both success and failure
+      report(res.message, res.ok)
+    } catch (err) {
+      traceVoice('dispatch_threw', { cmd: cmd.slice(0, 40), error: (err as Error).message })
+      traceCommand('handler_threw', { cmd: cmd.slice(0, 40), error: (err as Error).message })
+      // GUARANTEE: Even if dispatch throws unexpectedly, we ALWAYS reach a terminal state
+      const errorMsg = err instanceof Error ? err.message : 'Command failed'
+      logWarn('VOICE', `dispatchAndReport error: ${errorMsg}`)
+      report(`Command error: ${errorMsg}`, false)
+    }
   }
 
   const parseAndRun = async (text: string) => {
+    traceVoice('transcript_normalized', { raw: text.slice(0, 60), listenMode: listenModeRef.current })
     const normWake = normalizeForWakeGate(text)
     const norm = normalizeVoiceTranscript(text)
     if (!normWake) return
     if (shouldBlockSpeechRecognition()) {
+      traceVoice('dispatch_threw', { reason: 'speech_recognition_blocked', normalized: norm.slice(0, 40) })
       return
     }
     if (performance.now() < ignoreSrUntilRef.current) {
+      traceVoice('dispatch_threw', { reason: 'ignore_until_active', normalized: norm.slice(0, 40), remainingMs: Math.round(ignoreSrUntilRef.current - performance.now()) })
       return
     }
     const nowMs = Date.now()
     if (normWake === lastParsedFinalRef.current.key && nowMs - lastParsedFinalRef.current.at < 2000) {
+      traceVoice('dispatch_threw', { reason: 'duplicate_within_2s', normalized: norm.slice(0, 40) })
       return
     }
     lastParsedFinalRef.current = { key: normWake, at: nowMs }
@@ -607,10 +654,13 @@ export default function VoicePanel() {
     // the follow-up phrase passes sanity bounds — wake-word policy is
     // never bypassed for arbitrary utterances.
     if (!hasWakeWordPrefix(effective)) {
+      traceVoice('command_unknown', { reason: 'missing_wake_word', effective: effective.slice(0, 40) })
       reportPolicyAttempt('voice.wakeWordRequired', 'disable', 'parseAndRun.missing-wake-word')
       traceAction('wake_word_activation', 'guard_reject', { reason: 'missing_wake_word' })
       return
     }
+
+    traceVoice('wake_word_detected', { effective: effective.slice(0, 60), viaContinuation: consumedContinuation })
 
     // Direct wake-word utterance invalidates any prior bare-wake window
     // (the user re-asserted intent explicitly).
@@ -646,8 +696,10 @@ export default function VoicePanel() {
       setStatusText('🎤 Yes? — say your command')
       setVoiceState('success')
       logInfo('VOICE', 'wake-word.only-detected')
+      traceVoice('tts_requested', { text: WAKE_ACK_SPOKEN, context: 'bare_wake' })
       await speakHandsFree(WAKE_ACK_SPOKEN)
       pendingWakeUntilRef.current = performance.now() + activeProfile.wakeContinuationMs
+      traceVoice('continuation_window_opened', { durationMs: activeProfile.wakeContinuationMs })
       logInfo('VOICE', `wake-window.open ms=${activeProfile.wakeContinuationMs}`)
       updateVoiceState('listening')
       return
@@ -655,6 +707,7 @@ export default function VoicePanel() {
 
     if (!consumedContinuation) pulseWake()
     if (!consumedContinuation) {
+      traceVoice('tts_requested', { text: WAKE_ACK_SPOKEN, context: 'pre_command' })
       await speakHandsFree(WAKE_ACK_SPOKEN)
     }
     pendingWakeUntilRef.current = performance.now() + activeProfile.wakeContinuationMs
@@ -664,6 +717,7 @@ export default function VoicePanel() {
         report(mission.feedback, mission.ok)
         continue
       }
+      traceVoice('command_matched', { command: p, source: 'voice' })
       await dispatchAndReport(p, 'voice', `${WAKE_WORD} ${p}`)
     }
     if (armedRef.current) updateVoiceState('listening')

@@ -1,4 +1,6 @@
 import type { GeoJSONSource, Map } from 'maplibre-gl'
+import { traceOverlay } from '../../runtime/runtimeForensics'
+import { logWarn } from '../../runtime/logger'
 import { overlayDef } from './catalog'
 import { rasterPaint, rasterTileUrls } from './sources'
 import type { EnvironmentalOverlayId } from './types'
@@ -77,26 +79,39 @@ export function removeEnvironmentalOverlay(map: Map, id: EnvironmentalOverlayId)
 }
 
 export function applyRasterOverlay(map: Map, id: EnvironmentalOverlayId): boolean {
+  traceOverlay('raster_apply_attempt', { overlayId: id })
   try {
-    if (!mapStyleMutable(map)) return false
+    if (!mapStyleMutable(map)) {
+      traceOverlay('raster_apply_fail', { overlayId: id, reason: 'style_not_mutable' })
+      return false
+    }
     const def = overlayDef(id)
     const tiles = rasterTileUrls(id)
-    if (!tiles) return false
+    if (!tiles) {
+      traceOverlay('raster_apply_fail', { overlayId: id, reason: 'no_tiles_configured' })
+      return false
+    }
 
     const sourceId = envSourceId(id)
     const layerId = envLayerId(id)
     const beforeId = findBeforeTacticalLayer(map)
 
+    traceOverlay('geojson_layer_check', { overlayId: id, sourceId, layerId, beforeId, sourceExists: map.getSource(sourceId) != null })
+
     if (!map.getSource(sourceId)) {
+      traceOverlay('geojson_source_added', { overlayId: id, sourceId })
       map.addSource(sourceId, {
         type: 'raster',
         tiles,
         tileSize: 256,
         scheme: 'xyz',
       })
+    } else {
+      traceOverlay('geojson_source_exists', { overlayId: id, sourceId })
     }
 
     if (!map.getLayer(layerId)) {
+      traceOverlay('geojson_layer_added', { overlayId: id, layerId, sourceId })
       map.addLayer(
         {
           id: layerId,
@@ -108,9 +123,21 @@ export function applyRasterOverlay(map: Map, id: EnvironmentalOverlayId): boolea
         },
         beforeId,
       )
+    } else {
+      traceOverlay('geojson_layer_exists', { overlayId: id, layerId })
     }
-    return true
-  } catch {
+
+    // Verify attachment actually succeeded
+    const verifySource = map.getSource(sourceId)
+    const verifyLayer = map.getLayer(layerId)
+    traceOverlay('source_attach_verified', { overlayId: id, sourceId, attached: verifySource != null })
+    traceOverlay('layer_attach_verified', { overlayId: id, layerId, attached: verifyLayer != null })
+
+    const success = verifySource != null && verifyLayer != null
+    traceOverlay(success ? 'raster_apply_success' : 'raster_apply_fail', { overlayId: id, sourceAttached: verifySource != null, layerAttached: verifyLayer != null })
+    return success
+  } catch (err) {
+    traceOverlay('raster_apply_fail', { overlayId: id, reason: 'threw', error: (err as Error).message })
     return false
   }
 }
@@ -120,16 +147,25 @@ export function applyGeojsonOverlay(
   id: EnvironmentalOverlayId,
   geojson: GeoJSON.FeatureCollection,
 ): boolean {
+  traceOverlay('geojson_apply_attempt', { overlayId: id, featureCount: geojson.features.length })
   try {
-    if (!mapStyleMutable(map)) return false
+    if (!mapStyleMutable(map)) {
+      traceOverlay('raster_apply_fail', { overlayId: id, reason: 'style_not_mutable' })
+      return false
+    }
     const def = overlayDef(id)
     const sourceId = envSourceId(id)
     const beforeId = findBeforeTacticalLayer(map)
 
+    traceOverlay('geojson_layer_check', { overlayId: id, sourceId, beforeId, styleMutable: true })
+
     const existing = map.getSource(sourceId) as GeoJSONSource | undefined
     if (existing) {
+      traceOverlay('geojson_source_exists', { overlayId: id, sourceId })
       existing.setData(geojson)
+      traceOverlay('geojson_data_updated', { overlayId: id, sourceId, featureCount: geojson.features.length })
     } else {
+      traceOverlay('geojson_source_added', { overlayId: id, sourceId })
       map.addSource(sourceId, { type: 'geojson', data: geojson })
     }
 
@@ -139,8 +175,11 @@ export function applyGeojsonOverlay(
       const polygonFillLayerId = `${envLayerId(id)}-polygons-fill`
       const polygonOutlineLayerId = `${envLayerId(id)}-polygons-outline`
 
+      traceOverlay('geojson_layer_check', { overlayId: id, pointLayerId, polygonFillLayerId, polygonOutlineLayerId })
+
       // Point markers for official campgrounds
       if (!map.getLayer(pointLayerId)) {
+        traceOverlay('geojson_layer_added', { overlayId: id, layerId: pointLayerId, type: 'circle' })
         map.addLayer(
           {
             id: pointLayerId,
@@ -158,10 +197,13 @@ export function applyGeojsonOverlay(
           },
           beforeId,
         )
+      } else {
+        traceOverlay('geojson_layer_exists', { overlayId: id, layerId: pointLayerId })
       }
 
       // Polygon fill for dispersed camping zones
       if (!map.getLayer(polygonFillLayerId)) {
+        traceOverlay('geojson_layer_added', { overlayId: id, layerId: polygonFillLayerId, type: 'fill' })
         map.addLayer(
           {
             id: polygonFillLayerId,
@@ -176,10 +218,13 @@ export function applyGeojsonOverlay(
           },
           beforeId,
         )
+      } else {
+        traceOverlay('geojson_layer_exists', { overlayId: id, layerId: polygonFillLayerId })
       }
 
       // Polygon outline for dispersed camping zones
       if (!map.getLayer(polygonOutlineLayerId)) {
+        traceOverlay('geojson_layer_added', { overlayId: id, layerId: polygonOutlineLayerId, type: 'line' })
         map.addLayer(
           {
             id: polygonOutlineLayerId,
@@ -197,12 +242,19 @@ export function applyGeojsonOverlay(
           },
           beforeId,
         )
+      } else {
+        traceOverlay('geojson_layer_exists', { overlayId: id, layerId: polygonOutlineLayerId })
       }
+
+      // Verify all camping layers attached
+      const allAttached = map.getLayer(pointLayerId) && map.getLayer(polygonFillLayerId) && map.getLayer(polygonOutlineLayerId)
+      traceOverlay(allAttached ? 'ready_committed' : 'error_committed', { overlayId: id, type: 'camping_multi', allAttached })
       return true
     }
 
     // Standard line overlay for other types
     const layerId = envLayerId(id)
+    traceOverlay('geojson_layer_check', { overlayId: id, layerId, sourceId, type: 'line' })
     if (!map.getLayer(layerId)) {
       const lineColor =
         id === 'bike_paths'
@@ -213,6 +265,7 @@ export function applyGeojsonOverlay(
               ? '#ff6b87'
               : '#7dff8a'
 
+      traceOverlay('geojson_layer_added', { overlayId: id, layerId, type: 'line' })
       map.addLayer(
         {
           id: layerId,
@@ -229,9 +282,41 @@ export function applyGeojsonOverlay(
         },
         beforeId,
       )
+    } else {
+      traceOverlay('geojson_layer_exists', { overlayId: id, layerId })
     }
-    return true
-  } catch {
+
+    // Verify attachment succeeded
+    const verifySource = map.getSource(sourceId)
+    const verifyLayer = map.getLayer(layerId)
+    traceOverlay('source_attach_verified', { overlayId: id, sourceId, attached: verifySource != null })
+    traceOverlay('layer_attach_verified', { overlayId: id, layerId, attached: verifyLayer != null })
+
+    // DEEP VERIFICATION: Check if features actually render (fire-and-forget, don't block)
+    const success = verifySource != null && verifyLayer != null
+    void verifyOverlayRendered(map, id).then(renderCheck => {
+      // Log specific render failures
+      if (verifySource && verifyLayer && renderCheck.renderCount === 0 && renderCheck.sourceFeatureCount > 0) {
+        traceOverlay('attached_but_not_rendering', {
+          overlayId: id,
+          reason: 'features_in_source_not_in_render_buffer',
+          issues: renderCheck.issues,
+          suggestion: 'may_need_zoom_or_pan',
+        })
+      }
+
+      traceOverlay(success ? 'ready_committed' : 'error_committed', {
+        overlayId: id,
+        success,
+        sourceAttached: verifySource != null,
+        layerAttached: verifyLayer != null,
+        renderCount: renderCheck.renderCount,
+        issues: renderCheck.issues,
+      })
+    })
+    return success
+  } catch (err) {
+    traceOverlay('raster_apply_fail', { overlayId: id, reason: 'threw', error: (err as Error).message })
     return false
   }
 }
@@ -260,4 +345,153 @@ export function overlayZoomBlocked(
     }
   }
   return { blocked: false }
+}
+
+/**
+ * Verify overlay actually rendered visible features.
+ * This queries the map to confirm features are in the render buffer.
+ */
+export async function verifyOverlayRendered(
+  map: Map,
+  id: EnvironmentalOverlayId,
+): Promise<{
+  sourceExists: boolean
+  layerExists: boolean
+  visible: boolean
+  opacity: number
+  renderCount: number
+  sourceFeatureCount: number
+  zoom: number
+  minZoom: number
+  issues: string[]
+}> {
+  const issues: string[] = []
+  const sourceId = envSourceId(id)
+  const layerId = envLayerId(id)
+  const def = overlayDef(id)
+  const zoom = map.getZoom()
+  const minZoom = def.minZoom ?? 0
+
+  // Check source
+  const source = map.getSource(sourceId)
+  const sourceExists = source != null
+
+  // Check layer
+  const layer = map.getLayer(layerId)
+  const layerExists = layer != null
+
+  // Check visibility
+  let visible = false
+  let opacity = 1
+  try {
+    if (layer) {
+      // Check layer visibility property
+      const layerVisibility = map.getLayoutProperty(layerId, 'visibility')
+      visible = layerVisibility !== 'none'
+
+      // Check opacity
+      const opacityProp = layer.type === 'raster' ? 'raster-opacity' :
+                          layer.type === 'line' ? 'line-opacity' :
+                          layer.type === 'circle' ? 'circle-opacity' :
+                          layer.type === 'fill' ? 'fill-opacity' : null
+      if (opacityProp) {
+        const opacityValue = map.getPaintProperty(layerId, opacityProp)
+        opacity = typeof opacityValue === 'number' ? opacityValue : 1
+        if (opacity === 0) {
+          issues.push('layer_opacity_zero')
+        }
+      }
+
+      if (!visible) {
+        issues.push('layer_visibility_none')
+      }
+    }
+  } catch (e) {
+    issues.push(`visibility_check_error: ${(e as Error).message}`)
+  }
+
+  // Query rendered features
+  let renderCount = 0
+  try {
+    if (layerExists && visible) {
+      const rendered = map.queryRenderedFeatures({ layers: [layerId] })
+      renderCount = rendered.length
+      if (renderCount === 0) {
+        issues.push('no_rendered_features_in_viewport')
+      }
+    }
+  } catch (e) {
+    issues.push(`query_error: ${(e as Error).message}`)
+  }
+
+  // Check source feature count for GeoJSON
+  let sourceFeatureCount = 0
+  if (source && 'getData' in source) {
+    try {
+      const data = (source as GeoJSONSource).getData()
+      // Handle both Promise (async) and synchronous returns
+      const resolvedData = data instanceof Promise ? await data : data
+      if (resolvedData && typeof resolvedData === 'object' && 'features' in resolvedData) {
+        sourceFeatureCount = (resolvedData as GeoJSON.FeatureCollection).features.length
+        if (sourceFeatureCount === 0) {
+          issues.push('source_empty_no_features')
+        }
+      }
+    } catch (e) {
+      issues.push(`source_data_error: ${(e as Error).message}`)
+    }
+  }
+
+  // Zoom check
+  if (zoom + 0.05 < minZoom) {
+    issues.push(`zoom_too_low: ${zoom.toFixed(2)} < ${minZoom}`)
+  }
+
+  // Layer ordering check (is it below tactical layers?)
+  const style = map.getStyle()
+  if (style && 'layers' in style && Array.isArray(style.layers)) {
+    const layerIds = style.layers.map(l => l.id)
+    const tacticalLayerIds = ['tactical-route-layer', 'tactical-trail-route-layer']
+    const tacticalIndex = tacticalLayerIds.findIndex(tid => layerIds.includes(tid))
+    const layerIndex = layerIds.indexOf(layerId)
+
+    if (tacticalIndex >= 0 && layerIndex >= 0 && layerIndex > tacticalIndex) {
+      issues.push('layer_above_tactical_may_be_obscured')
+    }
+  }
+
+  // Log detailed trace
+  traceOverlay('render_verification', {
+    overlayId: id,
+    sourceExists,
+    layerExists,
+    visible,
+    opacity,
+    renderCount,
+    sourceFeatureCount,
+    zoom,
+    minZoom,
+    issues,
+    renderSuccess: layerExists && visible && renderCount > 0,
+  })
+
+  if (layerExists && visible && renderCount === 0 && sourceFeatureCount > 0) {
+    logWarn('OVERLAY', `Layer exists and visible but no features rendered: ${id}`, {
+      zoom,
+      minZoom,
+      issues,
+    })
+  }
+
+  return {
+    sourceExists,
+    layerExists,
+    visible,
+    opacity,
+    renderCount,
+    sourceFeatureCount,
+    zoom,
+    minZoom,
+    issues,
+  }
 }

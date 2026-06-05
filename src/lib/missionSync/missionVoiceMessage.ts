@@ -169,15 +169,29 @@ export async function speakSendingTo(targetLabel: string): Promise<void> {
   await speakMissionCommsPhrase(`Sending to ${targetLabel}.`)
 }
 
-export async function speakInboundTeamMessage(callsign: string, text: string): Promise<void> {
+export async function speakInboundTeamMessage(
+  callsign: string,
+  text: string,
+  onComplete?: () => void,
+): Promise<void> {
   const body = sanitizeBurstText(text)
-  if (!body || !shouldPlayMissionCommsAudio()) return
+  if (!body || !shouldPlayMissionCommsAudio()) {
+    // If not playing audio, still invoke completion so UI can auto-dismiss
+    onComplete?.()
+    return
+  }
   const phrase = `${callsign} says: ${body}`
 
   setRecognitionOutputHold(true)
   // C2 FIX: Route through authority controller instead of direct TTS
-  startSpeech(phrase, VOICE_PRIORITY.USER_COMMAND, 'mission-voice-inbound')
+  // Pass completion callback for auto-dismiss after successful playback
+  const result = startSpeech(phrase, VOICE_PRIORITY.USER_COMMAND, 'mission-voice-inbound', onComplete)
   setRecognitionOutputHold(false)
+
+  // If speech was blocked (priority, etc), still call completion so UI clears
+  if (!result.started) {
+    onComplete?.()
+  }
 
   if (typeof performance !== 'undefined') {
     armRecognitionIgnoreUntil(performance.now() + 2_800)

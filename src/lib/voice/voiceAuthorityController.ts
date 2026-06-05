@@ -12,6 +12,7 @@
  */
 
 import { logInfo, logWarn } from '../../runtime/logger'
+import { traceTTS } from '../../runtime/runtimeForensics'
 const LOG_CAT = 'VOICE' as const
 
 // ============================================================================
@@ -112,14 +113,23 @@ export function startSpeech(
   text: string,
   priority: VoicePriority,
   sourceId: string,
+  onComplete?: () => void,
 ): { started: boolean; interrupted: boolean; reason?: string } {
   const trimmed = text.trim()
+  traceTTS('speak_requested', { text: trimmed.slice(0, 60), priority, sourceId })
+
   if (!trimmed) {
+    traceTTS('speak_rejected_empty', { sourceId })
     return { started: false, interrupted: false, reason: 'empty_text' }
   }
 
   const now = Date.now()
   const speechId = `sp-${++speechIdCounter}-${now}`
+
+  // Store completion callback for this speech session
+  if (onComplete) {
+    speechCompleteCallbacks.set(speechId, onComplete)
+  }
 
   // Check if we should interrupt or block
   if (currentSpeech !== null) {
@@ -129,6 +139,13 @@ export function startSpeech(
         current: currentSpeech.sourceId,
         incoming: sourceId,
       })
+      traceTTS('interrupt_triggered', {
+        newId: speechId,
+        newPriority: priority,
+        newSource: sourceId,
+        currentPriority: currentSpeech.priority,
+        currentSource: currentSpeech.sourceId,
+      })
       performInterrupt(speechId, trimmed, priority, sourceId)
       return { started: true, interrupted: true }
     } else {
@@ -136,6 +153,14 @@ export function startSpeech(
       logInfo(LOG_CAT, `Dropping speech: priority ${priority} <= current ${currentSpeech.priority}`, {
         sourceId,
       })
+      traceTTS('speak_rejected_priority', {
+        priority,
+        currentPriority: currentSpeech.priority,
+        sourceId,
+        currentSource: currentSpeech.sourceId,
+      })
+      // Clean up callback since speech won't start
+      speechCompleteCallbacks.delete(speechId)
       return { started: false, interrupted: false, reason: 'priority_blocked' }
     }
   }
@@ -143,6 +168,14 @@ export function startSpeech(
   // No current speech — start immediately
   beginSpeech(speechId, trimmed, priority, sourceId)
   return { started: true, interrupted: false }
+}
+
+// Store completion callbacks by speechId
+const speechCompleteCallbacks = new Map<string, () => void>()
+
+export function subscribeToSpeechComplete(speechId: string, callback: () => void): () => void {
+  speechCompleteCallbacks.set(speechId, callback)
+  return () => speechCompleteCallbacks.delete(speechId)
 }
 
 /**
@@ -176,6 +209,9 @@ export function stopSpeech(reason: string): boolean {
       // Ignore cancel errors
     }
   }
+
+  // Don't invoke completion callback since this is an interruption
+  speechCompleteCallbacks.delete(speechId)
 
   recordToHistory(currentSpeech.text, currentSpeech.priority, currentSpeech.sourceId)
   currentSpeech = null
@@ -269,14 +305,22 @@ function performInterrupt(
   priority: VoicePriority,
   sourceId: string,
 ): void {
-  // Record interrupted speech to history (partial)
+  // Record interrupted speech to history (partial) and clean up callback
   if (currentSpeech) {
+    traceTTS('utterance_cancelled', {
+      speechId: currentSpeech.id,
+      interruptedBy: newId,
+      partialText: currentSpeech.text.slice(0, 40),
+    })
+    // Don't invoke callback since this is an interruption
+    speechCompleteCallbacks.delete(currentSpeech.id)
     recordToHistory(currentSpeech.text, currentSpeech.priority, currentSpeech.sourceId)
   }
 
   // Cancel current
   if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
     try {
+      traceTTS('synth_cancel_called', { reason: 'interrupt', newId })
       window.speechSynthesis.cancel()
     } catch {
       // Ignore
@@ -284,6 +328,7 @@ function performInterrupt(
   }
 
   currentSpeech = null
+  traceTTS('state_notified', { speaking: false, reason: 'interrupted' })
 
   // Start new speech
   beginSpeech(newId, text, priority, sourceId)
@@ -303,14 +348,18 @@ function beginSpeech(
     startedAt: Date.now(),
   }
 
+  traceTTS('utterance_created', { id, text: text.slice(0, 60), priority, sourceId })
   notifyStateChange()
+  traceTTS('state_notified', { speaking: true, speechId: id })
 
   // Execute TTS
   executeTTS(text, id)
 }
 
 // C1 FIX: Stable cleanup function — no dynamic reassignment, no closure chain
-function cleanupSpeech(speechId: string): void {
+function cleanupSpeech(speechId: string, completed = true): void {
+  traceTTS('cleanup_speech', { speechId, currentSpeechId: currentSpeech?.id, completed })
+
   // Clear any pending timeout for this speechId (stable lookup, no closures)
   const timeoutId = speechTimeouts.get(speechId)
   if (timeoutId !== undefined) {
@@ -318,31 +367,78 @@ function cleanupSpeech(speechId: string): void {
     speechTimeouts.delete(speechId)
   }
 
+  // Invoke completion callback if this was a natural completion (not interrupt)
+  if (completed) {
+    const callback = speechCompleteCallbacks.get(speechId)
+    if (callback) {
+      traceTTS('completion_callback_invoked', { speechId })
+      try {
+        callback()
+      } catch (e) {
+        logWarn(LOG_CAT, 'Speech completion callback threw', { error: (e as Error).message })
+      }
+      speechCompleteCallbacks.delete(speechId)
+    }
+  }
+
   if (!currentSpeech || currentSpeech.id !== speechId) {
+    traceTTS('cleanup_speech_stale', { speechId, reason: 'already_changed' })
     return // Already changed or stale
   }
 
-  recordToHistory(currentSpeech.text, currentSpeech.priority, currentSpeech.sourceId)
+  const completedSpeech = currentSpeech
+  recordToHistory(completedSpeech.text, completedSpeech.priority, completedSpeech.sourceId)
   currentSpeech = null
   notifyStateChange()
+  traceTTS('state_notified', { speaking: false, reason: completed ? 'completed' : 'interrupted', completedSpeechId: speechId })
 }
 
 function executeTTS(text: string, speechId: string): void {
   if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
     logWarn(LOG_CAT, 'TTS not supported')
+    traceTTS('synth_speak_threw', { reason: 'not_supported', speechId })
     cleanupSpeech(speechId)
     return
   }
 
   const synth = window.speechSynthesis
 
+  // Log current synth state BEFORE any operations
+  const stateBefore = {
+    speaking: synth.speaking,
+    pending: synth.pending,
+    paused: synth.paused,
+  }
+  traceTTS('synth_state_before', {
+    speechId,
+    ...stateBefore,
+  })
+
+  // ANDROID/CHROME FIX: Check if audio is locked behind gesture requirement
+  if (!stateBefore.speaking && stateBefore.pending) {
+    traceTTS('synth_pending_true', { speechId, reason: 'previous_utterance_stuck' })
+  }
+
   try {
+    traceTTS('synth_cancel_called', { speechId, reason: 'pre_speak_cleanup', speakingBefore: stateBefore.speaking })
     synth.cancel() // Ensure clean state
   } catch {
     // Ignore
   }
 
+  // Double-check state after cancel
+  const stateAfterCancel = {
+    speaking: synth.speaking,
+    pending: synth.pending,
+  }
+  traceTTS('synth_cancel_called', { speechId, stateAfterCancel })
+
   const utterance = new SpeechSynthesisUtterance(text)
+  traceTTS('utterance_created', { speechId, textLength: text.length })
+
+  // Mobile-specific: Audio focus can be lost if recognition restarts during utterance setup
+  let startupWindowOpen = true
+  window.setTimeout(() => { startupWindowOpen = false }, 100)
 
   // Store reference for potential cancellation
   if (currentSpeech && currentSpeech.id === speechId) {
@@ -350,21 +446,55 @@ function executeTTS(text: string, speechId: string): void {
   }
 
   // C1 FIX: Use stable cleanup function, register timeout in Map (no closure chain)
-  utterance.onend = () => cleanupSpeech(speechId)
-  utterance.onerror = () => cleanupSpeech(speechId)
+  utterance.onend = () => {
+    traceTTS('utterance_onend', { speechId, text: text.slice(0, 40), startupWindowClosed: !startupWindowOpen })
+    cleanupSpeech(speechId, true) // true = completed naturally
+  }
+  utterance.onerror = (event) => {
+    traceTTS('utterance_onerror', {
+      speechId,
+      error: event.error,
+      text: text.slice(0, 40),
+      charIndex: event.charIndex,
+      startupWindowClosed: !startupWindowOpen,
+    })
+    cleanupSpeech(speechId, false) // false = error, don't invoke completion callback
+  }
+  utterance.onstart = () => {
+    traceTTS('utterance_onstart', { speechId, text: text.slice(0, 40), startupWindowClosed: !startupWindowOpen })
+    startupWindowOpen = false // Mark startup complete
+  }
 
   // Safety timeout — force cleanup if events don't fire
   const safetyTimeout = window.setTimeout(() => {
-    cleanupSpeech(speechId)
+    traceTTS('safety_timeout_fired', { speechId, text: text.slice(0, 40), startupWindowClosed: !startupWindowOpen })
+    cleanupSpeech(speechId, false) // false = timeout, don't invoke completion callback
   }, Math.min(30000, text.length * 150 + 2000))
 
   // C1 FIX: Register timeout in stable Map — no function reassignment, no closure accumulation
   speechTimeouts.set(speechId, safetyTimeout)
 
   try {
+    traceTTS('synth_speak_called', { speechId, textLength: text.length, voiceCount: synth.getVoices().length })
     synth.speak(utterance)
+
+    // CRITICAL: Check if speak() actually started
+    window.setTimeout(() => {
+      const stateAfterSpeak = {
+        speaking: synth.speaking,
+        pending: synth.pending,
+      }
+      traceTTS('synth_state_after_speak', { speechId, ...stateAfterSpeak })
+
+      if (!stateAfterSpeak.speaking && !stateAfterSpeak.pending) {
+        // Speech didn't start - likely blocked by browser (gesture requirement, audio focus, etc)
+        traceTTS('synth_speaking_never_true', { speechId, reason: 'browser_blocked_or_gesture_required' })
+      }
+    }, 50) // Check shortly after speak() call
+
   } catch (err) {
     logWarn(LOG_CAT, 'speak() threw', { error: (err as Error).message })
+    traceTTS('synth_speak_threw', { speechId, error: (err as Error).message })
     cleanupSpeech(speechId)
   }
 }

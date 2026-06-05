@@ -34,6 +34,7 @@ import {
   installBuiltinCommandVerifiers,
 } from '../runtime/commandExecution'
 import { traceAction } from '../runtime/actionTrace'
+import { traceCommand } from '../runtime/runtimeForensics'
 import { normalizeVoiceTranscript } from '../lib/voice/normalizeVoiceTranscript'
 import { buildOverlayVoiceCommands } from '../lib/environmentalOverlays/overlayVoiceCommands'
 import {
@@ -1244,11 +1245,22 @@ export function useHudCommands(): {
       const execId = reportCommandStarted({ source, transcript: heard, normalized: norm })
       traceAction(`command:${norm || 'empty'}`, 'handler_enter', { source })
 
+      // SAFETY: Guarantee command always resolves within 10s even if handler hangs
+      const COMMAND_SAFETY_TIMEOUT_MS = 10_000
+      let safetyTimer: number | null = null
+      let completed = false
+      const markCompleted = () => { completed = true }
+
       const finalize = (
         result: CommandResult,
         match: { id: string | null; alias: string | null },
-        reason: 'ok' | 'empty' | 'unknown' | 'handler-fail' | 'error',
+        reason: 'ok' | 'empty' | 'unknown' | 'handler-fail' | 'error' | 'timeout',
       ) => {
+        markCompleted()
+        if (safetyTimer !== null) {
+          window.clearTimeout(safetyTimer)
+          safetyTimer = null
+        }
         recordCommandDispatch({
           cmd: norm || cmd,
           source,
@@ -1268,6 +1280,13 @@ export function useHudCommands(): {
         })
         return result
       }
+
+      // Set up safety timeout to catch hung promises
+      safetyTimer = window.setTimeout(() => {
+        if (completed) return
+        reportCommandTimeout(execId)
+        traceAction(`command:${norm || 'empty'}`, 'failure', { reason: 'safety_timeout' })
+      }, COMMAND_SAFETY_TIMEOUT_MS)
 
       if (!norm) {
         traceAction('command:empty', 'guard_reject', { reason: 'empty_command' })
@@ -1315,21 +1334,43 @@ export function useHudCommands(): {
         )
       }
 
+      // COMMAND MATCH FORENSICS: Trace exact matching process
+      traceCommand('command_match_attempt', { normalized: norm, source, commandCount: commands.length })
       let matchedAlias: string | null = null
+      let matchDebug: { checkedIds: string[]; aliasMatches: { id: string; alias: string }[] } = { checkedIds: [], aliasMatches: [] }
+
       const found = commands.find((c) => {
+        matchDebug.checkedIds.push(c.id)
         if (c.id === norm) {
           matchedAlias = c.id
+          traceCommand('command_id_matched', { id: c.id, normalized: norm })
           return true
         }
-        const alias = (c.aliases ?? []).find((a) => a === norm)
+        const alias = (c.aliases ?? []).find((a) => {
+          if (a === norm) {
+            matchDebug.aliasMatches.push({ id: c.id, alias: a })
+          }
+          return a === norm
+        })
         if (alias) {
           matchedAlias = alias
+          traceCommand('command_alias_matched', { id: c.id, alias, normalized: norm })
           return true
         }
         return false
       })
 
+      traceCommand('command_match_result', {
+        normalized: norm,
+        found: !!found,
+        matchedId: found?.id ?? null,
+        matchedAlias,
+        checkedCount: matchDebug.checkedIds.length,
+        firstFewChecked: matchDebug.checkedIds.slice(0, 10),
+      })
+
       if (!found) {
+        traceCommand('command_no_match', { normalized: norm, checkedIds: matchDebug.checkedIds.slice(0, 20) })
         traceAction(`command:${norm}`, 'guard_reject', { reason: 'unknown_command' })
         reportCommandRejected(execId, 'missing_handler', `Unknown command: ${norm}.`)
         return finalize(
@@ -1377,13 +1418,13 @@ export function useHudCommands(): {
           // `report*` helpers no-op once the entry's status leaves
           // 'executing' (history is searched by id). Use a guard to
           // avoid races between verifier resolution and timeout.
-          const TIMEOUT_MS = 1500
+          const VERIFIER_TIMEOUT_MS = 1500
           let resolved = false
           const timer = window.setTimeout(() => {
             if (resolved) return
             resolved = true
             reportCommandTimeout(execId)
-          }, TIMEOUT_MS)
+          }, VERIFIER_TIMEOUT_MS)
           Promise.resolve(verifier({ commandId: found.id, message: result.message })).then(
             (vr) => {
               if (resolved) return
