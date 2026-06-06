@@ -306,6 +306,10 @@ export default function VoicePanel() {
   const listenModeRef = useRef<VoiceListenMode>('off')
   const lastParsedFinalRef = useRef({ key: '', at: 0 })
   const lastBareHudAtRef = useRef(0)
+  // FIX: Ensure armed state changes are traced for forensics visibility
+  if (armedRef.current !== armed) {
+    traceVoice('armed_state_changed', { armed, listenMode, prevArmed: armedRef.current })
+  }
   armedRef.current = armed
   listenModeRef.current = listenMode
   const listenProfile = useMemo(() => getVoiceListenProfile(listenMode), [listenMode])
@@ -415,8 +419,13 @@ export default function VoicePanel() {
 
   const armListenMode = useCallback(
     async (mode: 'powerSave' | 'hardListen') => {
-      if (listenMode === mode) return
+      traceVoice('arm_listen_mode_called', { mode, currentListenMode: listenMode })
+      if (listenMode === mode) {
+        traceVoice('arm_listen_mode_early_return', { reason: 'already_in_mode', mode })
+        return
+      }
       const ok = await requestMicGranted()
+      traceVoice('arm_listen_mode_permission', { mode, granted: ok })
       if (!ok) return
       listenModeRef.current = mode
       setListenMode(mode)
@@ -427,6 +436,7 @@ export default function VoicePanel() {
           ? '🎤 Power save — say HUD, then command'
           : '🎤 Hard listen — say HUD weather (one phrase OK)',
       )
+      traceVoice('arm_listen_mode_success', { mode, armed: true })
       logInfo('VOICE', `arm mode=${mode}`)
     },
     [listenMode, requestMicGranted],
@@ -662,6 +672,12 @@ export default function VoicePanel() {
             continuationCmd.length >= SANITY_MIN_FINAL_LEN &&
             continuationCmd.length <= SANITY_MAX_CONTINUATION_CHARS &&
             wordCount <= SANITY_MAX_CONTINUATION_WORDS
+          // FIX: Reject pure numeric noise (e.g., "135", "999999") from SR misrecognition
+          const isPureNumeric = /^\d+$/.test(continuationCmd)
+          if (isPureNumeric) {
+            traceVoice('continuation_rejected_numeric', { cmd: continuationCmd, reason: 'pure_numeric_noise' })
+            return // Do not process numbers as commands
+          }
           if (sane) {
             consumedContinuation = true
             pendingWakeUntilRef.current = null

@@ -188,6 +188,13 @@ export type VoiceTraceEvent =
   | 'continuation_window_opened'
   | 'continuation_window_consumed'
   | 'continuation_window_expired'
+  // FIX: Added for voice state visibility
+  | 'continuation_rejected_numeric'
+  | 'armed_state_changed'
+  | 'arm_listen_mode_called'
+  | 'arm_listen_mode_early_return'
+  | 'arm_listen_mode_permission'
+  | 'arm_listen_mode_success'
 
 export function traceVoice(event: VoiceTraceEvent, details?: Record<string, unknown>): void {
   logInfo('RUNTIME', `FORENSIC[VOICE] ${event}`, details)
