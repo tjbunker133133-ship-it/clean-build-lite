@@ -8,7 +8,7 @@
  */
 
 import { logInfo, logWarn } from './logger'
-import { traceTTS } from './runtimeForensics'
+import { traceTTS, getForensicBuffer } from './runtimeForensics'
 
 const LOG_CAT = 'RUNTIME'
 
@@ -295,6 +295,76 @@ function generateDiagnosticReport(): {
 }
 
 // ============================================================================
+// FIELD DIAGNOSTIC CAPTURE — For test failure reporting
+// ============================================================================
+
+/**
+ * Capture complete system state for field test failure analysis.
+ * Call this immediately after any test failure to preserve diagnostic state.
+ */
+type FieldDiagnosticCapture = {
+  testId: string
+  timestamp: number
+  userAgent: string
+  speechSynthesis: {
+    supported: boolean
+    speaking: boolean
+    pending: boolean
+    paused: boolean
+    voices: number
+  } | null
+  forensicBuffer: ReturnType<typeof getForensicBuffer>
+  cancelLog: ReturnType<typeof getCancelCallLog>
+  config: VoiceDebugConfig
+}
+
+function captureFieldDiagnostic(testId: string): FieldDiagnosticCapture {
+  let synthState = null
+  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+    const synth = window.speechSynthesis
+    synthState = {
+      supported: true,
+      speaking: synth.speaking,
+      pending: synth.pending,
+      paused: synth.paused,
+      voices: synth.getVoices().length,
+    }
+  }
+
+  // Get forensic buffer directly from the exported function
+  const forensicBuffer = getForensicBuffer().slice(-50) // Last 50 events
+
+  const capture: FieldDiagnosticCapture = {
+    testId,
+    timestamp: Date.now(),
+    userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'unknown',
+    speechSynthesis: synthState,
+    forensicBuffer,
+    cancelLog: getCancelCallLog(),
+    config: getDebugConfig(),
+  }
+
+  logInfo(LOG_CAT, 'FIELD_DIAGNOSTIC_CAPTURED', {
+    testId,
+    timestamp: capture.timestamp,
+    synthSpeaking: synthState?.speaking,
+    synthPending: synthState?.pending,
+    forensicCount: capture.forensicBuffer.length,
+    cancelCount: capture.cancelLog.length,
+  })
+
+  return capture
+}
+
+/**
+ * Export diagnostic capture to JSON for transmission.
+ */
+function exportFieldReport(testId: string): string {
+  const capture = captureFieldDiagnostic(testId)
+  return JSON.stringify(capture, null, 2)
+}
+
+// ============================================================================
 // GLOBAL EXPOSURE
 // ============================================================================
 
@@ -313,6 +383,8 @@ if (typeof window !== 'undefined') {
       getCancelCallLog: typeof getCancelCallLog
       clearCancelLog: typeof clearCancelLog
       getDiagnosticReport: typeof generateDiagnosticReport
+      captureFieldDiagnostic: typeof captureFieldDiagnostic
+      exportFieldReport: typeof exportFieldReport
       _config: VoiceDebugConfig
     }
   }
@@ -330,6 +402,8 @@ if (typeof window !== 'undefined') {
     getCancelCallLog,
     clearCancelLog,
     getDiagnosticReport: generateDiagnosticReport,
+    captureFieldDiagnostic,
+    exportFieldReport,
     _config: debugConfig,
   }
 
