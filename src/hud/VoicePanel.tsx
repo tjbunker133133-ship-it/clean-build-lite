@@ -35,6 +35,8 @@ import {
   sliceFromFirstWakeToken,
   stripRepeatedWakePrefix,
   stripWakeAckEchoFromContinuation,
+  stripTrailingFragmentRepetition,
+  cleanCommandPhrase,
 } from '../lib/voice/normalizeVoiceTranscript'
 import {
   getVoiceListenProfile,
@@ -762,15 +764,49 @@ export default function VoicePanel() {
       await speakHandsFree(WAKE_ACK_SPOKEN)
     }
     pendingWakeUntilRef.current = performance.now() + activeProfile.wakeContinuationMs
+
+    // Post-command cleanup: track if we executed any command to enable fragment filtering
+    let commandsExecuted = 0
+    const ignoreUntilAfterCommandRef = { current: 0 }
+
     for (const p of parts) {
-      const mission = await tryHandleMissionCommsVoice(p)
-      if (mission) {
-        report(mission.feedback, mission.ok)
+      // FIX: Clean up fragment repetition (e.g., "flashlight on flashlight")
+      let cleanedPart = stripTrailingFragmentRepetition(p)
+      cleanedPart = cleanCommandPhrase(cleanedPart)
+
+      // Skip if cleanup removed everything
+      if (!cleanedPart || cleanedPart.length < SANITY_MIN_FINAL_LEN) {
+        traceVoice('command_skipped_cleanup', { original: p, cleaned: cleanedPart, reason: 'empty_after_cleanup' })
         continue
       }
-      traceVoice('command_matched', { command: p, source: 'voice' })
-      await dispatchAndReport(p, 'voice', `${WAKE_WORD} ${p}`)
+
+      if (cleanedPart !== p) {
+        traceVoice('command_cleaned', { original: p, cleaned: cleanedPart })
+      }
+
+      const mission = await tryHandleMissionCommsVoice(cleanedPart)
+      if (mission) {
+        report(mission.feedback, mission.ok)
+        commandsExecuted++
+        continue
+      }
+      traceVoice('command_matched', { command: cleanedPart, source: 'voice' })
+      await dispatchAndReport(cleanedPart, 'voice', `${WAKE_WORD} ${cleanedPart}`)
+      commandsExecuted++
+
+      // FIX: Set ignore window immediately after command to block trailing fragments
+      ignoreUntilAfterCommandRef.current = performance.now() + 800
     }
+
+    // FIX: Explicit post-command reset - close continuation window immediately
+    // This prevents trailing transcript fragments from being processed
+    if (commandsExecuted > 0) {
+      pendingWakeUntilRef.current = null
+      traceVoice('continuation_window_closed', { reason: 'post_command_reset', commandsExecuted })
+      logInfo('VOICE', 'continuation-window.closed post-command')
+      ignoreSrUntilRef.current = performance.now() + 500 // Brief ignore for trailing fragments
+    }
+
     if (armedRef.current) updateVoiceState('listening')
   }
   parseAndRunRef.current = parseAndRun

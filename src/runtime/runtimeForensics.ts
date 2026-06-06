@@ -195,6 +195,10 @@ export type VoiceTraceEvent =
   | 'arm_listen_mode_early_return'
   | 'arm_listen_mode_permission'
   | 'arm_listen_mode_success'
+  // FIX: Added for command cleanup visibility
+  | 'command_skipped_cleanup'
+  | 'command_cleaned'
+  | 'continuation_window_closed'
 
 export function traceVoice(event: VoiceTraceEvent, details?: Record<string, unknown>): void {
   logInfo('RUNTIME', `FORENSIC[VOICE] ${event}`, details)

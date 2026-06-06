@@ -615,6 +615,7 @@ export function useHudCommands(): {
       {
         id: 'flashlight on',
         label: 'Flashlight on',
+        aliases: ['light on', 'torch on', 'flash on'],
         group: 'Safety',
         run: () => {
           window.dispatchEvent(new CustomEvent('hud:sos-flashlight', { detail: { enabled: true } }))
@@ -628,6 +629,7 @@ export function useHudCommands(): {
       {
         id: 'flashlight off',
         label: 'Flashlight off',
+        aliases: ['light off', 'torch off', 'flash off'],
         group: 'Safety',
         run: () => {
           window.dispatchEvent(new CustomEvent('hud:sos-flashlight', { detail: { enabled: false } }))
@@ -636,6 +638,23 @@ export function useHudCommands(): {
               ? 'Flashlight is currently on. Turning off device flash.'
               : 'Flashlight is already off.',
           )
+        },
+      },
+      // FIX: Add standalone "map" command for current basemap info
+      {
+        id: 'map',
+        label: 'Current map',
+        aliases: ['basemap', 'current map', 'what map'],
+        group: 'Map',
+        run: () => {
+          const currentLayer = state.activeLayer
+          const layerNames: Record<string, string> = {
+            streets: 'Streets',
+            topo: 'Topographic',
+            outdoor: 'Outdoor',
+            satellite: 'Satellite'
+          }
+          return ok(`Current basemap is ${layerNames[currentLayer] || currentLayer}.`)
         },
       },
 
@@ -647,8 +666,11 @@ export function useHudCommands(): {
           `${layer} layer`,
           `${layer} basemap`,
           `map ${layer}`,
-          ...(layer === 'topo' ? (['topographic map', 'topo map'] as const) : []),
-          ...(layer === 'satellite' ? (['satellite layer', 'sat map'] as const) : []),
+          // FIX: Add standalone layer names for natural language
+          ...(layer === 'topo' ? (['topographic map', 'topo map', 'topo'] as const) : []),
+          ...(layer === 'satellite' ? (['satellite layer', 'sat map', 'satellite', 'sat'] as const) : []),
+          ...(layer === 'outdoor' ? (['outdoor', 'outdoors'] as const) : []),
+          ...(layer === 'streets' ? (['streets', 'street'] as const) : []),
         ],
         group: 'Map',
         run: () => {

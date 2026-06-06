@@ -75,3 +75,45 @@ export function stripRepeatedWakePrefix(commandPart: string, wakeWord = 'hud'): 
   }
   return rest
 }
+
+/**
+ * Clean up SR contamination: repeated trailing fragments like "flashlight on flashlight".
+ * Removes repeated word sequences at the end of transcript.
+ */
+export function stripTrailingFragmentRepetition(phrase: string): string {
+  const trimmed = phrase.trim()
+  if (!trimmed) return trimmed
+
+  const words = trimmed.split(/\s+/)
+  if (words.length < 3) return trimmed
+
+  // Pattern 1: "A B C A B" (first N words repeated at end)
+  for (let repeatLen = 2; repeatLen <= Math.floor(words.length / 2); repeatLen++) {
+    const prefix = words.slice(0, repeatLen).join(' ')
+    const suffix = words.slice(-repeatLen).join(' ')
+    if (prefix === suffix) {
+      return words.slice(0, words.length - repeatLen).join(' ').trim()
+    }
+  }
+
+  // Pattern 2: "A B A" (single word repeated at end - common SR stutter)
+  if (words.length >= 3 && words[0] === words[words.length - 1]) {
+    return words.slice(0, -1).join(' ').trim()
+  }
+
+  // Pattern 3: "A B C B" (last word matches second word)
+  if (words.length === 4 && words[1] === words[3]) {
+    return words.slice(0, -1).join(' ').trim()
+  }
+
+  return trimmed
+}
+
+/**
+ * Clean up command phrase: remove leading/trailing junk, fix spacing.
+ */
+export function cleanCommandPhrase(phrase: string): string {
+  return phrase
+    .replace(/\s+/g, ' ')
+    .trim()
+}
