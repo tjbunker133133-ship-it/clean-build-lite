@@ -172,6 +172,8 @@ export type VoiceTraceEvent =
   | 'sr_pause_bypassed'
   | 'tts_minimal_path'
   | 'tts_minimal_started'
+  | 'tts_minimal_path_command'
+  | 'tts_minimal_failed'
   | 'tts_minimal_skipped'
   | 'tts_minimal_error'
   | 'disarm_triggered'

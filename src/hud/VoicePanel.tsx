@@ -521,6 +521,18 @@ export default function VoicePanel() {
         // onend may fire; output hold blocks immediate mic restart
       }
     }
+    // MINIMAL VOICE PATH: If enabled, bypass authority controller entirely
+    if (shouldUseMinimalVoice()) {
+      traceVoice('tts_minimal_path_command', { text: trimmed.slice(0, 40) })
+      const result = speakMinimal(trimmed)
+      if (result.started) {
+        traceVoice('tts_minimal_started', { text: trimmed.slice(0, 40) })
+      } else {
+        traceVoice('tts_minimal_failed', { text: trimmed.slice(0, 40), error: result.error })
+      }
+      return // Skip authority controller path entirely
+    }
+
     const rate = getDeviceProfile().isIOS ? 0.92 : 0.95
     try {
       // C3 FIX: Route through authority controller with explicit priority
