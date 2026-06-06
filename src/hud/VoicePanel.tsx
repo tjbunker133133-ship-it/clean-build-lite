@@ -454,40 +454,32 @@ export default function VoicePanel() {
 
   const speakHandsFree = async (
     text: string,
-    opts?: { pauseRecognition?: boolean },
+    opts?: { pauseRecognition?: boolean; emergency?: boolean; priority?: typeof VOICE_PRIORITY[keyof typeof VOICE_PRIORITY] },
   ) => {
     const trimmed = text.trim()
     if (!trimmed) return
 
-    // PHASE 1 MINIMAL VOICE: Direct synth.speak() bypass for runtime verification
-    // Toggle: window.__hudDebug.useMinimalVoice = true
-    if (shouldUseMinimalVoice()) {
-      traceVoice('tts_minimal_path', { text: trimmed.slice(0, 40), path: 'direct_synth' })
+    // VOICE SYSTEM: Two deterministic lanes
+    // LANE 1: USER RESPONSE (default) - direct speak, preserves gesture context, no cancel
+    // LANE 2: SYSTEM INTERRUPT (emergency only) - authority controller with priority/cancel
+
+    const isEmergency = opts?.emergency === true
+    const isSystemInterrupt = isEmergency || opts?.priority === VOICE_PRIORITY.SAFETY
+
+    // DEFAULT: All user commands use minimal path (direct speak, no cancel, no delay)
+    if (!isSystemInterrupt) {
+      traceVoice('tts_user_response_lane', { text: trimmed.slice(0, 40), path: 'direct_speak' })
       const result = speakMinimal(trimmed)
       if (result.started) {
-        traceVoice('tts_minimal_started', { text: trimmed.slice(0, 40) })
+        traceVoice('tts_user_response_started', { text: trimmed.slice(0, 40) })
       } else {
-        traceVoice('tts_minimal_skipped', { text: trimmed.slice(0, 40), error: result.error })
+        traceVoice('tts_user_response_failed', { text: trimmed.slice(0, 40), error: result.error })
       }
       return
     }
 
-    // C3 FIX: Check authority controller — NEVER bypass higher priority speech
-    // VoicePanel commands are USER_COMMAND priority (80)
-    // SAFETY priority (100) must NOT be interrupted by panel feedback
-    if (isSpeaking()) {
-      const current = getCurrentSpeech()
-      if (current && current.priority > VOICE_PRIORITY.USER_COMMAND) {
-        // Higher priority speech active (SAFETY) — skip panel feedback
-        logInfo('VOICE', 'VoicePanel TTS deferred: higher priority speech active', {
-          currentPriority: current.priority,
-          panelPriority: VOICE_PRIORITY.USER_COMMAND,
-          text: trimmed.slice(0, 40),
-        })
-        traceVoice('tts_requested', { text: trimmed.slice(0, 40), deferred: true, reason: 'higher_priority_speaking' })
-        return
-      }
-    }
+    // SYSTEM INTERRUPT ONLY: SOS, alerts, emergency notifications use authority controller
+    traceVoice('tts_system_interrupt_lane', { text: trimmed.slice(0, 40), path: 'authority_controller' })
 
     traceVoice('tts_requested', { text: trimmed.slice(0, 40), pauseRecognition: opts?.pauseRecognition })
 
@@ -521,29 +513,18 @@ export default function VoicePanel() {
         // onend may fire; output hold blocks immediate mic restart
       }
     }
-    // MINIMAL VOICE PATH: If enabled, bypass authority controller entirely
-    if (shouldUseMinimalVoice()) {
-      traceVoice('tts_minimal_path_command', { text: trimmed.slice(0, 40) })
-      const result = speakMinimal(trimmed)
-      if (result.started) {
-        traceVoice('tts_minimal_started', { text: trimmed.slice(0, 40) })
-      } else {
-        traceVoice('tts_minimal_failed', { text: trimmed.slice(0, 40), error: result.error })
-      }
-      return // Skip authority controller path entirely
-    }
 
+    // SYSTEM INTERRUPT LANE: Use authority controller with proper interrupt handling
     const rate = getDeviceProfile().isIOS ? 0.92 : 0.95
+    const interruptPriority = opts?.priority ?? VOICE_PRIORITY.SAFETY
+
     try {
-      // C3 FIX: Route through authority controller with explicit priority
-      // This prevents VoicePanel from overriding safety alerts
-      traceVoice('tts_requested', { text: trimmed.slice(0, 40), rate, priority: VOICE_PRIORITY.USER_COMMAND })
-      await speakHudPhrase(trimmed, rate, VOICE_PRIORITY.USER_COMMAND)
-      traceVoice('tts_completed', { text: trimmed.slice(0, 40) })
+      traceVoice('tts_interrupt_execute', { text: trimmed.slice(0, 40), rate, priority: interruptPriority })
+      await speakHudPhrase(trimmed, rate, interruptPriority)
+      traceVoice('tts_interrupt_completed', { text: trimmed.slice(0, 40) })
     } catch (err) {
-      traceVoice('dispatch_threw', { context: 'tts', error: (err as Error).message })
-      // Log TTS errors but don't throw - command execution must not fail due to speech errors
-      logWarn('VOICE', `TTS error: ${(err as Error)?.message ?? 'unknown'}`, { text: trimmed.slice(0, 40) })
+      traceVoice('tts_interrupt_error', { context: 'tts', error: (err as Error).message })
+      logWarn('VOICE', `Interrupt TTS error: ${(err as Error)?.message ?? 'unknown'}`, { text: trimmed.slice(0, 40) })
     } finally {
       if (pauseRecognition) {
         traceVoice('recognition_resumed_post_tts', { text: trimmed.slice(0, 40) })
