@@ -405,6 +405,7 @@ export default function MapCanvas() {
   const [staticFallbackVisible, setStaticFallbackVisible] = useState(true)
   const [debugClick, setDebugClick] = useState<{ lat: number; lng: number } | null>(null)
   const [mapReady, setMapReady] = useState(false)
+  const [zoomLevel, setZoomLevel] = useState<number | null>(null)
   const setDebugClickRef = useRef(setDebugClick)
   setDebugClickRef.current = setDebugClick
   const { map: mapInstance, setMap, setStatus, status: mapStatus } = useMapContext()
@@ -1833,6 +1834,30 @@ export default function MapCanvas() {
     }
   }, [])
 
+  // Zoom level tracking for overlay debugging
+  useEffect(() => {
+    const map = mapInstance
+    if (!map) return
+
+    const updateZoom = () => {
+      try {
+        const z = map.getZoom()
+        setZoomLevel(typeof z === 'number' ? Math.round(z * 10) / 10 : null)
+      } catch {
+        setZoomLevel(null)
+      }
+    }
+
+    updateZoom()
+    map.on('zoom', updateZoom)
+    map.on('zoomend', updateZoom)
+
+    return () => {
+      map.off('zoom', updateZoom)
+      map.off('zoomend', updateZoom)
+    }
+  }, [mapInstance])
+
   return (
     <div
       style={{
@@ -1891,6 +1916,32 @@ export default function MapCanvas() {
           filter: 'none',
         }}
       />
+
+      {/* Subtle zoom level indicator for overlay debugging */}
+      {zoomLevel !== null && (
+        <div
+          aria-label={`Map zoom level ${zoomLevel}`}
+          style={{
+            position: 'absolute',
+            bottom: 12,
+            left: 12,
+            zIndex: 10,
+            padding: '4px 8px',
+            borderRadius: 4,
+            background: 'rgba(8, 14, 18, 0.6)',
+            backdropFilter: 'blur(2px)',
+            border: '1px solid rgba(148, 193, 207, 0.2)',
+            color: 'rgba(185, 212, 221, 0.7)',
+            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+            fontSize: 10,
+            letterSpacing: '0.05em',
+            pointerEvents: 'none',
+            userSelect: 'none',
+          }}
+        >
+          ZOOM {zoomLevel.toFixed(1)}
+        </div>
+      )}
     </div>
   )
 }
