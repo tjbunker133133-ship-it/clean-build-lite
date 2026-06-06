@@ -22,3 +22,8 @@ scripts/rescue-smoke.cjs
 
 node_modules
 .env*.local
+
+# Archive directory - preserved locally, not tracked in git
+# (historical files available in archive/, managed outside version control)
+archive/tier2-*/
+*.zip
