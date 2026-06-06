@@ -44,6 +44,12 @@ export type TTSTraceEvent =
   | 'completion_callback_invoked'
   | 'recognition_restart_during_startup'
   | 'authority_bypassed'
+  | 'safe_mode_raw_speak'
+  | 'safe_mode_speak_called'
+  | 'safe_mode_speak_threw'
+  | 'safe_mode_utterance_onstart'
+  | 'safe_mode_utterance_onend'
+  | 'safe_mode_utterance_onerror'
 
 export function traceTTS(event: TTSTraceEvent, details?: Record<string, unknown>): void {
   logInfo('RUNTIME', `FORENSIC[TTS] ${event}`, details)

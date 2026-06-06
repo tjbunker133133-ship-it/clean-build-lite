@@ -127,10 +127,33 @@ export function startSpeech(
     return { started: false, interrupted: false, reason: 'empty_text' }
   }
 
-  // REGRESSION ISOLATION: Bypass authority controller when disabled
-  if (debugConfig.disableVoiceAuthority || debugConfig.voiceSafeMode) {
-    traceTTS('authority_bypassed', { reason: debugConfig.voiceSafeMode ? 'safe_mode' : 'authority_disabled', sourceId })
-    // Direct execution without priority logic
+  // REGRESSION ISOLATION: SAFE MODE - raw SpeechSynthesis only
+  if (debugConfig.voiceSafeMode) {
+    traceTTS('safe_mode_raw_speak', { text: trimmed.slice(0, 60), sourceId })
+    // MINIMAL PATH: new SpeechSynthesisUtterance -> speak() ONLY
+    // No cancel, no priority, no handlers, no orchestration
+    try {
+      const synth = window.speechSynthesis
+      const utterance = new SpeechSynthesisUtterance(trimmed)
+
+      // Only the most minimal handlers for forensic capture
+      utterance.onstart = () => traceTTS('safe_mode_utterance_onstart', { sourceId })
+      utterance.onend = () => traceTTS('safe_mode_utterance_onend', { sourceId })
+      utterance.onerror = (e) => traceTTS('safe_mode_utterance_onerror', { sourceId, error: e.error })
+
+      synth.speak(utterance)
+      traceTTS('safe_mode_speak_called', { sourceId })
+      return { started: true, interrupted: false }
+    } catch (err) {
+      traceTTS('safe_mode_speak_threw', { sourceId, error: (err as Error).message })
+      return { started: false, interrupted: false, reason: 'safe_mode_error' }
+    }
+  }
+
+  // REGRESSION ISOLATION: Bypass authority controller when disabled (but still use executeTTS)
+  if (debugConfig.disableVoiceAuthority) {
+    traceTTS('authority_bypassed', { reason: 'authority_disabled', sourceId })
+    // Direct execution without priority logic but still with executeTTS hygiene
     const now = Date.now()
     const speechId = `sp-bypass-${++speechIdCounter}-${now}`
     executeTTS(trimmed, speechId)
