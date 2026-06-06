@@ -9,6 +9,7 @@
 
 import { logInfo, logWarn } from './logger'
 import { traceTTS, getForensicBuffer } from './runtimeForensics'
+import { getMinimalVoiceState } from '../lib/voice/voiceMinimal'
 
 const LOG_CAT = 'RUNTIME'
 
@@ -47,6 +48,13 @@ export type VoiceDebugConfig = {
    * When true: All orchestration stripped, single utterance only, no queues
    */
   voiceSafeMode: boolean
+
+  /**
+   * PHASE 1 MINIMAL: Progressive simplification runtime
+   * When true: Use voiceMinimal.ts instead of full orchestration
+   * Goal: prove reliable TTS on Android before reintroducing protections
+   */
+  useMinimalVoice: boolean
 }
 
 const debugConfig: VoiceDebugConfig = {
@@ -55,6 +63,7 @@ const debugConfig: VoiceDebugConfig = {
   disableSrPause: false,
   traceCancelCalls: true, // Always trace cancel() - critical for regression isolation
   voiceSafeMode: false,
+  useMinimalVoice: false, // PHASE 1: Start with full orchestration, enable minimal for testing
 }
 
 // Track all cancel() calls for regression analysis
@@ -162,6 +171,11 @@ function setDisableSrPause(enabled: boolean): void {
 function setVoiceSafeMode(enabled: boolean): void {
   debugConfig.voiceSafeMode = enabled
   logInfo(LOG_CAT, 'CONFIG_SAFE_MODE', { enabled })
+}
+
+function setUseMinimalVoice(enabled: boolean): void {
+  debugConfig.useMinimalVoice = enabled
+  logInfo(LOG_CAT, 'CONFIG_MINIMAL_VOICE', { enabled })
 }
 
 function setTraceCancelCalls(enabled: boolean): void {
@@ -273,6 +287,7 @@ function generateDiagnosticReport(): {
     paused: boolean
     voices: number
   } | null
+  minimalVoiceState: ReturnType<typeof getMinimalVoiceState> | null
 } {
   let synthState = null
   if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
@@ -291,6 +306,7 @@ function generateDiagnosticReport(): {
     cancelCallCount: cancelCallLog.length,
     recentCancels: getCancelCallLog(),
     speechSynthesisState: synthState,
+    minimalVoiceState: getMinimalVoiceState(),
   }
 }
 
@@ -313,6 +329,7 @@ type FieldDiagnosticCapture = {
     paused: boolean
     voices: number
   } | null
+  minimalVoiceState: ReturnType<typeof getMinimalVoiceState> | null
   forensicBuffer: ReturnType<typeof getForensicBuffer>
   cancelLog: ReturnType<typeof getCancelCallLog>
   config: VoiceDebugConfig
@@ -339,6 +356,7 @@ function captureFieldDiagnostic(testId: string): FieldDiagnosticCapture {
     timestamp: Date.now(),
     userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'unknown',
     speechSynthesis: synthState,
+    minimalVoiceState: getMinimalVoiceState(),
     forensicBuffer,
     cancelLog: getCancelCallLog(),
     config: getDebugConfig(),
@@ -384,6 +402,8 @@ function initializeDebugApi() {
       setDisableSrPause: typeof setDisableSrPause
       voiceSafeMode: boolean
       setVoiceSafeMode: typeof setVoiceSafeMode
+      useMinimalVoice: boolean
+      setUseMinimalVoice: typeof setUseMinimalVoice
       traceCancelCalls: boolean
       setTraceCancelCalls: typeof setTraceCancelCalls
       getCancelCallLog: typeof getCancelCallLog
@@ -403,6 +423,8 @@ function initializeDebugApi() {
     setDisableSrPause,
     voiceSafeMode: debugConfig.voiceSafeMode,
     setVoiceSafeMode,
+    useMinimalVoice: debugConfig.useMinimalVoice,
+    setUseMinimalVoice,
     traceCancelCalls: debugConfig.traceCancelCalls,
     setTraceCancelCalls,
     getCancelCallLog,
@@ -459,6 +481,10 @@ if (typeof window !== 'undefined') {
     Object.defineProperty(w.__hudDebug, 'voiceSafeMode', {
       get: () => debugConfig.voiceSafeMode,
       set: (v: boolean) => setVoiceSafeMode(v),
+    })
+    Object.defineProperty(w.__hudDebug, 'useMinimalVoice', {
+      get: () => debugConfig.useMinimalVoice,
+      set: (v: boolean) => setUseMinimalVoice(v),
     })
     Object.defineProperty(w.__hudDebug, 'traceCancelCalls', {
       get: () => debugConfig.traceCancelCalls,

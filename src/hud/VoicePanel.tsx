@@ -61,6 +61,7 @@ import {
 import { setVoicePanelCommandHandlers } from '../runtime/voicePanelCommandBridge'
 import { traceVoice, traceCommand } from '../runtime/runtimeForensics'
 import { debugConfig } from '../runtime/voiceRegressionDebug'
+import { speakMinimal, shouldUseMinimalVoice, getMinimalVoiceState } from '../lib/voice/voiceMinimal'
 
 type VoiceState = 'sleeping' | 'listening' | 'processing' | 'success' | 'failure'
 
@@ -457,6 +458,19 @@ export default function VoicePanel() {
   ) => {
     const trimmed = text.trim()
     if (!trimmed) return
+
+    // PHASE 1 MINIMAL VOICE: Direct synth.speak() bypass for runtime verification
+    // Toggle: window.__hudDebug.useMinimalVoice = true
+    if (shouldUseMinimalVoice()) {
+      traceVoice('tts_minimal_path', { text: trimmed.slice(0, 40), path: 'direct_synth' })
+      const result = speakMinimal(trimmed)
+      if (result.started) {
+        traceVoice('tts_minimal_started', { text: trimmed.slice(0, 40) })
+      } else {
+        traceVoice('tts_minimal_skipped', { text: trimmed.slice(0, 40), error: result.error })
+      }
+      return
+    }
 
     // C3 FIX: Check authority controller — NEVER bypass higher priority speech
     // VoicePanel commands are USER_COMMAND priority (80)
