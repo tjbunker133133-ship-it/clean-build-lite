@@ -339,6 +339,13 @@ export function overlayZoomBlocked(
   const minZ = def.minZoom ?? 0
   const z = map.getZoom()
   if (z + 0.05 < minZ) {
+    traceOverlay('zoom_blocked_details', {
+      overlayId: id,
+      currentZoom: z.toFixed(2),
+      requiredZoom: minZ,
+      difference: (minZ - z).toFixed(2),
+      message: `Zoom in closer (map level ${minZ}+) to load ${def.label.toLowerCase()}.`
+    })
     return {
       blocked: true,
       message: `Zoom in closer (map level ${minZ}+) to load ${def.label.toLowerCase()}.`,

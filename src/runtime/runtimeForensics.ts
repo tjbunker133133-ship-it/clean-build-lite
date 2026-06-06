@@ -71,6 +71,7 @@ export type OverlayTraceEvent =
   | 'style_wait_resolved'
   | 'style_wait_timeout'
   | 'zoom_blocked'
+  | 'zoom_blocked_details'
   | 'fetch_started'
   | 'fetch_resolved'
   | 'fetch_threw'

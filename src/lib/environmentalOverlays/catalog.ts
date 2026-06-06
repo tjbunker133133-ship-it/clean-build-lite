@@ -53,7 +53,7 @@ export const ENVIRONMENTAL_OVERLAY_CATALOG: EnvironmentalOverlayDef[] = [
     onlinePreferred: false,
     offlineCacheable: true,
     attribution: 'OpenStreetMap contributors',
-    minZoom: 10,
+    minZoom: 8,  // REDUCED from 10: bike paths are often long corridors visible at lower zoom
   },
   {
     id: 'abandoned_rail',
@@ -63,7 +63,7 @@ export const ENVIRONMENTAL_OVERLAY_CATALOG: EnvironmentalOverlayDef[] = [
     onlinePreferred: false,
     offlineCacheable: true,
     attribution: 'OpenStreetMap contributors',
-    minZoom: 9,
+    minZoom: 7,  // REDUCED from 9: rail corridors are long-range linear features
   },
   {
     id: 'mines',
@@ -73,7 +73,7 @@ export const ENVIRONMENTAL_OVERLAY_CATALOG: EnvironmentalOverlayDef[] = [
     onlinePreferred: false,
     offlineCacheable: true,
     attribution: 'OpenStreetMap contributors',
-    minZoom: 10,
+    minZoom: 8,  // REDUCED from 10: mine sites are often large areas
   },
   {
     id: 'hiking_trails',
@@ -83,7 +83,7 @@ export const ENVIRONMENTAL_OVERLAY_CATALOG: EnvironmentalOverlayDef[] = [
     onlinePreferred: false,
     offlineCacheable: true,
     attribution: 'OpenStreetMap contributors',
-    minZoom: 11,
+    minZoom: 9,  // REDUCED from 11: major trail systems visible at moderate zoom
   },
   {
     id: 'camping',
@@ -93,7 +93,7 @@ export const ENVIRONMENTAL_OVERLAY_CATALOG: EnvironmentalOverlayDef[] = [
     onlinePreferred: false,
     offlineCacheable: true,
     attribution: 'OpenStreetMap contributors',
-    minZoom: 9,
+    minZoom: 8,  // REDUCED from 9: large campgrounds visible at moderate zoom
   },
 ]
 
