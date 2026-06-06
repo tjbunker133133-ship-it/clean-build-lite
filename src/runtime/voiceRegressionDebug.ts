@@ -368,7 +368,13 @@ function exportFieldReport(testId: string): string {
 // GLOBAL EXPOSURE
 // ============================================================================
 
-if (typeof window !== 'undefined') {
+// Initialize immediately if window exists, otherwise defer to DOMContentLoaded
+function initializeDebugApi() {
+  if (typeof window === 'undefined') {
+    console.log('[VOICE_DEBUG] Window not available, deferring initialization')
+    return false
+  }
+
   const w = window as unknown as {
     __hudDebug?: {
       rawSpeak: typeof rawSpeak
@@ -407,23 +413,58 @@ if (typeof window !== 'undefined') {
     _config: debugConfig,
   }
 
-  // Proxy getters to ensure live config access
-  Object.defineProperty(w.__hudDebug, 'disableVoiceAuthority', {
-    get: () => debugConfig.disableVoiceAuthority,
-    set: (v: boolean) => setDisableVoiceAuthority(v),
+  console.log('[VOICE_DEBUG] __hudDebug initialized with methods:', Object.keys(w.__hudDebug).join(', '))
+  return true
+}
+
+// Attempt immediate initialization
+const initialized = initializeDebugApi()
+
+// If window wasn't available (SSR/build), retry on DOMContentLoaded
+if (!initialized && typeof document !== 'undefined') {
+  document.addEventListener('DOMContentLoaded', () => {
+    console.log('[VOICE_DEBUG] DOMContentLoaded fired, retrying initialization')
+    initializeDebugApi()
   })
-  Object.defineProperty(w.__hudDebug, 'disableSrPause', {
-    get: () => debugConfig.disableSrPause,
-    set: (v: boolean) => setDisableSrPause(v),
+}
+
+// Also ensure initialization on window load (React hydration complete)
+if (typeof window !== 'undefined') {
+  const w = window as unknown as {
+    __hudDebug?: {
+      disableVoiceAuthority: boolean
+      disableSrPause: boolean
+      voiceSafeMode: boolean
+      traceCancelCalls: boolean
+    }
+  }
+
+  window.addEventListener('load', () => {
+    if (!w.__hudDebug) {
+      console.log('[VOICE_DEBUG] Window load fired, __hudDebug missing, forcing initialization')
+      initializeDebugApi()
+    }
   })
-  Object.defineProperty(w.__hudDebug, 'voiceSafeMode', {
-    get: () => debugConfig.voiceSafeMode,
-    set: (v: boolean) => setVoiceSafeMode(v),
-  })
-  Object.defineProperty(w.__hudDebug, 'traceCancelCalls', {
-    get: () => debugConfig.traceCancelCalls,
-    set: (v: boolean) => setTraceCancelCalls(v),
-  })
+
+  // Proxy getters to ensure live config access (only if debug API was initialized)
+  if (w.__hudDebug) {
+    Object.defineProperty(w.__hudDebug, 'disableVoiceAuthority', {
+      get: () => debugConfig.disableVoiceAuthority,
+      set: (v: boolean) => setDisableVoiceAuthority(v),
+    })
+    Object.defineProperty(w.__hudDebug, 'disableSrPause', {
+      get: () => debugConfig.disableSrPause,
+      set: (v: boolean) => setDisableSrPause(v),
+    })
+    Object.defineProperty(w.__hudDebug, 'voiceSafeMode', {
+      get: () => debugConfig.voiceSafeMode,
+      set: (v: boolean) => setVoiceSafeMode(v),
+    })
+    Object.defineProperty(w.__hudDebug, 'traceCancelCalls', {
+      get: () => debugConfig.traceCancelCalls,
+      set: (v: boolean) => setTraceCancelCalls(v),
+    })
+  }
 
   logInfo(LOG_CAT, 'DEBUG_MODULE_INITIALIZED')
 }

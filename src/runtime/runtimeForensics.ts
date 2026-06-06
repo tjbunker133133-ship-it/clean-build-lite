@@ -285,7 +285,12 @@ export function inspectMapOverlayState(
 // EXPOSURE TO GLOBAL FOR LIVE DEBUGGING
 // ============================================================================
 
-if (typeof window !== 'undefined') {
+function initializeForensicsApi() {
+  if (typeof window === 'undefined') {
+    console.log('[FORENSICS] Window not available, deferring initialization')
+    return false
+  }
+
   const w = window as unknown as {
     __hudForensics?: {
       getBuffer: typeof getForensicBuffer
@@ -302,4 +307,27 @@ if (typeof window !== 'undefined') {
     inspectSpeechSynthesis,
     inspectMapOverlayState,
   }
+  console.log('[FORENSICS] __hudForensics initialized')
+  return true
+}
+
+// Attempt immediate initialization
+const forensicsInitialized = initializeForensicsApi()
+
+// If window wasn't available (SSR/build), retry on DOMContentLoaded
+if (!forensicsInitialized && typeof document !== 'undefined') {
+  document.addEventListener('DOMContentLoaded', () => {
+    console.log('[FORENSICS] DOMContentLoaded fired, retrying initialization')
+    initializeForensicsApi()
+  })
+}
+
+// Also ensure initialization on window load (React hydration complete)
+if (typeof window !== 'undefined') {
+  window.addEventListener('load', () => {
+    if (!(window as unknown as { __hudForensics?: unknown }).__hudForensics) {
+      console.log('[FORENSICS] Window load fired, __hudForensics missing, forcing initialization')
+      initializeForensicsApi()
+    }
+  })
 }
