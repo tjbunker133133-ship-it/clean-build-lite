@@ -20,7 +20,7 @@ import TacticalSetupBanner from './hud/TacticalSetupBanner'
 import AlertWatchBootstrap from './hud/AlertWatchBootstrap'
 
 const MapCanvas = lazy(() => import('./components/MapCanvas'))
-const EnvironmentalOverlaysLayer = lazy(() => import('./layers/EnvironmentalOverlaysLayerResilient'))
+const EnvironmentalOverlaysLayer = lazy(() => import('./layers/EnvironmentalOverlaysLayer'))
 const WaypointLayer = lazy(() => import('./layers/WaypointLayer'))
 const RouteLayer = lazy(() => import('./layers/RouteLayer'))
 const TeamPresenceLayer = lazy(() => import('./layers/TeamPresenceLayer'))
