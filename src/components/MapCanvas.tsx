@@ -762,6 +762,8 @@ export default function MapCanvas() {
 
       hudObsMark('hud:map:boot:constructed')
       mapRef.current = map
+      // FIELD DIAGNOSTIC: Expose map for runtime overlay verification
+      ;(window as unknown as { __hudMap?: maplibregl.Map }).__hudMap = map
       skipLayerSyncRef.current = true
       map.on('style.load', onStyleLoad)
       styleImageMissingHandler = onStyleImageMissingFactory(map)
@@ -1347,6 +1349,8 @@ export default function MapCanvas() {
       }
       setStatus('initial')
       mapRef.current = null
+      // Clear field diagnostic reference
+      delete (window as unknown as { __hudMap?: maplibregl.Map }).__hudMap
       try {
         map?.remove()
       } catch {

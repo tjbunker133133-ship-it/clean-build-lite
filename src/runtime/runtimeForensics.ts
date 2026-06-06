@@ -246,7 +246,7 @@ export function inspectSpeechSynthesis(): {
 }
 
 export function inspectMapOverlayState(
-  map: import('maplibre-gl').Map | null | undefined,
+  mapArg: import('maplibre-gl').Map | null | undefined,
   overlayId: string,
 ): {
   mapExists: boolean
@@ -255,6 +255,11 @@ export function inspectMapOverlayState(
   layerExists: boolean
   sourceLoaded?: boolean
 } {
+  // FIELD DIAGNOSTIC: Auto-get map from global if not provided
+  const map = mapArg ?? (typeof window !== 'undefined'
+    ? (window as unknown as { __hudMap?: import('maplibre-gl').Map }).__hudMap
+    : undefined)
+
   if (!map) {
     return { mapExists: false, styleReady: false, sourceExists: false, layerExists: false }
   }
