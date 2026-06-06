@@ -1179,6 +1179,27 @@ export function installRuntimeSnapshot(): void {
         'periodic-validator: desktop controller mounted in mobile mode',
       )
     }
+
+    // OPERATIONAL GUARDRAIL: Memory pressure detection (Chrome/Android)
+    const memoryInfo = (performance as any).memory
+    if (memoryInfo) {
+      const usedMB = Math.round(memoryInfo.usedJSHeapSize / 1024 / 1024)
+      const totalMB = Math.round(memoryInfo.totalJSHeapSize / 1024 / 1024)
+      const limitMB = Math.round(memoryInfo.jsHeapSizeLimit / 1024 / 1024)
+
+      // Warn at 100MB used or 80% of limit
+      const WARNING_THRESHOLD_MB = 100
+      const WARNING_THRESHOLD_PERCENT = 0.8
+
+      if (usedMB > WARNING_THRESHOLD_MB || usedMB > limitMB * WARNING_THRESHOLD_PERCENT) {
+        logWarn('RUNTIME', 'high memory usage detected', {
+          usedMB,
+          totalMB,
+          limitMB,
+          percentOfLimit: Math.round((usedMB / limitMB) * 100),
+        })
+      }
+    }
   }, VALIDATE_INTERVAL_MS)
 
   logInfo('RUNTIME', 'snapshot installed', {

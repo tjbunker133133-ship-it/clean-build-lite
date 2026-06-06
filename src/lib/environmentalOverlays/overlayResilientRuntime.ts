@@ -27,6 +27,45 @@ import type { EnvironmentalOverlayId } from './types'
 
 const LOG_PREFIX = '[overlay]'
 
+// ============================================================================
+// SOFT GUARDRAIL: Enhancement Session Tracking
+// Prevents stale promise resolutions from updating unmounted/unrelated overlays
+// ============================================================================
+
+// Use globalThis.Map to avoid collision with imported Map type from maplibre-gl
+const activeEnhancementSessions = new globalThis.Map<EnvironmentalOverlayId, AbortController>()
+
+/** Cancel any in-flight enhancement for this overlay */
+export function cancelEnhancementSession(overlayId: EnvironmentalOverlayId): void {
+  const session = activeEnhancementSessions.get(overlayId)
+  if (session) {
+    session.abort()
+    activeEnhancementSessions.delete(overlayId)
+    traceOverlay('enhance_session_cancelled', { overlayId })
+  }
+}
+
+/** Track a new enhancement session for potential cancellation */
+function trackEnhancementSession(overlayId: EnvironmentalOverlayId): AbortController {
+  // Cancel any existing session first
+  cancelEnhancementSession(overlayId)
+
+  const controller = new AbortController()
+  activeEnhancementSessions.set(overlayId, controller)
+  return controller
+}
+
+/** Clean up completed session tracking */
+function untrackEnhancementSession(overlayId: EnvironmentalOverlayId): void {
+  activeEnhancementSessions.delete(overlayId)
+}
+
+/** Check if session was aborted (for use in promise handlers) */
+function isEnhancementSessionAborted(overlayId: EnvironmentalOverlayId): boolean {
+  const session = activeEnhancementSessions.get(overlayId)
+  return !session || session.signal.aborted
+}
+
 /**
  * Render overlay from local seed data — ALWAYS succeeds, NEVER blocks on network.
  * This is the PRIMARY render path.
@@ -68,6 +107,8 @@ export function renderOverlayFromSeed(
  * Background enhancement — fetches live data and updates existing layer.
  * SILENT FAILURE: If this fails, overlay stays visible with seed data.
  * No UI feedback, no error states.
+ * 
+ * GUARDRAIL: Uses AbortController to prevent stale updates after deactivation
  */
 export async function enhanceOverlayFromNetwork(
   map: Map,
@@ -93,14 +134,25 @@ export async function enhanceOverlayFromNetwork(
     return { enhanced: false, finalFeatureCount: 0 }
   }
 
+  // GUARDRAIL: Track this session for potential cancellation
+  const abortController = trackEnhancementSession(id)
+
   traceOverlay('enhance_fetch_start', { overlayId: id, bbox })
 
   try {
-    const enhanced = await fetchOverpassGeojson(id, bbox)
+    const enhanced = await fetchOverpassGeojson(id, bbox, abortController.signal)
+
+    // GUARDRAIL: Check if aborted before proceeding with state update
+    if (isEnhancementSessionAborted(id)) {
+      traceOverlay('enhance_aborted_after_fetch', { overlayId: id })
+      untrackEnhancementSession(id)
+      return { enhanced: false, finalFeatureCount: 0 }
+    }
 
     // Validate we got meaningful data
     if (!enhanced.features || enhanced.features.length === 0) {
       traceOverlay('enhance_empty_response', { overlayId: id })
+      untrackEnhancementSession(id)
       return { enhanced: false, finalFeatureCount: 0 }
     }
 
@@ -109,6 +161,13 @@ export async function enhanceOverlayFromNetwork(
     // Merge with existing seed data
     const seedData = getOverlaySeedData(id)
     const merged = mergeSeedWithEnhanced(seedData, enhanced)
+
+    // GUARDRAIL: Double-check aborted before map state mutation
+    if (isEnhancementSessionAborted(id)) {
+      traceOverlay('enhance_aborted_before_update', { overlayId: id })
+      untrackEnhancementSession(id)
+      return { enhanced: false, finalFeatureCount: 0 }
+    }
 
     // Update the source with merged data
     const sourceId = envSourceId(id)
@@ -121,11 +180,20 @@ export async function enhanceOverlayFromNetwork(
       traceOverlay('enhance_source_not_found', { overlayId: id })
     }
 
+    untrackEnhancementSession(id)
     return { enhanced: true, finalFeatureCount: merged.features.length }
   } catch (err) {
+    // Check if this was an abort (expected during deactivation)
+    if (abortController.signal.aborted) {
+      traceOverlay('enhance_cancelled_expected', { overlayId: id })
+      untrackEnhancementSession(id)
+      return { enhanced: false, finalFeatureCount: 0 }
+    }
+
     // SILENT FAILURE: Log but don't break UI
     const errorMsg = err instanceof Error ? err.message : String(err)
     traceOverlay('enhance_failed_silent', { overlayId: id, error: errorMsg.slice(0, 100) })
+    untrackEnhancementSession(id)
     // Overlay remains visible with seed data
     return { enhanced: false, finalFeatureCount: 0 }
   }
@@ -192,8 +260,11 @@ export function activateOverlayResilient(
 
 /**
  * Clean removal of overlay.
+ * GUARDRAIL: Also cancels any in-flight enhancement session.
  */
 export function deactivateOverlayResilient(map: Map, id: EnvironmentalOverlayId): void {
   traceOverlay('resilient_deactivated', { overlayId: id })
+  // GUARDRAIL: Cancel any pending enhancement before removal
+  cancelEnhancementSession(id)
   removeEnvironmentalOverlay(map, id)
 }

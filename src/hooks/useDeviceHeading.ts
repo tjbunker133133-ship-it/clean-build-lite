@@ -10,6 +10,7 @@ import {
   smoothHeading,
 } from '../lib/deviceHeading'
 import { getDeviceProfile } from '../runtime/deviceProfile'
+import { pushForensicTrace } from '../runtime/runtimeForensics'
 
 export type DeviceHeadingState = {
   heading: number | null
@@ -37,6 +38,17 @@ export function useDeviceHeading(): DeviceHeadingState {
     const isIOS = getDeviceProfile().isIOS
     let preferAbsoluteOnly = false
 
+    // GUARDRAIL: Track compass listener count to detect potential duplicates
+    const w = window as Window & { __hudCompassListeners?: number }
+    w.__hudCompassListeners = (w.__hudCompassListeners ?? 0) + 1
+    const myListenerIndex = w.__hudCompassListeners
+
+    pushForensicTrace('gps', 'compass_listener_added', {
+      isIOS,
+      listenerIndex: myListenerIndex,
+      totalListeners: w.__hudCompassListeners,
+    })
+
     const applyStatus = (next: CompassStatus) => {
       if (!mounted) return
       setStatus(next)
@@ -50,7 +62,14 @@ export function useDeviceHeading(): DeviceHeadingState {
       gotReadingRef.current = true
     }
 
+    // OPERATIONAL GUARDRAIL: Monitor compass processing time for battery/performance
+    const PROCESS_TIME_WARNING_MS = 5
+    const eventCountRef = { current: 0 }
+    const lastCheckRef = { current: performance.now() }
+
     const ingestOrientation = (event: DeviceOrientationEvent) => {
+      const processingStart = performance.now()
+
       if (!isIOS && preferAbsoluteOnly && event.absolute !== true) return
 
       const beta = event.beta
@@ -67,6 +86,30 @@ export function useDeviceHeading(): DeviceHeadingState {
       const display = displayRef.current
       const smoothed = display == null ? raw : smoothHeading(display, raw, smoothFactor)
       const now = performance.now()
+
+      // OPERATIONAL GUARDRAIL: Track processing time
+      const processingTime = performance.now() - processingStart
+      if (processingTime > PROCESS_TIME_WARNING_MS) {
+        pushForensicTrace('gps', 'compass_processing_slow', {
+          processingTime: Math.round(processingTime),
+          beta,
+          gamma,
+        })
+      }
+
+      // OPERATIONAL GUARDRAIL: Track event frequency (diagnostic only)
+      eventCountRef.current++
+      if (now - lastCheckRef.current > 60000) {
+        // Log event rate once per minute (diagnostic)
+        if (eventCountRef.current > 6000) {  // > 100Hz sustained
+          pushForensicTrace('gps', 'compass_high_frequency', {
+            eventsPerMinute: eventCountRef.current,
+            avgIntervalMs: Math.round((now - lastCheckRef.current) / eventCountRef.current),
+          })
+        }
+        eventCountRef.current = 0
+        lastCheckRef.current = now
+      }
 
       if (!shouldPublishHeading(display, smoothed, now, lastPublishRef.current)) return
 
@@ -101,7 +144,12 @@ export function useDeviceHeading(): DeviceHeadingState {
     }
 
     fallbackTimer = window.setTimeout(() => {
-      if (!mounted || gotReadingRef.current) return
+      if (!mounted || gotReadingRef.current) {
+        if (!gotReadingRef.current && mounted) {
+          pushForensicTrace('gps', 'compass_no_reading_timeout', { isIOS })
+        }
+        return
+      }
       applyStatus('unavailable')
       setHeading(null)
     }, 2500)
@@ -111,6 +159,13 @@ export function useDeviceHeading(): DeviceHeadingState {
       window.removeEventListener('deviceorientation', ingestOrientation as EventListener)
       window.removeEventListener('deviceorientationabsolute', ingestOrientation as EventListener)
       if (fallbackTimer != null) window.clearTimeout(fallbackTimer)
+
+      // GUARDRAIL: Decrement listener count on cleanup
+      w.__hudCompassListeners = Math.max(0, (w.__hudCompassListeners ?? 1) - 1)
+      pushForensicTrace('gps', 'compass_listener_removed', {
+        listenerIndex: myListenerIndex,
+        remainingListeners: w.__hudCompassListeners,
+      })
     }
   }, [])
 

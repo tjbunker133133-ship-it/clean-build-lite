@@ -1067,6 +1067,28 @@ export default function VoicePanel() {
       updateVoiceRecoveryState('recovering')
       updateVoiceState('recovering')
 
+      // OPERATIONAL GUARDRAIL: Track restart storm window
+      const now = Date.now()
+      if (now - restartStormRef.current.windowStart > 60000) {
+        // Reset window after 60s
+        restartStormRef.current.windowStart = now
+        restartStormRef.current.count = 1
+      } else {
+        restartStormRef.current.count++
+      }
+
+      // OPERATIONAL GUARDRAIL: Warn if restart storm detected (> 5 in 60s)
+      const RESTART_STORM_WARNING_THRESHOLD = 5
+      if (restartStormRef.current.count > RESTART_STORM_WARNING_THRESHOLD &&
+          now - restartStormRef.current.lastLogAt > 10000) {
+        restartStormRef.current.lastLogAt = now
+        traceVoice('restart_storm_warning', {
+          count: restartStormRef.current.count,
+          windowMs: now - restartStormRef.current.windowStart,
+        })
+        logWarn('VOICE', `restart storm detected: ${restartStormRef.current.count} restarts in ${Math.round((now - restartStormRef.current.windowStart) / 1000)}s`)
+      }
+
       if (restartAttemptsRef.current > MAX_RESTART_ATTEMPTS) {
         updateVoiceState('degraded', { lastError: 'recovery attempts exceeded' })
         setVoiceState('failure')

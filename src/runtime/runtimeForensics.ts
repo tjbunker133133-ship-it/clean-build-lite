@@ -109,6 +109,22 @@ export type OverlayTraceEvent =
   | 'resilient_sync_not_visible'
   | 'resilient_sync_deactivate'
   | 'resilient_enhance_complete'
+  | 'resilient_enhance_complete_inactive'
+  | 'resilient_activation_skipped_duplicate'
+  | 'layer_unmount_cleanup_start'
+  | 'layer_unmount_cleanup_no_map'
+  | 'layer_unmount_cleanup_complete'
+  | 'enhance_session_cancelled'
+  | 'enhance_aborted_after_fetch'
+  | 'enhance_aborted_before_update'
+  | 'enhance_cancelled_expected'
+  | 'storage_load_empty'
+  | 'storage_load_invalid'
+  | 'storage_load_success'
+  | 'storage_load_failed'
+  | 'storage_save_success'
+  | 'storage_save_error'
+  | 'storage_quota_exceeded'
   | 'fetch_started'
   | 'fetch_resolved'
   | 'fetch_threw'
@@ -199,6 +215,8 @@ export type VoiceTraceEvent =
   | 'command_skipped_cleanup'
   | 'command_cleaned'
   | 'continuation_window_closed'
+  // OPERATIONAL GUARDRAIL: Voice restart storm detection
+  | 'restart_storm_warning'
 
 export function traceVoice(event: VoiceTraceEvent, details?: Record<string, unknown>): void {
   logInfo('RUNTIME', `FORENSIC[VOICE] ${event}`, details)
@@ -242,7 +260,7 @@ export function traceCommand(event: CommandTraceEvent, details?: Record<string, 
 
 interface ForensicEntry {
   ts: number
-  category: 'tts' | 'overlay' | 'voice' | 'command'
+  category: 'tts' | 'overlay' | 'voice' | 'command' | 'gps'
   event: string
   details?: Record<string, unknown>
 }
@@ -250,7 +268,7 @@ interface ForensicEntry {
 const FORENSIC_BUFFER_SIZE = 100
 const forensicBuffer: ForensicEntry[] = []
 
-function pushForensicTrace(
+export function pushForensicTrace(
   category: ForensicEntry['category'],
   event: string,
   details?: Record<string, unknown>,

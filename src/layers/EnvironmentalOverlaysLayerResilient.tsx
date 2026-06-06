@@ -19,11 +19,16 @@ import {
 } from '../lib/environmentalOverlays/overlayResilientRuntime'
 import { traceOverlay } from '../runtime/runtimeForensics'
 
+// GUARDRAIL: Cleanup verification counter for diagnostics
+let cleanupVerificationCounter = 0
+
 export default function EnvironmentalOverlaysLayerResilient() {
   const { map } = useMapContext()
   const { toggles, online } = useOverlayContext()
   const activeOverlaysRef = useRef<Set<string>>(new Set())
   const zoomRef = useRef<number>(0)
+  // GUARDRAIL: Track activations in progress to prevent duplicate requests
+  const activationInProgressRef = useRef<Set<string>>(new Set())
 
   // Track zoom level for overlay gates
   useEffect(() => {
@@ -65,7 +70,15 @@ export default function EnvironmentalOverlaysLayerResilient() {
     // Activate new overlays
     for (const id of desiredActive) {
       if (!currentActive.has(id)) {
+        // GUARDRAIL: Skip if activation already in progress (deduplication)
+        if (activationInProgressRef.current.has(id)) {
+          traceOverlay('resilient_activation_skipped_duplicate', { overlayId: id })
+          continue
+        }
+
+        activationInProgressRef.current.add(id)
         traceOverlay('resilient_sync_activate', { overlayId: id, zoom: zoomRef.current })
+
         const result = activateOverlayResilient(
           map,
           id as typeof ENVIRONMENTAL_OVERLAY_CATALOG[number]['id'],
@@ -80,6 +93,15 @@ export default function EnvironmentalOverlaysLayerResilient() {
           // Fire-and-forget background enhancement
           if (result.backgroundEnhance) {
             result.backgroundEnhance.then((enhanceResult) => {
+              // GUARDRAIL: Verify still active before logging completion
+              if (!currentActive.has(id)) {
+                traceOverlay('resilient_enhance_complete_inactive', {
+                  overlayId: id,
+                  enhanced: enhanceResult.enhanced,
+                  finalCount: enhanceResult.finalFeatureCount,
+                })
+                return
+              }
               traceOverlay('resilient_enhance_complete', {
                 overlayId: id,
                 enhanced: enhanceResult.enhanced,
@@ -90,6 +112,9 @@ export default function EnvironmentalOverlaysLayerResilient() {
         } else {
           traceOverlay('resilient_sync_not_visible', { overlayId: id, reason: 'zoom_gate_or_render_fail' })
         }
+
+        // GUARDRAIL: Always clear in-progress flag
+        activationInProgressRef.current.delete(id)
       }
     }
 
@@ -106,11 +131,31 @@ export default function EnvironmentalOverlaysLayerResilient() {
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      if (!map) return
+      // GUARDRAIL: Verify cleanup with trace diagnostics
+      cleanupVerificationCounter++
+      traceOverlay('layer_unmount_cleanup_start', {
+        cleanupId: cleanupVerificationCounter,
+        activeCount: activeOverlaysRef.current.size,
+        inProgressCount: activationInProgressRef.current.size,
+      })
+
+      if (!map) {
+        traceOverlay('layer_unmount_cleanup_no_map', { cleanupId: cleanupVerificationCounter })
+        return
+      }
+
+      // Clear any pending activations
+      activationInProgressRef.current.clear()
+
       for (const id of activeOverlaysRef.current) {
         deactivateOverlayResilient(map, id as typeof ENVIRONMENTAL_OVERLAY_CATALOG[number]['id'])
       }
       activeOverlaysRef.current.clear()
+
+      traceOverlay('layer_unmount_cleanup_complete', {
+        cleanupId: cleanupVerificationCounter,
+        clearedCount: activeOverlaysRef.current.size,
+      })
     }
   }, [map])
 
