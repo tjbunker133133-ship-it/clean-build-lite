@@ -1,4 +1,5 @@
 import { getDeviceProfile } from '../../runtime/deviceProfile'
+import { traceOverlay } from '../../runtime/runtimeForensics'
 import type { EnvironmentalOverlayId, MapBbox } from './types'
 
 const OVERPASS_ENDPOINTS = [
@@ -151,25 +152,72 @@ function networkOverlayError(err: unknown): Error {
   return err instanceof Error ? err : new Error(raw || 'OSM load failed')
 }
 
+/** Fetch with explicit timeout to prevent hanging requests */
+async function fetchWithTimeout(
+  url: string,
+  options: RequestInit,
+  timeoutMs: number,
+): Promise<Response> {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    })
+    clearTimeout(timeoutId)
+    return response
+  } catch (err) {
+    clearTimeout(timeoutId)
+    throw err
+  }
+}
+
 async function postOverpass(
   endpoint: string,
   query: string,
+  overlayId: EnvironmentalOverlayId,
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const res = await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: `data=${encodeURIComponent(query)}`,
-    signal,
-    mode: 'cors',
-  })
-  if (res.status === 429) {
-    throw new Error('OSM busy (rate limit) — wait 30s and retry')
+  const url = endpoint
+  const body = `data=${encodeURIComponent(query)}`
+
+  traceOverlay('fetch_request_start', { overlayId, endpoint, bodyLength: body.length })
+
+  try {
+    // Use 8s timeout per endpoint attempt (fails fast, retries to next endpoint)
+    const res = await fetchWithTimeout(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+      mode: 'cors',
+    }, 8000)
+
+    traceOverlay('fetch_request_complete', { overlayId, endpoint, status: res.status, ok: res.ok })
+
+    if (res.status === 429) {
+      traceOverlay('fetch_rate_limited', { overlayId, endpoint })
+      throw new Error('OSM busy (rate limit) — wait 30s and retry')
+    }
+    if (!res.ok) {
+      traceOverlay('fetch_http_error', { overlayId, endpoint, status: res.status })
+      throw new Error(`OSM data unavailable (${res.status})`)
+    }
+
+    const json = await res.json()
+    traceOverlay('fetch_json_parsed', { overlayId, endpoint, hasElements: !!json?.elements })
+    return json
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err)
+    const isTimeout = errorMsg.includes('abort') || errorMsg.includes('timeout')
+    traceOverlay(isTimeout ? 'fetch_timeout' : 'fetch_network_error', {
+      overlayId,
+      endpoint,
+      error: errorMsg.slice(0, 100),
+    })
+    throw err
   }
-  if (!res.ok) {
-    throw new Error(`OSM data unavailable (${res.status})`)
-  }
-  return res.json() as Promise<unknown>
 }
 
 export async function fetchOverpassGeojson(
@@ -177,22 +225,48 @@ export async function fetchOverpassGeojson(
   bbox: MapBbox,
   signal?: AbortSignal,
 ): Promise<GeoJSON.FeatureCollection> {
+  traceOverlay('fetch_overpass_geojson_start', { overlayId: id, bbox })
+
   const q = overpassQuery(id, bbox)
   if (!q) {
+    traceOverlay('fetch_invalid_bbox', { overlayId: id })
     throw new Error('Map area invalid — pan or zoom and try again.')
   }
 
+  traceOverlay('fetch_query_built', { overlayId: id, queryLength: q.length })
+
   return enqueueOverpass(async () => {
     let lastErr: unknown = null
+    let attempt = 0
+
     for (const endpoint of OVERPASS_ENDPOINTS) {
+      attempt++
+      traceOverlay('fetch_endpoint_attempt', { overlayId: id, endpoint, attempt })
+
       try {
-        const json = await postOverpass(endpoint, q, signal)
-        return overpassToGeojson(json, id)
+        const json = await postOverpass(endpoint, q, id, signal)
+        const geojson = overpassToGeojson(json, id)
+        traceOverlay('fetch_success', {
+          overlayId: id,
+          endpoint,
+          featureCount: geojson.features.length,
+          attempt,
+        })
+        return geojson
       } catch (e) {
         lastErr = e
+        traceOverlay('fetch_endpoint_failed', {
+          overlayId: id,
+          endpoint,
+          attempt,
+          error: (e instanceof Error ? e.message : String(e)).slice(0, 100),
+        })
         if (signal?.aborted) throw e
+        // Continue to next endpoint
       }
     }
+
+    traceOverlay('fetch_all_endpoints_failed', { overlayId: id, attempts: attempt })
     throw networkOverlayError(lastErr)
   })
 }
