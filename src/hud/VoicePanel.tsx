@@ -471,14 +471,30 @@ export default function VoicePanel() {
     const trimmed = text.trim()
     if (!trimmed) return
 
-    // VOICE SYSTEM: Two deterministic lanes
-    // LANE 1: USER RESPONSE (default) - direct speak, preserves gesture context, no cancel
-    // LANE 2: SYSTEM INTERRUPT (emergency only) - authority controller with priority/cancel
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // VOICE SYSTEM: Two-Lane Architecture — DO NOT MODIFY LANE ASSIGNMENT
+    //
+    // LANE 1: USER RESPONSE (default) → speakMinimal()
+    //   - Direct speechSynthesis.speak() — no cancel, no delay
+    //   - DEFAULT for ALL user commands (weather, situation, map, etc.)
+    //   - PRESERVES Android audio context across utterances
+    //
+    // LANE 2: SYSTEM INTERRUPT (emergency only) → authority controller
+    //   - May use cancel() for priority override
+    //   - ONLY for: SOS, emergency alerts, safety-critical notifications
+    //   - Requires explicit { emergency: true } or { priority: VOICE_PRIORITY.SAFETY }
+    //
+    // ⚠️  REGRESSION RISK: Bypassing minimal path for user response breaks
+    //     Android audio context → SILENT TTS. See TIER2_VOICE_STABILITY_GUARDRAILS.md
+    //
+    // VERIFICATION: Android field test with window.__hudDebug.useMinimalVoice = true
+    //   → All commands must produce audible response
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     const isEmergency = opts?.emergency === true
     const isSystemInterrupt = isEmergency || opts?.priority === VOICE_PRIORITY.SAFETY
 
-    // DEFAULT: All user commands use minimal path (direct speak, no cancel, no delay)
+    // LANE 1: USER RESPONSE — Minimal path (default for all user commands)
     if (!isSystemInterrupt) {
       traceVoice('tts_user_response_lane', { text: trimmed.slice(0, 40), path: 'direct_speak' })
       const result = speakMinimal(trimmed)
@@ -490,7 +506,7 @@ export default function VoicePanel() {
       return
     }
 
-    // SYSTEM INTERRUPT ONLY: SOS, alerts, emergency notifications use authority controller
+    // LANE 2: SYSTEM INTERRUPT ONLY — Authority controller for emergencies
     traceVoice('tts_system_interrupt_lane', { text: trimmed.slice(0, 40), path: 'authority_controller' })
 
     traceVoice('tts_requested', { text: trimmed.slice(0, 40), pauseRecognition: opts?.pauseRecognition })
@@ -674,7 +690,18 @@ export default function VoicePanel() {
             continuationCmd.length >= SANITY_MIN_FINAL_LEN &&
             continuationCmd.length <= SANITY_MAX_CONTINUATION_CHARS &&
             wordCount <= SANITY_MAX_CONTINUATION_WORDS
-          // FIX: Reject pure numeric noise (e.g., "135", "999999") from SR misrecognition
+          // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          // GUARDRAIL: Numeric rejection REQUIRED — DO NOT REMOVE
+          //
+          // Without this: SR misrecognition of noise → "135", "999999"
+          // → processed as valid command → "Unknown command 135" spam
+          // → runaway unknown command loop
+          //
+          // Modification requires:
+          //   1. Regression test: verify no "unknown command 135" errors
+          //   2. Forensics check: __hudForensics.getTracesByCategory('voice')
+          //      → filter for 'command_unknown' events
+          // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
           const isPureNumeric = /^\d+$/.test(continuationCmd)
           if (isPureNumeric) {
             traceVoice('continuation_rejected_numeric', { cmd: continuationCmd, reason: 'pure_numeric_noise' })
@@ -770,7 +797,9 @@ export default function VoicePanel() {
     const ignoreUntilAfterCommandRef = { current: 0 }
 
     for (const p of parts) {
-      // FIX: Clean up fragment repetition (e.g., "flashlight on flashlight")
+      // GUARDRAIL: Fragment cleanup REQUIRED for replay protection
+      // Removing this causes "flashlight on flashlight" → "unknown command"
+      // and runaway unknown command loops. See TIER2_VOICE_STABILITY_GUARDRAILS.md
       let cleanedPart = stripTrailingFragmentRepetition(p)
       cleanedPart = cleanCommandPhrase(cleanedPart)
 
@@ -798,8 +827,21 @@ export default function VoicePanel() {
       ignoreUntilAfterCommandRef.current = performance.now() + 800
     }
 
-    // FIX: Explicit post-command reset - close continuation window immediately
-    // This prevents trailing transcript fragments from being processed
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // GUARDRAIL: Post-command reset REQUIRED — DO NOT REMOVE OR MODIFY
+    //
+    // Removing this causes:
+    //   ❌ Continuation contamination (post-command noise processed as new command)
+    //   ❌ Transcript replay loops
+    //   ❌ Duplicate command execution
+    //   ❌ Runaway unknown command spam
+    //
+    // Any modification requires:
+    //   1. Full regression checklist (docs/VOICE_REGRESSION_CHECKLIST.md)
+    //   2. Android field test (minimum 20 commands)
+    //   3. Forensics verification: __hudForensics.getTracesByCategory('voice')
+    //      → confirm no 'duplicate' or 'replay' events
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     if (commandsExecuted > 0) {
       pendingWakeUntilRef.current = null
       traceVoice('continuation_window_closed', { reason: 'post_command_reset', commandsExecuted })

@@ -9,6 +9,26 @@
  * 2. Test: "HUD status" repeatedly on Android
  * 3. Verify: Audible playback, no interruption, stable across sessions
  * 4. If stable: keep; if not: investigate platform/browser issue
+ *
+ * ⚠️  GUARDRAIL WARNING — DO NOT MODIFY WITHOUT ANDROID FIELD TEST
+ * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ * This is the DEFAULT path for all user command responses.
+ * ANY modification requires:
+ *   1. Android field test (minimum 20 commands)
+ *   2. Verify no "cancel() + setTimeout + speak()" pattern introduced
+ *   3. Verify audio context preserved across utterances
+ *
+ * FORBIDDEN PATTERNS (will break Android audio):
+ *   ❌ synth.cancel() before speak()
+ *   ❌ setTimeout(() => synth.speak(), N)
+ *   ❌ Priority queue management
+ *   ❌ Orchestration layer calls
+ *
+ * ALLOWED PATTERNS:
+ *   ✅ Direct synth.speak(utterance)
+ *   ✅ Simple overlap prevention (skip if speaking)
+ *   ✅ Basic onstart/onend/onerror handlers
+ * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  */
 
 import { logInfo, logWarn } from '../../runtime/logger'

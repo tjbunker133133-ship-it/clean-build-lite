@@ -520,6 +520,19 @@ function executeTTS(text: string, speechId: string): void {
       currentSpeech?.id
     )
 
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // ⚠️  GUARDRAIL: Cancel+delay pattern — SYSTEM INTERRUPT LANE ONLY
+    //
+    // This cancel()+setTimeout()+speak() pattern is ONLY safe for:
+    //   - SOS alerts
+    //   - Emergency notifications
+    //   - Safety-critical interrupts
+    //
+    // FORBIDDEN for user command responses — breaks Android audio context.
+    // User responses MUST use speakMinimal() in VoicePanel.tsx (direct speak).
+    //
+    // See TIER2_VOICE_STABILITY_GUARDRAILS.md — Two-Lane Architecture.
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // ANDROID FIX: Delay speak() after cancel to let browser complete async cleanup
     // 50ms is sufficient for Chrome/Android to process cancel without killing new utterance
     const isAndroid = /Android/i.test(navigator.userAgent)

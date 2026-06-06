@@ -79,6 +79,14 @@ export function stripRepeatedWakePrefix(commandPart: string, wakeWord = 'hud'): 
 /**
  * Clean up SR contamination: repeated trailing fragments like "flashlight on flashlight".
  * Removes repeated word sequences at the end of transcript.
+ *
+ * ⚠️  GUARDRAIL: This function is REQUIRED for replay protection.
+ * Removing or modifying without regression test causes:
+ *   - "flashlight on flashlight" → "Unknown command: flashlight on flashlight"
+ *   - "weather weather" → "Unknown command: weather weather"
+ *   - Runaway unknown command loops
+ *
+ * Verification: Run docs/VOICE_REGRESSION_CHECKLIST.md Test 6
  */
 export function stripTrailingFragmentRepetition(phrase: string): string {
   const trimmed = phrase.trim()
