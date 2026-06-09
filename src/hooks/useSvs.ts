@@ -201,8 +201,9 @@ export function useSvs(): SvsHookResult {
 
   useEffect(() => {
     if (!config.enabled) return
-    // Waypoint detection requires integration with NavigationHud
-    // For now, manual waypoint events are supported
+    // NO-OP GUARD: Waypoint detection requires NavigationHud integration
+    // Manual waypoint events supported via emitManual('WAYPOINT_ARRIVED')
+    // To enable: Integrate with navigation proximity detection
   }, [config.enabled])
 
   // ============================================================================
@@ -234,8 +235,9 @@ export function useSvs(): SvsHookResult {
   useEffect(() => {
     if (!config.enabled) return
 
-    // Sunset detection - would integrate with weather/time service
-    // For now, this is placeholder for future integration
+    // NO-OP GUARD: Environmental detection requires weather/time service integration
+    // Events supported: SUNSET_APPROACHING, HEAT_WARNING, COLD_WARNING, ELEVATION_MILESTONE
+    // To enable: Wire weather API and elevation data sources to detectXxxEvent() calls
   }, [config.enabled])
 
   // ============================================================================
@@ -356,8 +358,9 @@ export function useSvsDiagnostics(): SvsDiagnostics | null {
 // ============================================================================
 
 function estimateActivityMinutes(): number | null {
-  // Would integrate with actual session timer
-  // Placeholder: return null to disable time-based prompts
+  // NO-OP GUARD: Session timer not integrated
+  // Returns null to prevent wellness prompts from firing with bad data
+  // To enable: Integrate with actual session start tracking
   return null
 }
 

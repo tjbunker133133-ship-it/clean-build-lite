@@ -202,9 +202,14 @@ export async function enhanceOverlayFromNetwork(
 /**
  * Simplified overlay activation — deterministic, no blocking states.
  *
+ * SITUATIONAL vs DETAIL RENDERING MODEL:
+ * - 'situational': Always render if enabled (safety/awareness overlays: fires, USGS, etc.)
+ * - 'detail': Respect minZoom gate (small features: trails, mines, POIs)
+ *
  * Flow:
- * 1. Render from seed (immediate)
- * 2. If online and zoom appropriate, enhance in background (optional)
+ * 1. Check renderMode and apply appropriate visibility gate
+ * 2. Render from seed (immediate)
+ * 3. If online and zoom appropriate, enhance in background (optional)
  */
 export function activateOverlayResilient(
   map: Map,
@@ -214,14 +219,24 @@ export function activateOverlayResilient(
 ): { visible: boolean; backgroundEnhance: Promise<{ enhanced: boolean; finalFeatureCount: number }> | null } {
   const def = overlayDef(id)
 
-  // Check zoom gate (deterministic, fast)
-  const minZoom = def.minZoom ?? 0
-  if (zoom + 0.05 < minZoom) {
-    traceOverlay('resilient_zoom_blocked', { overlayId: id, zoom, minZoom })
-    return { visible: false, backgroundEnhance: null }
+  // STEP 0: Determine visibility based on renderMode
+  // - 'situational': Always render if enabled (fires, USGS, boundaries)
+  // - 'detail': Respect minZoom gate (trails, mines, POIs)
+  const renderMode = def.renderMode ?? 'detail' // Default to detail for backward compatibility
+
+  if (renderMode === 'detail') {
+    // DETAIL MODE: Check zoom gate (existing behavior preserved)
+    const minZoom = def.minZoom ?? 0
+    if (zoom + 0.05 < minZoom) {
+      traceOverlay('resilient_zoom_blocked', { overlayId: id, zoom, minZoom, renderMode })
+      return { visible: false, backgroundEnhance: null }
+    }
+  } else {
+    // SITUATIONAL MODE: Log that we're bypassing zoom gate for visibility
+    traceOverlay('resilient_situational_mode_active', { overlayId: id, zoom, renderMode })
   }
 
-  // STEP 1: Render from seed (ALWAYS happens)
+  // STEP 1: Render from seed (ALWAYS happens if visibility check passes)
   const seedResult = renderOverlayFromSeed(map, id)
 
   // STEP 2: Schedule background enhancement (NEVER blocks visibility)

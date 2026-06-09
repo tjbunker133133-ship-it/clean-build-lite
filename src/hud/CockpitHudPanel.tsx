@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { ModePortal } from '../lib/presentationIsolation'
+import { layerZ } from '../lib/presentationIsolation/zIndexLayers'
 import { useCockpit } from '../context/CockpitContext'
 import { cockpitViewport, cockpitSafeAreaInsets, cockpitMobileTopInset } from '../lib/viewport'
 import { DURATION_MS, EASE } from '../types/cockpit'
@@ -34,6 +35,13 @@ import {
   MOBILE_PANEL_FONT_SCALE_STEP,
 } from '../lib/mobilePanelHelpers'
 import { touchFontSm, touchFontMd, touchMinTarget } from './tokens'
+import {
+  isImmersiveMode,
+  getHudMode,
+  guardPanelMount,
+  guardDockInit,
+  getLayoutPermissions,
+} from '../lib/hudRuntime'
 
 function dockDevTrace(message: string, detail?: Record<string, unknown>): void {
   if (!isHudVerboseDebug()) return
@@ -71,6 +79,43 @@ const DOCKED_PANEL_MIN_HEIGHT_PX = 76
 const DOCKED_PANEL_MAX_HEIGHT_PX = 92
 const DOCKED_PANEL_WIDTH_PX = 280
 const DOCK_BOTTOM_GUTTER_PX = 12
+
+/** Phase 3D: Dock width reduction factors for presentation modes.
+ *  Mirrors PRESENTATION_DOCK_WIDTH_FACTOR in CockpitContext.
+ *  This is VISUAL-ONLY scaling at the output stage — does NOT affect
+ *  layout logic or persistence, only the rendered width of docked panels.
+ */
+const PRESENTATION_DOCK_WIDTH_FACTOR: Record<string, number> = {
+  legacy: 1,
+  hybrid: 0.35, // ~98px effective
+  immersive: 0.15, // ~42px effective
+}
+
+/** Phase 3D: Get presentation-aware dock width.
+ *  Pure output transformation — safe to call in render.
+ */
+function getEffectiveDockWidth(): number {
+  try {
+    const raw = localStorage.getItem('hud_presentation_mode_v1')
+    if (!raw) return DOCKED_PANEL_WIDTH_PX
+    const parsed = JSON.parse(raw) as { mode?: string }
+    const factor = PRESENTATION_DOCK_WIDTH_FACTOR[parsed.mode ?? 'legacy'] ?? 1
+    return Math.round(DOCKED_PANEL_WIDTH_PX * factor)
+  } catch {
+    return DOCKED_PANEL_WIDTH_PX
+  }
+}
+
+/**
+ * MAP-FIRST GATE: Check if we're in immersive (map-first) mode.
+ * In this mode, panels become pure overlays — no layout authority from persistence.
+ *
+ * READS FROM: window.__HUD_RUNTIME__ (resolved at boot, before React mounts)
+ */
+function isMapFirstMode(): boolean {
+  // Direct access to runtime - resolved before React mounts
+  return window.__HUD_RUNTIME__?.isImmersive ?? isImmersiveMode()
+}
 const PANEL_SNAP_THRESHOLD_PX = 10
 const DOCK_RELOCK_GUARD_PX = 42
 const PANEL_KISS_GAP_PX = 8
@@ -149,6 +194,30 @@ export default function CockpitHudPanel({
   ) {
     console.warn('[GUARD] CockpitHudPanel rendered before render-phase flag cleared')
   }
+
+  /**
+   * HARD_EXIT GUARD: Check if persistent panels are allowed.
+   * In immersive mode: panels as overlays only (transient).
+   * In hybrid mode: collapsible panels allowed.
+   * In legacy mode: full panels allowed.
+   */
+  if (import.meta.env.DEV) {
+    const panelsAllowed = guardPanelMount(`CockpitHudPanel:${panelId}`)
+    const layout = getLayoutPermissions()
+
+    if (!panelsAllowed) {
+      console.warn(`[HARD_EXIT] CockpitHudPanel:${panelId}: Persistent panels blocked in ${getHudMode()} mode`)
+      console.log(`[HARD_EXIT] This panel should render as transient overlay only`)
+    }
+
+    if (layout.dock) {
+      const dockAllowed = guardDockInit(`CockpitHudPanel:${panelId}`)
+      if (!dockAllowed) {
+        console.warn(`[HARD_EXIT] CockpitHudPanel:${panelId}: Dock attachment blocked`)
+      }
+    }
+  }
+
   const cock = useCockpit()
   const {
     panels,
@@ -171,19 +240,42 @@ export default function CockpitHudPanel({
   layoutSnapshotRef.current = layout
   const badge = dockBadge(panelId, title)
 
-  const [pos, setPos] = useState({
-    x: layout?.x ?? initialPos.x,
-    y: layout?.y ?? initialPos.y,
+  // MAP-FIRST: Check immersive mode — panels become pure UI overlays
+  const mapFirstAtMount = isMapFirstMode()
+
+  // IMMERSIVE MODE: Panels are pure floating overlays with NO geometry from context
+  // - Position is local default only (not from persistence)
+  // - Size is intrinsic/fixed (not from persistence)
+  // - Only UI state (minimized, visible) is synced
+  const [pos, setPos] = useState(() => {
+    if (mapFirstAtMount) {
+      // In immersive mode, use fixed default position — NO layout from persistence
+      return { x: initialPos.x, y: initialPos.y }
+    }
+    // Legacy/Hybrid: sync with persisted layout
+    return { x: layout?.x ?? initialPos.x, y: layout?.y ?? initialPos.y }
   })
-  const [size, setSize] = useState({
-    w: layout?.docked ? DOCKED_PANEL_WIDTH_PX : (layout?.w ?? initialWidth),
-    h: layout?.h ?? initialHeight,
+
+  const [size, setSize] = useState(() => {
+    if (mapFirstAtMount) {
+      // In immersive mode, use intrinsic size — NO dock width calculations
+      return { w: initialWidth, h: initialHeight }
+    }
+    // Legacy/Hybrid: respect dock state and persisted size
+    return {
+      w: layout?.docked ? getEffectiveDockWidth() : (layout?.w ?? initialWidth),
+      h: layout?.h ?? initialHeight,
+    }
   })
+
+  // UI STATE ONLY — synced from context in all modes
   const [minimized, setMinimized] = useState(layout?.minimized ?? false)
-  // ⚠️ DO NOT CALL DIRECTLY
-  // All docking must go through InteractionController + resolveDockIntent
-  const [docked, setDocked] = useState(layout?.docked ?? false)
-  const [dockSide, setDockSide] = useState<'left' | 'right'>(layout?.dockSide ?? 'left')
+
+  // LEGACY/HYBRID ONLY: Dock system is disabled in immersive mode
+  const [docked, setDocked] = useState(mapFirstAtMount ? false : (layout?.docked ?? false))
+  const [dockSide, setDockSide] = useState<'left' | 'right'>(
+    mapFirstAtMount ? 'left' : (layout?.dockSide ?? 'left')
+  )
   const [dockPreview, setDockPreview] = useState<'left' | 'right' | null>(null)
   const [snapGuide, setSnapGuide] = useState<{ x: number | null; y: number | null }>({
     x: null,
@@ -433,8 +525,25 @@ export default function CockpitHudPanel({
     }
   }, [panelId])
 
+  /**
+   * Runtime collision avoidance for floating panels
+   * IMMERSIVE MODE: Disabled — panels are pure overlays, overlapping is allowed
+   */
   const avoidRuntimeOverlap = useCallback(
     (x: number, y: number, w: number, h: number) => {
+      // HARD_EXIT GUARD: Collision resolution only when cockpit/panels allowed
+      // In immersive mode: panels are pure overlays, no collision resolution
+      const layout = getLayoutPermissions()
+      const panelsAsOverlaysOnly = !layout.cockpit && !layout.panels
+      const mapFirst = panelsAsOverlaysOnly || isMapFirstMode()
+
+      if (import.meta.env.DEV) {
+        console.log(`[HARD_EXIT] avoidRuntimeOverlap: panelsAsOverlaysOnly=${panelsAsOverlaysOnly}, cockpit=${layout.cockpit}, panels=${layout.panels}, decision=${mapFirst ? 'EARLY_RETURN' : 'PROCEED'}`)
+      }
+      if (mapFirst) {
+        return { x, y }
+      }
+
       let nx = x
       let ny = y
       const pad = isMobile
@@ -524,6 +633,10 @@ export default function CockpitHudPanel({
 
   useEffect(() => {
     if (layout) {
+      // MAP-FIRST GATE: In immersive mode, skip geometry sync from persistence
+      // Panels become pure overlays — local state is the authority
+      const mapFirstActive = isMapFirstMode()
+
       if (
         isMobile &&
         dragMode === 'none' &&
@@ -536,37 +649,48 @@ export default function CockpitHudPanel({
           actual: { x: layout.x, y: layout.y },
         })
       }
-      if (Math.abs(posRef.current.x - layout.x) > 0.5 || Math.abs(posRef.current.y - layout.y) > 0.5) {
-        const nextPos = { x: layout.x, y: layout.y }
-        setPos(nextPos)
-        posRef.current = nextPos
-      }
-      const committedW = layout.docked ? DOCKED_PANEL_WIDTH_PX : layout.w
-      const committedH = isMobile && !layout.docked && layout.h == null
-        ? (sizeRef.current.h ?? minHeight)
-        : layout.h
-      if (sizeRef.current.w !== committedW || sizeRef.current.h !== committedH) {
-        const nextSize = { w: committedW, h: committedH }
-        if (panelId === 'waypoints' && isMobile && layout.h == null && import.meta.env.DEV) {
-          const now = Date.now()
-          const diag = waypointOscillationDiagRef.current
-          if (diag.windowStart === 0 || now - diag.windowStart > 12_000) {
-            diag.windowStart = now
-            diag.count = 1
-          } else {
-            diag.count += 1
-          }
-          if (diag.count >= 3 && now - diag.lastLogAt > 3000) {
-            diag.lastLogAt = now
-            logInfo('MOBILE_UI', `waypoint-size-oscillation-suppressed count=${diag.count} source=layout_null_height`)
-          }
+
+      // Only sync position/size from persistence if NOT in map-first mode
+      if (!mapFirstActive) {
+        if (Math.abs(posRef.current.x - layout.x) > 0.5 || Math.abs(posRef.current.y - layout.y) > 0.5) {
+          const nextPos = { x: layout.x, y: layout.y }
+          setPos(nextPos)
+          posRef.current = nextPos
         }
-        setSize(nextSize)
-        sizeRef.current = nextSize
+        // Phase 3D: Respect presentation mode for dock width sync
+        const committedW = layout.docked ? getEffectiveDockWidth() : layout.w
+        const committedH = isMobile && !layout.docked && layout.h == null
+          ? (sizeRef.current.h ?? minHeight)
+          : layout.h
+        if (sizeRef.current.w !== committedW || sizeRef.current.h !== committedH) {
+          const nextSize = { w: committedW, h: committedH }
+          if (panelId === 'waypoints' && isMobile && layout.h == null && import.meta.env.DEV) {
+            const now = Date.now()
+            const diag = waypointOscillationDiagRef.current
+            if (diag.windowStart === 0 || now - diag.windowStart > 12_000) {
+              diag.windowStart = now
+              diag.count = 1
+            } else {
+              diag.count += 1
+            }
+            if (diag.count >= 3 && now - diag.lastLogAt > 3000) {
+              diag.lastLogAt = now
+              logInfo('MOBILE_UI', `waypoint-size-oscillation-suppressed count=${diag.count} source=layout_null_height`)
+            }
+          }
+          setSize(nextSize)
+          sizeRef.current = nextSize
+        }
       }
+
+      // Sync UI state (minimized) — geometry-related state ignored in immersive
       setMinimized((prev) => (prev === layout.minimized ? prev : layout.minimized))
-      setDockedGuarded((prev) => (prev === (layout.docked ?? false) ? prev : (layout.docked ?? false)), 'sync')
-      setDockSide((prev) => (prev === (layout.dockSide ?? 'left') ? prev : (layout.dockSide ?? 'left')))
+
+      // IMMERSIVE MODE: Dock state does not exist — panels are pure overlays
+      if (!mapFirstActive) {
+        setDockedGuarded((prev) => (prev === (layout.docked ?? false) ? prev : (layout.docked ?? false)), 'sync')
+        setDockSide((prev) => (prev === (layout.dockSide ?? 'left') ? prev : (layout.dockSide ?? 'left')))
+      }
     }
   }, [layout?.x, layout?.y, layout?.w, layout?.h, layout?.minimized, layout?.docked, layout?.dockSide])
 
@@ -731,8 +855,25 @@ export default function CockpitHudPanel({
       ? `box-shadow ${DURATION_MS}ms ${EASE}, width ${dimensionTransitionMs}ms ${EASE}, height ${dimensionTransitionMs}ms ${EASE}, left ${DURATION_MS}ms ${EASE}, top ${DURATION_MS}ms ${EASE}, transform ${DURATION_MS}ms ${EASE}`
       : undefined
 
+  /**
+   * Calculate Y position for docked panels
+   * IMMERSIVE MODE: Dock system is disabled — return default position
+   */
   const getDockedY = useCallback(
     (side: 'left' | 'right', _desiredY: number) => {
+      // HARD_EXIT GUARD: Dock system is never allowed in immersive or hybrid
+      // Layout permissions are the source of truth
+      const dockAllowed = guardDockInit(`getDockedY:${panelId}`)
+      const mapFirst = !dockAllowed || isMapFirstMode()
+
+      if (import.meta.env.DEV) {
+        console.log(`[HARD_EXIT] getDockedY: dockAllowed=${dockAllowed}, isMapFirst=${mapFirst}, decision=${mapFirst ? 'EARLY_RETURN' : 'PROCEED'}`)
+      }
+      if (mapFirst) {
+        // Return the desired Y directly — no dock rail calculation
+        return _desiredY
+      }
+
       const { vh } = viewportSize()
       // Match CockpitContext.relayoutDockedPanels: stable index slots, no overlap.
       const lane = Object.entries(panels)
@@ -901,7 +1042,8 @@ export default function CockpitHudPanel({
         source,
         allowed: mobileDockAllowed(source, isMobile),
       })
-      const dockW = DOCKED_PANEL_WIDTH_PX
+      // Phase 3D: Respect presentation mode for dock width
+      const dockW = getEffectiveDockWidth()
       const dockX =
         nextDockSide === 'right'
           ? Math.max(0, vw - dockW - DOCK_EDGE_INSET_PX)
@@ -1463,6 +1605,25 @@ export default function CockpitHudPanel({
   const toggleDocked = () => {
     traceAction(`panel_toggle_dock:${panelId}`, 'handler_enter', { docked })
     const next = !docked
+
+    // MAP-FIRST: In immersive mode, docking is disabled — panels remain pure overlays
+    if (isMapFirstMode()) {
+      if (next) {
+        // In immersive mode, "dock" just minimizes to a compact overlay form
+        setMinimized(true)
+        setDockedGuarded(false, 'controller')
+        safeUpdatePanel(panelId, { docked: false, minimized: true })
+        traceAction(`panel_toggle_dock:${panelId}`, 'state_result', { docked: false, minimized: true, mapFirstMode: true })
+      } else {
+        // Undock/restore — just expand from minimized
+        setMinimized(false)
+        setDockedGuarded(false, 'controller')
+        safeUpdatePanel(panelId, { docked: false, minimized: false })
+        traceAction(`panel_toggle_dock:${panelId}`, 'state_result', { docked: false, minimized: false, mapFirstMode: true })
+      }
+      return
+    }
+
     if (next) {
       const source: DockIntentSource = 'toggle'
       if (!mobileDockAllowed(source, isMobile)) {
@@ -1485,7 +1646,8 @@ export default function CockpitHudPanel({
         source,
         allowed: mobileDockAllowed(source, isMobile),
       })
-      const dockW = DOCKED_PANEL_WIDTH_PX
+      // Phase 3D: Respect presentation mode for dock width
+      const dockW = getEffectiveDockWidth()
       const x =
         dockSide === 'right'
           ? Math.max(0, viewportSize().vw - dockW - DOCK_EDGE_INSET_PX)
@@ -1559,6 +1721,20 @@ export default function CockpitHudPanel({
 
   const minimizeToDock = () => {
     traceAction(`panel_minimize:${panelId}`, 'handler_enter')
+
+    // MAP-FIRST: In immersive mode, "minimize to dock" becomes simple minimize
+    // Panel stays as floating overlay, just collapses to header
+    if (isMapFirstMode()) {
+      setMinimized(true)
+      setDockedGuarded(false, 'controller')
+      safeUpdatePanel(panelId, {
+        minimized: true,
+        docked: false,
+      })
+      traceAction(`panel_minimize:${panelId}`, 'state_result', { docked: false, minimized: true, mapFirstMode: true })
+      return
+    }
+
     const allowed = canDock('minimize')
     if (!allowed) {
       traceAction(`panel_minimize:${panelId}`, 'guard_reject', { reason: 'controller_rejected' })
@@ -1569,7 +1745,8 @@ export default function CockpitHudPanel({
     }
     const side = isMobile ? chooseMobileMinimizeDockSide() : dockSide
     const s = sizeRef.current
-    const dockW = DOCKED_PANEL_WIDTH_PX
+    // Phase 3D: Respect presentation mode for dock width
+    const dockW = getEffectiveDockWidth()
     const { vw } = viewportSize()
     const x =
       side === 'right'
@@ -2302,17 +2479,18 @@ export default function CockpitHudPanel({
           }}
         />
       )}
-      {fullscreen &&
-        typeof document !== 'undefined' &&
-        createPortal(
+      {fullscreen && (
+        <ModePortal portalId={`cockpit-panel-fs-${panelId}`} owner="classic">
           <div
             role="dialog"
             aria-modal
             aria-label={title}
+            data-portal-owner="classic"
             style={{
               position: 'fixed',
               inset: 0,
-              zIndex: 100000,
+              zIndex: layerZ('MODAL'),
+              pointerEvents: 'auto',
               background: 'rgba(0,0,0,0.65)',
               backdropFilter: reducedTransparency ? 'none' : 'blur(6px)',
               display: 'flex',
@@ -2376,9 +2554,9 @@ export default function CockpitHudPanel({
               </div>
               <div style={{ padding: 16 }}>{children}</div>
             </div>
-          </div>,
-          document.body,
-        )}
+          </div>
+        </ModePortal>
+      )}
       <style>{`
         @keyframes cockpit-bump {
           0%, 100% { transform: translate(0,0); }

@@ -87,3 +87,18 @@ export function setOverlayToggle(
   if (!isEnvironmentalOverlayId(id)) return toggles
   return { ...toggles, [id]: enabled }
 }
+
+/** Apply many toggle changes in one immutable update (avoids overlay refresh storms). */
+export function applyOverlayTogglePatch(
+  toggles: OverlayToggleState,
+  patch: Partial<Record<EnvironmentalOverlayId, boolean>>,
+): OverlayToggleState {
+  let next = toggles
+  for (const id of ENVIRONMENTAL_OVERLAY_IDS) {
+    const enabled = patch[id]
+    if (typeof enabled === 'boolean' && next[id] !== enabled) {
+      next = { ...next, [id]: enabled }
+    }
+  }
+  return next
+}

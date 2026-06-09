@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
-import { useMapContext } from '../context/MapContext'
 import { useGPS } from '../hooks/useGPS'
+import { requestCameraIntent } from '../lib/operationalPerception/perceptionEngine'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 import { touchFontSm, touchMinTarget } from './tokens'
 
@@ -8,7 +8,6 @@ import { touchFontSm, touchMinTarget } from './tokens'
 // Any change to interaction, layout, display modes, or layers requires explicit approval.
 
 export default function FollowControl() {
-  const { map } = useMapContext()
   const gps = useGPS()
 
   const [follow, setFollow] = useState(false)
@@ -24,23 +23,19 @@ export default function FollowControl() {
   useEffect(() => {
     if (!follow) return
 
-    if (!map) return
     if (gps.locationState !== 'granted' || gps.lat === null || gps.lng === null) return
     const last = lastEaseRef.current
     if (last && last.lat === gps.lat && last.lng === gps.lng) {
-      if (import.meta.env.DEV) {
-        console.warn('[GUARD] Prevented duplicate map.easeTo in FollowControl')
-      }
       return
     }
     lastEaseRef.current = { lat: gps.lat, lng: gps.lng }
 
-    map.easeTo({
+    requestCameraIntent({
+      kind: 'ease_to',
       center: [gps.lng, gps.lat],
-      duration: 420,
-      essential: true,
+      durationMs: 420,
     })
-  }, [follow, map, gps.locationState, gps.lat, gps.lng])
+  }, [follow, gps.locationState, gps.lat, gps.lng])
 
   const isMobile = getDeviceProfile().interactionMode === 'mobile'
   const fontSm = touchFontSm(isMobile)

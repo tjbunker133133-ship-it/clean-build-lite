@@ -11,6 +11,8 @@ export type EnvironmentalOverlayId =
 
 export type OverlayDelivery = 'raster-wms' | 'geojson-overpass'
 
+export type OverlayRenderMode = 'situational' | 'detail'
+
 export type EnvironmentalOverlayDef = {
   id: EnvironmentalOverlayId
   label: string
@@ -25,6 +27,12 @@ export type EnvironmentalOverlayDef = {
   envKey?: 'VITE_FIRMS_MAP_KEY'
   minZoom?: number
   maxZoom?: number
+  /**
+   * Render mode determines zoom-based visibility behavior:
+   * - 'situational': Always render if enabled (safety/awareness overlays: fires, weather, hazards)
+   * - 'detail': Respect minZoom gate (POIs, trails, small features)
+   */
+  renderMode?: OverlayRenderMode
 }
 
 /**

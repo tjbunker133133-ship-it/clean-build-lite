@@ -1,0 +1,98 @@
+/**
+ * Modern runtime identity — situational density, attention hierarchy, emergence.
+ * Complements modern-motion.css with environmental presentation rules.
+ */
+
+[data-mode-root='modern'] {
+  --modern-chrome-opacity: 1;
+  --modern-passive-opacity: 0.72;
+  --modern-transient-opacity: 0.55;
+  --modern-emergence-ms: 320ms;
+  --modern-emergence-ease: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+/* Situational density — reduce chrome when focus demands attention elsewhere */
+[data-mode-root='modern'][data-modern-density='minimal'] {
+  --modern-chrome-opacity: 0.82;
+  --modern-passive-opacity: 0.42;
+  --modern-transient-opacity: 0.28;
+}
+
+[data-mode-root='modern'][data-modern-density='balanced'] {
+  --modern-chrome-opacity: 0.92;
+  --modern-passive-opacity: 0.58;
+  --modern-transient-opacity: 0.4;
+}
+
+[data-mode-root='modern'][data-modern-density='rich'] {
+  --modern-chrome-opacity: 1;
+  --modern-passive-opacity: 0.78;
+  --modern-transient-opacity: 0.62;
+}
+
+/* Motion profiles */
+[data-mode-root='modern'][data-modern-motion='calm'] {
+  --modern-emergence-ms: 360ms;
+}
+
+[data-mode-root='modern'][data-modern-motion='responsive'] {
+  --modern-emergence-ms: 260ms;
+}
+
+[data-mode-root='modern'][data-modern-motion='urgent'] {
+  --modern-emergence-ms: 180ms;
+}
+
+/* Visual hierarchy — primary chrome stays readable; passive layers recede */
+[data-mode-root='modern'] .modern-micro-bar {
+  opacity: var(--modern-chrome-opacity);
+  transition: opacity var(--modern-emergence-ms) var(--modern-emergence-ease);
+}
+
+[data-mode-root='modern'] [data-modern-safety-zone] {
+  opacity: var(--modern-chrome-opacity);
+  transition: opacity var(--modern-emergence-ms) var(--modern-emergence-ease);
+}
+
+[data-mode-root='modern'] [data-testid='modern-mode-overlays'] [data-modern-passive] {
+  opacity: var(--modern-passive-opacity);
+  transition: opacity var(--modern-emergence-ms) var(--modern-emergence-ease);
+}
+
+[data-mode-root='modern'] [data-testid='modern-mode-overlays'] [data-modern-transient] {
+  opacity: var(--modern-transient-opacity);
+  transition: opacity var(--modern-emergence-ms) var(--modern-emergence-ease);
+}
+
+/* Focus modes — navigation/driving suppresses non-essential floating chrome */
+[data-mode-root='modern'][data-modern-focus='navigation'] [data-modern-transient='true'],
+[data-mode-root='modern'][data-modern-focus='driving'] [data-modern-transient='true'] {
+  opacity: 0;
+  pointer-events: none;
+}
+
+[data-mode-root='modern'][data-modern-focus='emergency'] [data-modern-environmental-frame] {
+  opacity: 0.65;
+}
+
+/* Environmental frame sits beneath interactive chrome */
+[data-mode-root='modern'] [data-modern-environmental-frame] {
+  z-index: 1;
+}
+
+[data-mode-root='modern'] [data-env-interaction-layer='modern'] {
+  z-index: 2;
+}
+
+[data-mode-root='modern'] [data-testid='modern-mode-overlays'] {
+  z-index: 3;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-mode-root='modern'] .modern-micro-bar,
+  [data-mode-root='modern'] [data-modern-safety-zone],
+  [data-mode-root='modern'] [data-testid='modern-mode-overlays'] [data-modern-passive],
+  [data-mode-root='modern'] [data-testid='modern-mode-overlays'] [data-modern-transient] {
+    transition: none !important;
+  }
+}

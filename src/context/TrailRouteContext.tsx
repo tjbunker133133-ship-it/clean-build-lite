@@ -3,13 +3,17 @@ import React, {
   useContext,
   useEffect,
   useMemo,
-  useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from 'react'
 import { useMapContext } from './MapContext'
 import { useAppContext } from './AppContext'
 import { computeTrailRoute, type TrailRouteResult } from '../lib/trailRoute'
+import {
+  getOsgRouteWaypointsSnapshot,
+  subscribeOsgRouteWaypoints,
+} from '../lib/osgRouteWaypointCache'
 
 const EMPTY_ROUTE: TrailRouteResult = {
   coordinates: [],
@@ -20,58 +24,41 @@ const EMPTY_ROUTE: TrailRouteResult = {
 
 const TrailRouteContext = createContext<TrailRouteResult>(EMPTY_ROUTE)
 
+/** Pure derived projection — no local geometry authority. */
 export function TrailRouteProvider({ children }: { children: ReactNode }) {
   const { map } = useMapContext()
   const { state } = useAppContext()
-  const { waypoints, snapToTrailEnabled, trailSnapAssistCapable } = state
-  /** Trail-following route line only when operator enabled snap (pin-to-pin otherwise). */
-  const trailFollowEnabled = waypoints.length >= 2 && snapToTrailEnabled
+  const waypoints = useSyncExternalStore(
+    subscribeOsgRouteWaypoints,
+    getOsgRouteWaypointsSnapshot,
+    getOsgRouteWaypointsSnapshot,
+  )
+  const trailFollowEnabled = waypoints.length >= 2 && state.snapToTrailEnabled
 
-  const [route, setRoute] = useState<TrailRouteResult>(EMPTY_ROUTE)
-  const waypointsRef = useRef(waypoints)
-  waypointsRef.current = waypoints
-  const enabledRef = useRef(trailFollowEnabled)
-  enabledRef.current = trailFollowEnabled
+  const [mapRevision, setMapRevision] = useState(0)
 
   useEffect(() => {
-    const recompute = () => {
-      const wps = waypointsRef.current.filter((w) => w.status !== 'archived')
-      if (!enabledRef.current || wps.length < 2) {
-        setRoute(computeTrailRoute(null, wps, false))
-        return
-      }
-      if (!map) {
-        setRoute(computeTrailRoute(null, wps, false))
-        return
-      }
-      setRoute(computeTrailRoute(map, wps, true))
-    }
-
-    recompute()
-
     if (!map || waypoints.length < 2 || !trailFollowEnabled) return
-
-    let tileRetryId: number | null = null
-    const onMapChange = () => {
-      window.requestAnimationFrame(recompute)
-      if (tileRetryId != null) window.clearTimeout(tileRetryId)
-      tileRetryId = window.setTimeout(() => {
-        tileRetryId = null
-        recompute()
-      }, 450)
-    }
-    map.on('moveend', onMapChange)
-    map.on('zoomend', onMapChange)
-    map.on('idle', onMapChange)
+    const bump = () => setMapRevision((n) => n + 1)
+    map.on('moveend', bump)
+    map.on('zoomend', bump)
+    map.on('idle', bump)
     return () => {
-      if (tileRetryId != null) window.clearTimeout(tileRetryId)
-      map.off('moveend', onMapChange)
-      map.off('zoomend', onMapChange)
-      map.off('idle', onMapChange)
+      map.off('moveend', bump)
+      map.off('zoomend', bump)
+      map.off('idle', bump)
     }
-  }, [map, waypoints, trailFollowEnabled, snapToTrailEnabled, trailSnapAssistCapable])
+  }, [map, waypoints.length, trailFollowEnabled])
 
-  const value = useMemo(() => route, [route])
+  const value = useMemo(() => {
+    const wps = waypoints.filter((w) => w.status !== 'archived')
+    if (wps.length < 2 || !trailFollowEnabled) {
+      return computeTrailRoute(null, wps, false)
+    }
+    if (!map) return computeTrailRoute(null, wps, false)
+    return computeTrailRoute(map, wps, true)
+    // mapRevision triggers recompute when tiles load
+  }, [map, waypoints, trailFollowEnabled, mapRevision, state.trailSnapAssistCapable])
 
   return <TrailRouteContext.Provider value={value}>{children}</TrailRouteContext.Provider>
 }

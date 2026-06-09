@@ -79,6 +79,10 @@ export type OverlayTraceEvent =
   | 'fetch_json_parsed'
   | 'fetch_timeout'
   | 'fetch_network_error'
+  | 'overpass_queue_enqueued'
+  | 'overpass_queue_dispatched'
+  | 'overpass_rate_limit_backoff'
+  | 'overpass_loading_timeout_extended'
   | 'fetch_overpass_geojson_start'
   | 'fetch_invalid_bbox'
   | 'fetch_query_built'
@@ -101,6 +105,8 @@ export type OverlayTraceEvent =
   | 'enhance_source_not_found'
   | 'enhance_failed_silent'
   | 'resilient_zoom_blocked'
+  | 'resilient_situational_mode_active'
+  | 'situational_zoom_bypass'
   | 'resilient_enhance_bypassed'
   | 'resilient_activated'
   | 'resilient_deactivated'
@@ -125,6 +131,11 @@ export type OverlayTraceEvent =
   | 'storage_save_success'
   | 'storage_save_error'
   | 'storage_quota_exceeded'
+  | 'overlay_schema_invalid'
+  | 'overlay_renderMode_missing'
+  | 'overlay_detail_missing_minZoom'
+  | 'overlay_situational_misuse_warning'
+  | 'overlay_catalog_validation_complete'
   | 'fetch_started'
   | 'fetch_resolved'
   | 'fetch_threw'
@@ -217,6 +228,11 @@ export type VoiceTraceEvent =
   | 'continuation_window_closed'
   // OPERATIONAL GUARDRAIL: Voice restart storm detection
   | 'restart_storm_warning'
+  // SVS + WAL Integration via HudSystemHealthBridge
+  | 'svs_triggered_from_health_bridge'
+  | 'wal_triggered_from_health_bridge'
+  | 'svs_wal_dedup_blocked'
+  | 'wal_affirmations_dropped_non_user_facing'
 
 export function traceVoice(event: VoiceTraceEvent, details?: Record<string, unknown>): void {
   logInfo('RUNTIME', `FORENSIC[VOICE] ${event}`, details)

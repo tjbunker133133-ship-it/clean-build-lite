@@ -7,6 +7,8 @@ type WakeLockSentinel = { release: () => Promise<void> }
 
 let sentinel: WakeLockSentinel | null = null
 let wantActive = false
+let acquiring = false
+let reacquireTimer: ReturnType<typeof setTimeout> | null = null
 type WakeLockListener = (held: boolean) => void
 const wakeLockListeners = new Set<WakeLockListener>()
 
@@ -23,22 +25,33 @@ function notifyWakeLockListeners(): void {
 
 async function tryAcquire(): Promise<void> {
   if (!wantActive || typeof navigator === 'undefined') return
+  if (acquiring || sentinel) return // Prevent concurrent acquisition attempts
+
   const nav = navigator as Navigator & {
     wakeLock?: { request: (type: 'screen') => Promise<WakeLockSentinel> }
   }
   if (!nav.wakeLock?.request) return
+
+  acquiring = true
   try {
-    if (sentinel) return
     sentinel = await nav.wakeLock.request('screen')
     notifyWakeLockListeners()
     sentinel.release().then(() => {
       sentinel = null
       notifyWakeLockListeners()
-      if (wantActive) void tryAcquire()
+      // Debounced reacquire: wait 100ms to avoid thrashing
+      if (wantActive && !reacquireTimer) {
+        reacquireTimer = setTimeout(() => {
+          reacquireTimer = null
+          void tryAcquire()
+        }, 100)
+      }
     })
   } catch {
     sentinel = null
     notifyWakeLockListeners()
+  } finally {
+    acquiring = false
   }
 }
 

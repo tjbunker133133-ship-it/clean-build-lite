@@ -5,6 +5,7 @@ import { usePanelData } from '../context/PanelDataContext'
 import { formatWeatherAge, isWeatherSuccess, type WeatherSuccess } from '../lib/weather'
 import { useGPS } from '../hooks/useGPS'
 import { tier1Debug } from '../lib/tier1DebugLog'
+import { requestCameraIntent } from '../lib/operationalPerception/perceptionEngine'
 import { getDeviceProfile, isIosFieldHud } from '../runtime/deviceProfile'
 import {
   copyTextToClipboard,
@@ -331,13 +332,14 @@ export default function SituationPanel() {
 
   const centerMapOnFix = useCallback(
     (lat: number, lng: number, zoom: number) => {
-      if (!map) return
-      const opts = { center: [lng, lat] as [number, number], zoom, essential: true as const }
-      // iOS WebKit: short ease avoids stacked flyTo animations fighting touch pan.
-      if (iosFieldHud) map.easeTo({ ...opts, duration: 420 })
-      else map.flyTo(opts)
+      requestCameraIntent({
+        kind: 'ease_to',
+        center: [lng, lat],
+        zoom,
+        durationMs: iosFieldHud ? 420 : 680,
+      })
     },
-    [map, iosFieldHud],
+    [iosFieldHud],
   )
 
   useEffect(() => {

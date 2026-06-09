@@ -14,6 +14,7 @@ import type {
   HudColorTheme,
   ScreenHueMode,
 } from '../types/cockpit'
+import type { HudPresentationMode } from '../types/hudPresentation'
 import {
   COCKPIT_STORAGE_KEY,
   DURATION_MS,
@@ -27,6 +28,15 @@ import {
   dockLaneSlotY,
   sanitizeMobilePanelRect,
 } from '../lib/mobilePanelHelpers'
+// HUD RUNTIME — All mode checks use window.__HUD_RUNTIME__ (resolved at boot)
+// Layout permissions MUST be checked before any layout system initialization
+import {
+  isImmersiveMode as isImmersiveFromRuntime,
+  guardDockInit,
+  guardPanelMount,
+  guardCockpitInit,
+  getLayoutPermissions,
+} from '../lib/hudRuntime'
 import { emitPanelCommit } from '../diag/devEvents'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 import { enforcePolicyAttempt, getCurrentPolicyMode, reportPolicyAttempt } from '../runtime/devicePolicy'
@@ -216,6 +226,58 @@ function getSceneBackupStorageKey(scope: 'mobile' | 'desktop' = getLayoutScope()
     : `${COCKPIT_STORAGE_KEY}${SCENE_BACKUP_SUFFIX}`
 }
 
+/** Phase 3D: Helper to read current presentation mode from localStorage.
+ *  Used for output-stage dock footprint reduction in relayoutDockedPanels.
+ */
+function getCurrentPresentationMode(): HudPresentationMode | undefined {
+  if (typeof window === 'undefined') return undefined
+  try {
+    const raw = localStorage.getItem('hud_presentation_mode_v1')
+    if (!raw) return undefined
+    const parsed = JSON.parse(raw) as { mode?: HudPresentationMode }
+    return parsed.mode
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * IMMERSIVE MODE DETECTOR
+ * Returns true when system is in immersive (map-first) mode.
+ * In this mode, CockpitContext becomes UI STATE ONLY — no geometry authority.
+ *
+ * READS FROM: window.__HUD_RUNTIME__ (resolved at boot, before React mounts)
+ */
+function isImmersiveMode(): boolean {
+  // Direct access to runtime (fastest path) - resolved before React mounts
+  return window.__HUD_RUNTIME__?.isImmersive ?? isImmersiveFromRuntime()
+}
+
+/**
+ * STRIP LAYOUT FROM PANELS (IMMERSIVE MODE)
+ * Returns panel state with geometry zeroed/removed.
+ * In immersive mode, panels are pure UI overlays — position is local-only.
+ */
+function stripLayoutFromPanels(panels: PanelMap): PanelMap {
+  const stripped: PanelMap = {}
+  for (const [id, panel] of Object.entries(panels)) {
+    if (!panel) continue
+    // Preserve only UI state, zero geometry
+    stripped[id] = {
+      ...panel,
+      // These values exist for type compatibility but are NOT USED in immersive
+      // Panels use their own internal default positions
+      x: 0,
+      y: 0,
+      w: 0,
+      h: null,
+      docked: false,
+      dockSide: 'left',
+    }
+  }
+  return stripped
+}
+
 function loadState(): StoredState | null {
   try {
     const scope = getLayoutScope()
@@ -267,6 +329,16 @@ function loadState(): StoredState | null {
       }
     }
     panels = migratePersistedPanels(panels)
+
+    // IMMERSIVE MODE: Strip all layout/geometry from loaded state
+    // Panels become pure UI overlays with local positioning only
+    if (isImmersiveMode()) {
+      panels = stripLayoutFromPanels(panels)
+      if (import.meta.env.DEV) {
+        console.info('[CockpitContext] Immersive mode: layout stripped from persistence')
+      }
+    }
+
     const prefs =
       o.prefs && typeof o.prefs === 'object'
         ? ({ ...PREFS_DEFAULT, ...(o.prefs as Partial<CockpitPrefs>) } as CockpitPrefs)
@@ -305,6 +377,12 @@ function loadState(): StoredState | null {
         }
       }
       panels = migratePersistedPanels(panels)
+
+      // IMMERSIVE MODE: Strip all layout/geometry from recovered state
+      if (isImmersiveMode()) {
+        panels = stripLayoutFromPanels(panels)
+      }
+
       const prefs =
         o.prefs && typeof o.prefs === 'object'
           ? ({ ...PREFS_DEFAULT, ...(o.prefs as Partial<CockpitPrefs>) } as CockpitPrefs)
@@ -458,6 +536,17 @@ function deviceOptimizationPrefs(device: DevicePreset): Partial<CockpitPrefs> {
 
 function saveState(panels: PanelMap, prefs: CockpitPrefs) {
   try {
+    // IMMERSIVE MODE: Do not persist layout/geometry
+    // Panels are ephemeral overlays with local state only
+    if (isImmersiveMode()) {
+      if (import.meta.env.DEV) {
+        console.info('[CockpitContext] Immersive mode: skipping geometry persistence')
+      }
+      // Still mark as healthy but don't actually write panel geometry
+      updatePersistenceHealth('healthy')
+      return
+    }
+
     const scope = getLayoutScope()
     // DEPE: each write announces which scope it is targeting; the engine
     // compares against the mode policy. A mobile session writing to the
@@ -532,13 +621,54 @@ function panelGapPx(prefs?: Partial<CockpitPrefs>): number {
   return Math.max(PANEL_KISS_GAP_PX, Math.max(0, Math.min(24, Math.round(raw))))
 }
 
-/** Assign unique vertical slots per dock rail — used on mobile and inside full layout normalize. */
-export function relayoutDockedPanels(panels: PanelMap): PanelMap {
+/** Dock width reduction factors for presentation modes. Pure output transformation. */
+const PRESENTATION_DOCK_WIDTH_FACTOR: Record<string, number> = {
+  legacy: 1,
+  hybrid: 0.35,   // ~98px effective — thin dock strips
+  immersive: 0.15,  // ~42px effective — minimal indicators
+}
+
+/**
+ * LAYOUT AUTHORITY CHECK
+ * Returns true when layout systems should not initialize (immersive mode).
+ * Uses HUD RUNTIME layout permissions as source of truth.
+ */
+function isLayoutAuthorityDisabled(_presentationMode?: HudPresentationMode): boolean {
+  // Check runtime layout permissions - immersive mode disables all layout authority
+  return !window.__HUD_RUNTIME__?.layout.cockpit && !window.__HUD_RUNTIME__?.layout.panels
+}
+
+/** Assign unique vertical slots per dock rail — used on mobile and inside full layout normalize.
+ *  Phase 3D: Added presentationMode for output-level dock footprint reduction.
+ *  MAP-FIRST: In immersive mode, this becomes a NO-OP — panels are pure overlays.
+ */
+export function relayoutDockedPanels(
+  panels: PanelMap,
+  presentationMode?: HudPresentationMode,
+): PanelMap {
+  /**
+   * HARD_EXIT GUARD: Dock system is NEVER allowed in immersive or hybrid modes.
+   * Layout permissions are the source of truth.
+   */
+  const dockAllowed = guardDockInit('relayoutDockedPanels')
+  // MAP-FIRST GATE: In immersive/hybrid mode, dock system does not control geometry
+  const shouldSkip = isLayoutAuthorityDisabled(presentationMode) || !dockAllowed
+  if (shouldSkip) {
+    // Return panels as-is — no dock positioning, no width calculations
+    return Object.fromEntries(
+      Object.entries(panels).map(([id, p]) => [id, { ...p }]),
+    )
+  }
+
   const next: PanelMap = Object.fromEntries(
     Object.entries(panels).map(([id, p]) => [id, { ...p }]),
   )
   const { vw, vh } = cockpitViewport()
   const dockedIds = Object.keys(next).filter((id) => next[id]?.docked)
+
+  // Phase 3D: Presentation-aware dock width at OUTPUT stage only
+  const widthFactor = PRESENTATION_DOCK_WIDTH_FACTOR[presentationMode ?? 'legacy']
+  const presentationDockWidth = Math.round(DOCKED_PANEL_WIDTH_PX * widthFactor)
 
   for (const side of ['left', 'right'] as const) {
     const lane = dockedIds
@@ -548,7 +678,8 @@ export function relayoutDockedPanels(panels: PanelMap): PanelMap {
     const stackFromBottom = getDeviceProfile().interactionMode === 'mobile'
     lane.forEach((id, idx) => {
       const p = next[id]
-      p.w = DOCKED_PANEL_WIDTH_PX
+      // Phase 3D: Apply presentation width reduction at output stage
+      p.w = presentationDockWidth
       p.y = dockLaneSlotY(idx, lane.length, vh, stackFromBottom)
       p.x =
         side === 'right'
@@ -584,8 +715,21 @@ function dockObstaclesFromPanels(panels: PanelMap): Array<{ l: number; t: number
   return obstacles
 }
 
-function normalizeNoOverlapLayout(panels: PanelMap, gapPx = 0): PanelMap {
-  const next = relayoutDockedPanels(panels)
+function normalizeNoOverlapLayout(
+  panels: PanelMap,
+  gapPx = 0,
+  presentationMode?: HudPresentationMode,
+): PanelMap {
+  // MAP-FIRST GATE: In immersive mode, collision resolution is disabled — panels are pure overlays
+  const shouldSkip = isLayoutAuthorityDisabled(presentationMode)
+  if (shouldSkip) {
+    // Return panels as-is — no collision detection, no repositioning
+    return Object.fromEntries(
+      Object.entries(panels).map(([id, p]) => [id, { ...p }]),
+    )
+  }
+
+  const next = relayoutDockedPanels(panels, presentationMode)
   const { vw, vh } = cockpitViewport()
   const pad = gapPx
   const topMinY = 36
@@ -728,6 +872,19 @@ const DEFAULT_PANELS = (): PanelMap => ({
 })
 
 export function CockpitProvider({ children }: { children: ReactNode }) {
+  /**
+   * HARD_EXIT GUARD: Check if cockpit system is allowed to initialize.
+   * In immersive mode: cockpit layout is completely disabled.
+   * In hybrid mode: partial initialization only (no dock, no full shell).
+   *
+   * This MUST be checked before any layout initialization.
+   */
+  if (import.meta.env.DEV) {
+    const cockpitAllowed = guardCockpitInit('CockpitProvider')
+    const layout = getLayoutPermissions()
+
+  }
+
   globalThis.__COCKPIT_RENDER_IN_PROGRESS__ = true
   const devicePreset = detectDevicePreset()
   const loaded = useRef(loadState())
@@ -737,12 +894,17 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
       ...(loaded.current?.panels ?? {}),
     }),
   )
-  const [panels, setPanels] = useState<PanelMap>(() =>
-    normalizeNoOverlapLayout(
+  const [panels, setPanels] = useState<PanelMap>(() => {
+    // IMMERSIVE MODE: Skip all layout normalization — panels are pure overlays
+    if (isImmersiveMode()) {
+      return stripLayoutFromPanels(seededPanelsRef.current)
+    }
+    return normalizeNoOverlapLayout(
       seededPanelsRef.current,
       panelGapPx(loaded.current?.prefs ?? PREFS_DEFAULT),
-    ),
-  )
+      getCurrentPresentationMode(),
+    )
+  })
   const [prefs, setPrefs] = useState<CockpitPrefs>(() =>
     loaded.current?.prefs ? { ...PREFS_DEFAULT, ...loaded.current.prefs } : PREFS_DEFAULT,
   )
@@ -781,9 +943,15 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
         const nextPrefs = { ...prev, ...opt, ...run.prefs }
         if (Object.keys(panelPatches).length > 0) {
           setPanels((prevPanels) => {
+            // IMMERSIVE MODE: No layout normalization — panels are pure overlays
+            if (isImmersiveMode()) {
+              const nextPanels = { ...prevPanels, ...panelPatches }
+              return stripLayoutFromPanels(nextPanels)
+            }
             const nextPanels = normalizeNoOverlapLayout(
               { ...prevPanels, ...panelPatches },
               panelGapPx(nextPrefs),
+              getCurrentPresentationMode(),
             )
             saveState(nextPanels, nextPrefs)
             return nextPanels
@@ -823,6 +991,15 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
     autoPresetAppliedRef.current = true
     // Do not override existing user-customized layouts/prefs.
     if (loaded.current) return
+
+    // IMMERSIVE MODE: No first-run layout normalization — panels are pure overlays
+    if (isImmersiveMode()) {
+      if (import.meta.env.DEV) {
+        console.info('[CockpitContext] Immersive mode: skipping first-run layout preset')
+      }
+      return
+    }
+
     const device = detectDevicePreset()
     const preset = firstRunPreset(device)
     if (!Object.keys(preset.panelPatches).length && !Object.keys(preset.prefs).length) return
@@ -834,6 +1011,7 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
       normalizeNoOverlapLayout(
         { ...prev, ...preset.panelPatches },
         panelGapPx({ ...prefs, ...preset.prefs }),
+        getCurrentPresentationMode(),
       ),
     )
     setPrefs((prev) => ({ ...prev, ...preset.prefs }))
@@ -858,10 +1036,19 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
   }, [panels, prefs, persist])
 
   useEffect(() => {
+    // IMMERSIVE MODE: No layout recalculation on viewport changes
+    // Panels are pure overlays with local positioning only
+    if (isImmersiveMode()) {
+      if (import.meta.env.DEV) {
+        console.info('[CockpitContext] Immersive mode: layout recalculation disabled')
+      }
+      return
+    }
+
     const relayoutOnViewportChange = () => {
       setPanels((prev) => {
         if (!Object.values(prev).some((p) => p?.docked)) return prev
-        const next = relayoutDockedPanels(prev)
+        const next = relayoutDockedPanels(prev, getCurrentPresentationMode())
         const moved = Object.keys(next).some((id) => prev[id]?.y !== next[id]?.y || prev[id]?.x !== next[id]?.x)
         return moved ? next : prev
       })
@@ -1043,10 +1230,18 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
           ts: Date.now(),
         })
         const merged = { ...prev, [id]: nextPanel }
+
+        // IMMERSIVE MODE: No layout recalculation — panels are pure overlays
+        if (isImmersiveMode()) {
+          persist(merged, prefs)
+          return merged
+        }
+
+        const currentPresentation = getCurrentPresentationMode()
         const next =
           getDeviceProfile().interactionMode === 'mobile'
-            ? relayoutDockedPanels(merged)
-            : normalizeNoOverlapLayout(merged, panelGapPx(prefs))
+            ? relayoutDockedPanels(merged, currentPresentation)
+            : normalizeNoOverlapLayout(merged, panelGapPx(prefs), currentPresentation)
         persist(next, prefs)
         return next
       })
@@ -1054,9 +1249,17 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
     [persist, prefs],
   )
 
-  /** Magnetic no-overlap resolution for floating panels */
+  /**
+   * Magnetic no-overlap resolution for floating panels
+   * IMMERSIVE MODE: Collision resolution is disabled — panels are pure overlays
+   */
   const resolveCollisions = useCallback(
     (id: string, x: number, y: number, width: number, height: number) => {
+      // MAP-FIRST GATE: In immersive mode, collision resolution is disabled
+    if (isImmersiveMode()) {
+        return { x, y }
+      }
+
       x = snap(x)
       y = snap(y)
       const pad = panelGapPx(prefs)
@@ -1123,10 +1326,22 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
   )
 
   const resetLayout = useCallback(() => {
+    // IMMERSIVE MODE: No layout reset — panels are pure overlays with local state
+    if (isImmersiveMode()) {
+      if (import.meta.env.DEV) {
+        console.info('[CockpitContext] Immersive mode: resetLayout is no-op')
+      }
+      return
+    }
+
     const device = detectDevicePreset()
     const run = firstRunPreset(device)
     const base = { ...DEFAULT_PANELS(), ...run.panelPatches }
-    const fresh = normalizeNoOverlapLayout(base, panelGapPx({ ...prefs, ...run.prefs }))
+    const fresh = normalizeNoOverlapLayout(
+      base,
+      panelGapPx({ ...prefs, ...run.prefs }),
+      getCurrentPresentationMode(),
+    )
     setPanels(fresh)
     persist(fresh, prefs)
   }, [persist, prefs])
@@ -1149,15 +1364,21 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
       if (!raw) return
       const o = JSON.parse(raw) as StoredState
       if (o?.panels) {
-        setPanels(
-          normalizeNoOverlapLayout(
-            {
-              ...DEFAULT_PANELS(),
-              ...o.panels,
-            },
-            panelGapPx(o.prefs ?? prefs),
-          ),
-        )
+        // IMMERSIVE MODE: No layout normalization — panels are pure overlays
+        if (isImmersiveMode()) {
+          setPanels(stripLayoutFromPanels({ ...DEFAULT_PANELS(), ...o.panels }))
+        } else {
+          setPanels(
+            normalizeNoOverlapLayout(
+              {
+                ...DEFAULT_PANELS(),
+                ...o.panels,
+              },
+              panelGapPx(o.prefs ?? prefs),
+              getCurrentPresentationMode(),
+            ),
+          )
+        }
       }
       if (o?.prefs) setPrefs({ ...PREFS_DEFAULT, ...o.prefs })
     } catch {
@@ -1238,13 +1459,15 @@ export function CockpitProvider({ children }: { children: ReactNode }) {
           const o = JSON.parse(String(reader.result)) as Partial<StoredState>
           if (!o.panels && !o.prefs) return
           setPanels((prev) => {
-            const np = normalizeNoOverlapLayout(
-              {
-                ...DEFAULT_PANELS(),
-                ...(o.panels ?? prev),
-              },
-              panelGapPx(o.prefs ?? prefs),
-            )
+            // IMMERSIVE MODE: No layout normalization on import
+            const basePanels = { ...DEFAULT_PANELS(), ...(o.panels ?? prev) }
+            const np = isImmersiveMode()
+              ? stripLayoutFromPanels(basePanels)
+              : normalizeNoOverlapLayout(
+                  basePanels,
+                  panelGapPx(o.prefs ?? prefs),
+                  getCurrentPresentationMode(),
+                )
             setPrefs((pr) => {
               const npr = { ...PREFS_DEFAULT, ...pr, ...o.prefs } as CockpitPrefs
               saveState(np, npr)
@@ -1340,4 +1563,9 @@ export function useCockpit(): CockpitContextValue {
   const ctx = useContext(CockpitContext)
   if (!ctx) throw new Error('useCockpit must be used within CockpitProvider')
   return ctx
+}
+
+/** Optional cockpit access — null outside Classic runtime scope. */
+export function useCockpitOptional(): CockpitContextValue | null {
+  return useContext(CockpitContext)
 }

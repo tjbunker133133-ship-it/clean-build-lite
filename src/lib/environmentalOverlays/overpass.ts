@@ -11,15 +11,116 @@ function maxBboxDeg(): number {
   return getDeviceProfile().interactionMode === 'mobile' ? 0.22 : 0.35
 }
 
-let overpassChain: Promise<unknown> = Promise.resolve()
+/** Serial Overpass POSTs — public overpass-api.de 429s above 1 concurrent. */
+const MAX_CONCURRENT_OVERPASS = 1
+const OVERPASS_STAGGER_MS = 1_000
+/** Match Overpass QL `[timeout:25]` — 8s client abort caused false failures. */
+const OVERPASS_FETCH_TIMEOUT_MS = 22_000
+const OVERPASS_RATE_LIMIT_BACKOFF_MS = 30_000
+
+type OverpassQueueEntry<T> = {
+  task: () => Promise<T>
+  resolve: (value: T) => void
+  reject: (reason: unknown) => void
+  enqueuedAt: number
+}
+
+let overpassInFlight = 0
+const overpassPending: OverpassQueueEntry<unknown>[] = []
+let overpassLastStartAt = 0
+let overpassDispatchTimer: ReturnType<typeof setTimeout> | null = null
+let overpassRateLimitUntil = 0
+
+function signalOverpassRateLimit(endpoint: string): void {
+  if (!endpoint.includes('overpass-api.de')) return
+  overpassRateLimitUntil = Date.now() + OVERPASS_RATE_LIMIT_BACKOFF_MS
+  traceOverlay('overpass_rate_limit_backoff', {
+    backoffMs: OVERPASS_RATE_LIMIT_BACKOFF_MS,
+    until: overpassRateLimitUntil,
+  })
+}
+
+function dispatchOverpassQueue(): void {
+  if (overpassDispatchTimer !== null) return
+  if (overpassInFlight >= MAX_CONCURRENT_OVERPASS || overpassPending.length === 0) return
+
+  const now = Date.now()
+  const rateLimitWait = Math.max(0, overpassRateLimitUntil - now)
+  const staggerWait = Math.max(0, overpassLastStartAt + OVERPASS_STAGGER_MS - now)
+  const waitMs = Math.max(rateLimitWait, staggerWait)
+
+  const runDispatch = () => {
+    overpassDispatchTimer = null
+    if (overpassInFlight >= MAX_CONCURRENT_OVERPASS || overpassPending.length === 0) return
+
+    const entry = overpassPending.shift()!
+    overpassInFlight++
+    overpassLastStartAt = Date.now()
+
+    traceOverlay('overpass_queue_dispatched', {
+      queueDepth: overpassPending.length,
+      inFlight: overpassInFlight,
+      waitedMs: overpassLastStartAt - entry.enqueuedAt,
+    })
+
+    entry
+      .task()
+      .then(entry.resolve, entry.reject)
+      .finally(() => {
+        overpassInFlight--
+        dispatchOverpassQueue()
+      })
+
+    if (overpassInFlight < MAX_CONCURRENT_OVERPASS && overpassPending.length > 0) {
+      dispatchOverpassQueue()
+    }
+  }
+
+  if (waitMs > 0) {
+    overpassDispatchTimer = setTimeout(runDispatch, waitMs)
+  } else {
+    runDispatch()
+  }
+}
 
 function enqueueOverpass<T>(task: () => Promise<T>): Promise<T> {
-  const run = overpassChain.then(task, task)
-  overpassChain = run.then(
-    () => undefined,
-    () => undefined,
-  )
-  return run
+  return new Promise((resolve, reject) => {
+    overpassPending.push({
+      task,
+      resolve: resolve as (value: T) => void,
+      reject,
+      enqueuedAt: Date.now(),
+    })
+    traceOverlay('overpass_queue_enqueued', {
+      queueDepth: overpassPending.length,
+      inFlight: overpassInFlight,
+    })
+    dispatchOverpassQueue()
+  })
+}
+
+export function getOverpassQueueStats(): { pending: number; inFlight: number } {
+  return { pending: overpassPending.length, inFlight: overpassInFlight }
+}
+
+/** Budget for overlay loading timeout: queue wait + two endpoint attempts per slot. */
+export function estimateOverpassLoadingBudgetMs(queueAhead: number): number {
+  const perSlotMs = OVERPASS_FETCH_TIMEOUT_MS * 2 + OVERPASS_STAGGER_MS
+  // Always budget at least one full fetch (2 endpoints × timeout) — queueAhead=0 skips extension otherwise.
+  const slots = Math.max(1, queueAhead + 1)
+  return 30_000 + slots * perSlotMs
+}
+
+/** Reset queue state between unit tests. */
+export function resetOverpassQueueForTests(): void {
+  overpassPending.length = 0
+  overpassInFlight = 0
+  overpassLastStartAt = 0
+  overpassRateLimitUntil = 0
+  if (overpassDispatchTimer !== null) {
+    clearTimeout(overpassDispatchTimer)
+    overpassDispatchTimer = null
+  }
 }
 
 /** Shrink wide viewports to a fetchable box (centered) instead of failing silently. */
@@ -157,9 +258,19 @@ async function fetchWithTimeout(
   url: string,
   options: RequestInit,
   timeoutMs: number,
+  externalSignal?: AbortSignal,
 ): Promise<Response> {
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+
+  const onExternalAbort = () => controller.abort()
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      clearTimeout(timeoutId)
+      throw new DOMException('The operation was aborted.', 'AbortError')
+    }
+    externalSignal.addEventListener('abort', onExternalAbort, { once: true })
+  }
 
   try {
     const response = await fetch(url, {
@@ -170,7 +281,17 @@ async function fetchWithTimeout(
     return response
   } catch (err) {
     clearTimeout(timeoutId)
+    if (controller.signal.aborted) {
+      if (externalSignal?.aborted) {
+        throw new DOMException('Overlay fetch cancelled.', 'AbortError')
+      }
+      throw new Error('OSM request timed out — retry or zoom in closer')
+    }
     throw err
+  } finally {
+    if (externalSignal) {
+      externalSignal.removeEventListener('abort', onExternalAbort)
+    }
   }
 }
 
@@ -186,18 +307,18 @@ async function postOverpass(
   traceOverlay('fetch_request_start', { overlayId, endpoint, bodyLength: body.length })
 
   try {
-    // Use 8s timeout per endpoint attempt (fails fast, retries to next endpoint)
     const res = await fetchWithTimeout(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body,
       mode: 'cors',
-    }, 8000)
+    }, OVERPASS_FETCH_TIMEOUT_MS, signal)
 
     traceOverlay('fetch_request_complete', { overlayId, endpoint, status: res.status, ok: res.ok })
 
     if (res.status === 429) {
       traceOverlay('fetch_rate_limited', { overlayId, endpoint })
+      signalOverpassRateLimit(endpoint)
       throw new Error('OSM busy (rate limit) — wait 30s and retry')
     }
     if (!res.ok) {

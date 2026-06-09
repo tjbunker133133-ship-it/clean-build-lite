@@ -38,7 +38,6 @@ export type CorridorCacheRegion = {
 
 const STORAGE_KEY = 'hud_corridor_cache_v1'
 const RECENT_AREAS_KEY = 'hud_recent_operational_areas_v1'
-const MAP_VIEWPORT_KEY = 'hud_map_viewport_v1'
 const RECENT_AREAS_MAX = 6
 const AREA_DEDUP_MILES = 0.75
 
@@ -199,33 +198,9 @@ export function saveOperationalAreaSeed(seed: OperationalAreaSeed): void {
   }
 }
 
+/** @deprecated Viewport persistence removed — use GPS seed via saveOperationalAreaSeed directly. */
 export function saveOperationalAreaSeedFromViewport(): void {
-  if (typeof localStorage === 'undefined') return
-  try {
-    const raw = localStorage.getItem(MAP_VIEWPORT_KEY)
-    if (!raw) return
-    const p = JSON.parse(raw) as Partial<{
-      lat: number
-      lng: number
-      ts: number
-    }>
-    if (
-      typeof p.lat !== 'number' ||
-      !Number.isFinite(p.lat) ||
-      typeof p.lng !== 'number' ||
-      !Number.isFinite(p.lng)
-    ) {
-      return
-    }
-    saveOperationalAreaSeed({
-      centerLat: p.lat,
-      centerLng: p.lng,
-      updatedAt: typeof p.ts === 'number' && Number.isFinite(p.ts) ? p.ts : Date.now(),
-      source: 'viewport',
-    })
-  } catch {
-    /* ignore parse/storage errors */
-  }
+  /* no-op: camera/viewport no longer persisted outside perception/OSG */
 }
 
 export function shouldRefreshCorridorPrefetch(

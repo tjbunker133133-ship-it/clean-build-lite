@@ -118,6 +118,12 @@ function wasGeolocationPreviouslyGranted(): boolean {
   }
 }
 
+/** Signals runtime watchdog that a live coordinate fix was applied (not merely recovery state). */
+function notifyGpsWatchdogFix(): void {
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(new CustomEvent('custom:gps-update'))
+}
+
 /** When Permissions API is unavailable, trust stored grant only (Safari / older WebViews). */
 export function shouldAutoResumeGeolocation(
   permissionState: PermissionState | 'unsupported',
@@ -143,6 +149,7 @@ function applyGpsPositionFix(pos: GeolocationPosition) {
     error: undefined,
   })
   persistCurrentFix()
+  notifyGpsWatchdogFix()
 }
 
 /** Passive refresh when the browser already granted geolocation — no permission prompt. */
@@ -354,6 +361,7 @@ function flushWatchPending() {
     error: undefined,
   })
   persistWatchFixIfDue()
+  notifyGpsWatchdogFix()
 }
 
 function scheduleWatchFlush() {
@@ -575,6 +583,12 @@ function scheduleStopIfNoListeners() {
 
 export function useGPS(): GPSData & { requestLocation: typeof requestLocation; status: GPSUiStatus } {
   const [state, setState] = useState(shared)
+
+  useEffect(() => {
+    if (shared.lat != null && shared.lng != null && shared.locationState === 'granted') {
+      notifyGpsWatchdogFix()
+    }
+  }, [])
 
   useEffect(() => {
     if (gpsAutoInitAttempted) return

@@ -5,27 +5,37 @@ import React, {
   useCallback,
   useEffect,
   useMemo,
+  useSyncExternalStore,
   type ReactNode
 } from 'react'
-import type { AppState, AppAction, Waypoint, LayerType, WaypointType, WaypointStatus } from '../types'
+import type { AppState, AppAction, Waypoint, LayerType, WaypointType } from '../types'
 import { tier1Debug } from '../lib/tier1DebugLog'
-import {
-  applyWaypointArrivalConfirmation,
-  migrateLegacyWaypointStatuses,
-  restoreArchivedWaypoint,
-  statusForNewWaypoint,
-} from '../lib/waypointNavigation'
 import { emitWaypointRemoved } from '../lib/missionSync/waypointSyncEvents'
+import {
+  osgAddRouteWaypoint,
+  osgConfirmWaypointArrival,
+  osgGetPendingWaypointType,
+  osgRemoveRouteWaypoint,
+  osgRestoreArchivedRouteWaypoint,
+  osgSetPendingWaypointType,
+  osgSetRouteWaypoints,
+  osgUpdateRouteWaypoint,
+  subscribeOperationalGraph,
+} from '../lib/operationalStateGraph'
+import {
+  getOsgRouteWaypointsSnapshot,
+  subscribeOsgRouteWaypoints,
+} from '../lib/osgRouteWaypointCache'
 
 const DEAD_MAN_DURATION = 300
-const APP_STORAGE_KEY = 'tactical_hud_app_state_v1'
+const UI_PREFS_KEY = 'hud_ui_prefs_v1'
 const VALID_LAYERS = ['streets', 'topo', 'outdoor', 'satellite'] as const
 
-const initialState: AppState = {
-  waypoints: [],
+type UiPrefsState = Omit<AppState, 'waypoints' | 'pendingWaypointType'>
+
+const initialUiState: UiPrefsState = {
   activeLayer: 'outdoor',
   selectedWaypointId: null,
-  pendingWaypointType: 'default',
   nextWaypointLabel: '',
   keepWaypointToolArmed: false,
   clearLabelAfterDrop: true,
@@ -37,58 +47,14 @@ const initialState: AppState = {
   deadManActive: false,
 }
 
-export function appReducer(state: AppState, action: AppAction): AppState {
+function uiReducer(state: UiPrefsState, action: AppAction): UiPrefsState {
   switch (action.type) {
-    case 'ADD_WAYPOINT': {
-      const wp = action.payload
-      const navStatus = wp.status ?? statusForNewWaypoint(state.waypoints)
-      const withStatus = { ...wp, status: navStatus }
-      tier1Debug('waypoint', 'add', { id: wp.id, lat: wp.lat, lng: wp.lng, type: wp.type, status: navStatus })
-      return {
-        ...state,
-        waypoints: [...state.waypoints, withStatus],
-      }
-    }
-    case 'SET_WAYPOINTS': {
-      const next = action.payload
-      tier1Debug('waypoint', 'set-all', { count: next.length })
-      const sel =
-        next.length === 0
-          ? null
-          : state.selectedWaypointId != null && next.some((w) => w.id === state.selectedWaypointId)
-            ? state.selectedWaypointId
-            : null
-      return {
-        ...state,
-        waypoints: next,
-        selectedWaypointId: sel,
-      }
-    }
-    case 'UPDATE_WAYPOINT':
-      return {
-        ...state,
-        waypoints: state.waypoints.map((w) =>
-          w.id === action.payload.id ? { ...w, ...action.payload.patch } : w,
-        ),
-      }
-    case 'REMOVE_WAYPOINT':
-      tier1Debug('waypoint', 'remove', { id: action.payload })
-      return {
-        ...state,
-        waypoints: state.waypoints.filter((w) => w.id !== action.payload),
-        selectedWaypointId:
-          state.selectedWaypointId === action.payload
-            ? null
-            : state.selectedWaypointId,
-      }
     case 'SELECT_WAYPOINT':
       return { ...state, selectedWaypointId: action.payload }
     case 'SET_LAYER':
       if (!isLayerType(action.payload)) return state
       if (state.activeLayer === action.payload && !action.force) return state
       return { ...state, activeLayer: action.payload }
-    case 'SET_PENDING_TYPE':
-      return { ...state, pendingWaypointType: action.payload }
     case 'SET_NEXT_WAYPOINT_LABEL':
       return { ...state, nextWaypointLabel: action.payload }
     case 'SET_KEEP_WAYPOINT_TOOL_ARMED':
@@ -103,16 +69,6 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       return { ...state, snapToTrailEnabled: action.payload }
     case 'SET_TRAIL_SNAP_ASSIST_CAPABLE':
       return { ...state, trailSnapAssistCapable: action.payload }
-    case 'CONFIRM_WAYPOINT_ARRIVAL': {
-      const next = applyWaypointArrivalConfirmation(state.waypoints)
-      tier1Debug('waypoint', 'confirm-arrival', { count: next.length })
-      return { ...state, waypoints: next }
-    }
-    case 'RESTORE_ARCHIVED_WAYPOINT':
-      return {
-        ...state,
-        waypoints: restoreArchivedWaypoint(state.waypoints, action.payload),
-      }
     case 'SET_DEAD_MAN_TIME':
       return { ...state, deadManTimeLeft: action.payload }
     case 'RESET_DEAD_MAN':
@@ -148,6 +104,10 @@ interface AppContextValue {
 
 const AppContext = createContext<AppContextValue | null>(null)
 
+function isLayerType(value: unknown): value is LayerType {
+  return typeof value === 'string' && (VALID_LAYERS as readonly string[]).includes(value)
+}
+
 function isWaypointType(value: unknown): value is WaypointType {
   return (
     value === 'default' ||
@@ -161,89 +121,83 @@ function isWaypointType(value: unknown): value is WaypointType {
   )
 }
 
-function isLayerType(value: unknown): value is LayerType {
-  return typeof value === 'string' && (VALID_LAYERS as readonly string[]).includes(value)
-}
-
-function isWaypointStatus(value: unknown): value is WaypointStatus {
-  return value === 'pending' || value === 'active' || value === 'completed' || value === 'archived'
-}
-
-function sanitizeWaypoint(raw: unknown): Waypoint | null {
-  if (!raw || typeof raw !== 'object') return null
-  const item = raw as Partial<Waypoint>
-  if (typeof item.id !== 'string' || typeof item.label !== 'string') return null
-  if (typeof item.lng !== 'number' || !Number.isFinite(item.lng)) return null
-  if (typeof item.lat !== 'number' || !Number.isFinite(item.lat)) return null
-  if (typeof item.createdAt !== 'number' || !Number.isFinite(item.createdAt)) return null
-  if (!isWaypointType(item.type)) return null
-  const base: Waypoint = {
-    id: item.id,
-    lng: item.lng,
-    lat: item.lat,
-    label: item.label.slice(0, 64),
-    type: item.type,
-    createdAt: item.createdAt,
-  }
-  if (typeof item.rawLat === 'number' && Number.isFinite(item.rawLat)) base.rawLat = item.rawLat
-  if (typeof item.rawLng === 'number' && Number.isFinite(item.rawLng)) base.rawLng = item.rawLng
-  if (item.source === 'manual' || item.source === 'snapped') base.source = item.source
-  if (typeof item.snapDistanceMeters === 'number' && Number.isFinite(item.snapDistanceMeters)) {
-    base.snapDistanceMeters = item.snapDistanceMeters
-  }
-  if (isWaypointStatus(item.status)) base.status = item.status
-  return base
-}
-
-function loadInitialState(): AppState {
-  if (typeof window === 'undefined') return initialState
+function loadUiPrefs(): UiPrefsState {
+  if (typeof window === 'undefined') return initialUiState
   try {
-    const raw = localStorage.getItem(APP_STORAGE_KEY)
-    if (!raw) return initialState
-    const parsed = JSON.parse(raw) as Partial<AppState> | null
-    if (!parsed || typeof parsed !== 'object') return initialState
-    const waypoints = migrateLegacyWaypointStatuses(
-      Array.isArray(parsed.waypoints)
-        ? parsed.waypoints.map(sanitizeWaypoint).filter((v): v is Waypoint => Boolean(v))
-        : [],
-    )
+    const raw = localStorage.getItem(UI_PREFS_KEY)
+    if (!raw) return initialUiState
+    const parsed = JSON.parse(raw) as Partial<UiPrefsState> | null
+    if (!parsed || typeof parsed !== 'object') return initialUiState
     return {
-      ...initialState,
-      waypoints,
-      activeLayer: isLayerType(parsed.activeLayer) ? parsed.activeLayer : initialState.activeLayer,
+      ...initialUiState,
+      activeLayer: isLayerType(parsed.activeLayer) ? parsed.activeLayer : initialUiState.activeLayer,
       selectedWaypointId: typeof parsed.selectedWaypointId === 'string' ? parsed.selectedWaypointId : null,
-      pendingWaypointType: isWaypointType(parsed.pendingWaypointType) ? parsed.pendingWaypointType : initialState.pendingWaypointType,
       nextWaypointLabel: typeof parsed.nextWaypointLabel === 'string' ? parsed.nextWaypointLabel.slice(0, 64) : '',
-      keepWaypointToolArmed: typeof parsed.keepWaypointToolArmed === 'boolean' ? parsed.keepWaypointToolArmed : initialState.keepWaypointToolArmed,
-      clearLabelAfterDrop: typeof parsed.clearLabelAfterDrop === 'boolean' ? parsed.clearLabelAfterDrop : initialState.clearLabelAfterDrop,
-      showMapLabels: typeof parsed.showMapLabels === 'boolean' ? parsed.showMapLabels : initialState.showMapLabels,
-      showMapDistances: typeof parsed.showMapDistances === 'boolean' ? parsed.showMapDistances : initialState.showMapDistances,
+      keepWaypointToolArmed: typeof parsed.keepWaypointToolArmed === 'boolean' ? parsed.keepWaypointToolArmed : initialUiState.keepWaypointToolArmed,
+      clearLabelAfterDrop: typeof parsed.clearLabelAfterDrop === 'boolean' ? parsed.clearLabelAfterDrop : initialUiState.clearLabelAfterDrop,
+      showMapLabels: typeof parsed.showMapLabels === 'boolean' ? parsed.showMapLabels : initialUiState.showMapLabels,
+      showMapDistances: typeof parsed.showMapDistances === 'boolean' ? parsed.showMapDistances : initialUiState.showMapDistances,
       snapToTrailEnabled:
         typeof parsed.snapToTrailEnabled === 'boolean'
           ? parsed.snapToTrailEnabled
-          : initialState.snapToTrailEnabled,
+          : initialUiState.snapToTrailEnabled,
       trailSnapAssistCapable: false,
       deadManTimeLeft:
         typeof parsed.deadManTimeLeft === 'number' && Number.isFinite(parsed.deadManTimeLeft)
           ? Math.max(0, Math.min(72 * 3600, Math.round(parsed.deadManTimeLeft)))
-          : initialState.deadManTimeLeft,
-      deadManActive: typeof parsed.deadManActive === 'boolean' ? parsed.deadManActive : initialState.deadManActive,
+          : initialUiState.deadManTimeLeft,
+      deadManActive: typeof parsed.deadManActive === 'boolean' ? parsed.deadManActive : initialUiState.deadManActive,
     }
   } catch {
-    return initialState
+    return initialUiState
   }
 }
 
+function subscribeOsgPendingType(listener: () => void): () => void {
+  return subscribeOperationalGraph(listener)
+}
+
+function getOsgPendingTypeSnapshot(): WaypointType {
+  const t = osgGetPendingWaypointType()
+  return isWaypointType(t) ? t : 'pin'
+}
+
 export function AppProvider({ children }: { children: ReactNode }) {
-  const [state, dispatch] = useReducer(appReducer, initialState, loadInitialState)
+  const [uiState, dispatch] = useReducer(uiReducer, initialUiState, loadUiPrefs)
+  const waypoints = useSyncExternalStore(
+    subscribeOsgRouteWaypoints,
+    getOsgRouteWaypointsSnapshot,
+    getOsgRouteWaypointsSnapshot,
+  )
+  const pendingWaypointType = useSyncExternalStore(
+    subscribeOsgPendingType,
+    getOsgPendingTypeSnapshot,
+    getOsgPendingTypeSnapshot,
+  )
+
+  const state: AppState = useMemo(
+    () => ({ ...uiState, waypoints, pendingWaypointType }),
+    [uiState, waypoints, pendingWaypointType],
+  )
 
   const addWaypoint = useCallback((wp: Waypoint) => {
-    dispatch({ type: 'ADD_WAYPOINT', payload: wp })
+    tier1Debug('waypoint', 'add', { id: wp.id, lat: wp.lat, lng: wp.lng, type: wp.type })
+    osgAddRouteWaypoint(wp)
   }, [])
 
   const setWaypoints = useCallback((wps: Waypoint[]) => {
-    dispatch({ type: 'SET_WAYPOINTS', payload: wps })
-  }, [])
+    tier1Debug('waypoint', 'set-all', { count: wps.length })
+    osgSetRouteWaypoints(wps)
+    dispatch({
+      type: 'SELECT_WAYPOINT',
+      payload:
+        wps.length === 0
+          ? null
+          : uiState.selectedWaypointId != null && wps.some((w) => w.id === uiState.selectedWaypointId)
+            ? uiState.selectedWaypointId
+            : null,
+    })
+  }, [uiState.selectedWaypointId])
 
   useEffect(() => {
     const w = window as Window & {
@@ -263,13 +217,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [setWaypoints])
 
   const updateWaypoint = useCallback((id: string, patch: Partial<Waypoint>) => {
-    dispatch({ type: 'UPDATE_WAYPOINT', payload: { id, patch } })
+    osgUpdateRouteWaypoint(id, patch)
   }, [])
 
   const removeWaypoint = useCallback((id: string) => {
-    dispatch({ type: 'REMOVE_WAYPOINT', payload: id })
+    tier1Debug('waypoint', 'remove', { id })
+    osgRemoveRouteWaypoint(id)
     emitWaypointRemoved(id)
-  }, [])
+    if (uiState.selectedWaypointId === id) {
+      dispatch({ type: 'SELECT_WAYPOINT', payload: null })
+    }
+  }, [uiState.selectedWaypointId])
 
   const selectWaypoint = useCallback((id: string | null) => {
     dispatch({ type: 'SELECT_WAYPOINT', payload: id })
@@ -280,7 +238,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const setPendingType = useCallback((type: WaypointType) => {
-    dispatch({ type: 'SET_PENDING_TYPE', payload: type })
+    osgSetPendingWaypointType(type)
   }, [])
 
   const setNextWaypointLabel = useCallback((label: string) => {
@@ -312,11 +270,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const confirmWaypointArrival = useCallback(() => {
-    dispatch({ type: 'CONFIRM_WAYPOINT_ARRIVAL' })
-  }, [])
+    tier1Debug('waypoint', 'confirm-arrival', { count: waypoints.length })
+    osgConfirmWaypointArrival()
+  }, [waypoints.length])
 
   const restoreArchivedWaypointById = useCallback((id: string) => {
-    dispatch({ type: 'RESTORE_ARCHIVED_WAYPOINT', payload: id })
+    osgRestoreArchivedRouteWaypoint(id)
   }, [])
 
   const setDeadManTime = useCallback((t: number) => {
@@ -329,11 +288,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     try {
-      localStorage.setItem(APP_STORAGE_KEY, JSON.stringify(state))
+      localStorage.setItem(UI_PREFS_KEY, JSON.stringify(uiState))
     } catch {
       // Ignore storage failures (private mode/quota).
     }
-  }, [state])
+  }, [uiState])
 
   const value = useMemo(
     () => ({

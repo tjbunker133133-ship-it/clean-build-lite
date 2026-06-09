@@ -1,0 +1,190 @@
+/**
+ * Modern Layer — Grounded Immersion
+ * Terrain readable · localized environmental reactivity · calm camera
+ */
+
+/* ═══ Gentle entry — environmental fade only (no camera drama) ═════════════ */
+
+html[data-field-entry='settling'] [data-testid='radar-atmospheric-noise'],
+html[data-field-entry='settling'] [data-testid='atmospheric-environment'],
+html[data-field-entry='settling'] [data-modern-field-compositor] {
+  animation: envFadeIn 1.4s ease forwards;
+}
+
+@keyframes envFadeIn {
+  from { opacity: 0.35; }
+  to { opacity: 1; }
+}
+
+/* ═══ Baseline — preserve terrain readability ═════════════════════════════ */
+
+html[data-hud-mode='immersive'] #map-first-container .map-layer {
+  position: relative;
+}
+
+html[data-hud-mode='immersive'] #map-first-container .maplibregl-canvas {
+  filter: saturate(0.94) contrast(0.96) brightness(0.98);
+  transition: filter 2s ease;
+}
+
+/* Phase 3/5 canvas modulation — only when ERL active in Modern */
+html[data-hud-mode='immersive'][data-erl-active='true'] #map-first-container .maplibregl-canvas {
+  filter: saturate(var(--erl-canvas-saturate, 0.94))
+    contrast(var(--erl-canvas-contrast, 0.96))
+    brightness(var(--erl-canvas-brightness, 0.98));
+}
+
+/* ERL presentation vars scoped to Modern shell — not Classic/Balanced */
+[data-mode-root='modern'] {
+  --erl-trail-emergence: 0;
+  --erl-forward-weather: 0;
+  --erl-field-pressure: 0;
+}
+
+/* Soft edge grounding — not a dark wash */
+html[data-hud-mode='immersive'] #map-first-container .map-layer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  background: radial-gradient(
+    ellipse 130% 100% at 50% 48%,
+    transparent 55%,
+    rgba(8, 12, 18, 0.12) 100%
+  );
+  mix-blend-mode: multiply;
+}
+
+html[data-hud-mode='immersive'][data-modern-zoom='street'] #map-first-container .maplibregl-canvas {
+  filter: saturate(0.92) contrast(0.95) brightness(0.97);
+}
+
+html[data-hud-mode='immersive'][data-modern-zoom='mid'] #map-first-container .maplibregl-canvas {
+  filter: saturate(0.93) contrast(0.96) brightness(0.98);
+}
+
+html[data-hud-mode='immersive'][data-modern-zoom='regional'] #map-first-container .maplibregl-canvas {
+  filter: saturate(0.95) contrast(0.97) brightness(0.99);
+}
+
+/* ═══ Localized feature influence (not global tint) ═══════════════════════ */
+
+html[data-field-fire='active'] #map-first-container .map-layer::after {
+  background:
+    radial-gradient(ellipse 80% 60% at 55% 45%, rgba(120, 48, 28, 0.06) 0%, transparent 65%),
+    radial-gradient(ellipse 130% 100% at 50% 48%, transparent 55%, rgba(8, 12, 18, 0.12) 100%);
+}
+
+html[data-field-camp='active'] [data-modern-field-compositor] {
+  background-image: radial-gradient(
+    ellipse 50% 40% at 60% 55%,
+    rgba(200, 150, 90, 0.04) 0%,
+    transparent 70%
+  );
+}
+
+/* ═══ Environmental layers ════════════════════════════════════════════════ */
+
+[data-modern-substrate-veil] {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  mix-blend-mode: soft-light;
+}
+
+[data-modern-field-motion] {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+
+html[data-hud-mode='immersive'] .maplibregl-canvas-container {
+  isolation: isolate;
+}
+
+/* Radar — ambient motion density, very subtle */
+@keyframes modernFieldTurbulence {
+  0%, 100% { opacity: var(--modern-field-presence, 0.18); }
+  50% { opacity: calc(var(--modern-field-presence, 0.18) * 1.06); }
+}
+
+@keyframes modernFieldFlow {
+  0% { background-position: 0% 0%, 30% 40%; }
+  100% { background-position: 100% 100%, 70% 60%; }
+}
+
+[data-testid='radar-atmospheric-noise'] {
+  animation:
+    modernFieldTurbulence var(--modern-field-pulse-sec, 8s) ease-in-out infinite alternate,
+    modernFieldFlow 72s linear infinite !important;
+  background-size: 100% 100%, 180% 180% !important;
+  mix-blend-mode: soft-light !important;
+}
+
+html[data-modern-device='mobile'] { --modern-field-presence: 0.2; }
+html[data-modern-device='tablet'] { --modern-field-presence: 0.17; }
+html[data-modern-device='desktop'] { --modern-field-presence: 0.14; }
+
+[data-testid='atmospheric-environment'] {
+  z-index: 2 !important;
+}
+
+/* ═══ UI — minimal, assistive ═════════════════════════════════════════════ */
+
+[data-mode-root='modern'] .modern-spatial-sheet > div,
+[data-mode-root='modern'] [data-sheet-layer='modern'] > div {
+  background: linear-gradient(
+    180deg,
+    rgba(14, 18, 22, 0.78) 0%,
+    rgba(10, 14, 18, 0.86) 100%
+  ) !important;
+  border: 1px solid rgba(255, 255, 255, 0.05) !important;
+  backdrop-filter: blur(24px) saturate(1.02) !important;
+  -webkit-backdrop-filter: blur(24px) saturate(1.02) !important;
+  box-shadow: 0 -4px 32px rgba(0, 0, 0, 0.18) !important;
+  animation: modernSheetEmerge 360ms ease both !important;
+}
+
+@keyframes modernSheetEmerge {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+[data-mode-root='modern'] [data-modern-field-scan-rail],
+[data-mode-root='modern'] [data-testid='field-navigation-hint'],
+[data-mode-root='modern'] [data-testid='field-intent-readout'] {
+  opacity: 0 !important;
+  height: 0 !important;
+  overflow: hidden !important;
+  pointer-events: none !important;
+}
+
+[data-mode-root='modern'] [data-testid='modern-active-layers-chip'] {
+  background: rgba(12, 16, 20, 0.5) !important;
+  border-color: rgba(255, 255, 255, 0.05) !important;
+  backdrop-filter: blur(12px) !important;
+  font-size: 11px !important;
+}
+
+[data-testid='environmental-reaction-layer'] > div {
+  backdrop-filter: blur(12px) !important;
+  border-color: rgba(255, 255, 255, 0.05) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-hud-mode='immersive'] #map-first-container .maplibregl-canvas {
+    transition: none !important;
+  }
+
+  [data-testid='radar-atmospheric-noise'],
+  [data-modern-field-motion],
+  [data-modern-substrate-veil],
+  [data-modern-field-compositor],
+  html[data-field-entry='settling'] [data-testid='radar-atmospheric-noise'] {
+    animation: none !important;
+    transform: none !important;
+  }
+}

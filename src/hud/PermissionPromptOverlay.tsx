@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useGPS } from '../hooks/useGPS'
+import { useHudPresentation } from '../context/HudPresentationContext'
 import { getPermissionSnapshot, type PermissionStateLike } from '../lib/devicePermissions'
 import PermissionWizard from './PermissionWizard'
 import { resetAppState } from '../utils/resetApp'
@@ -59,6 +60,7 @@ export function shouldAutoReopenWizard(args: {
 }
 
 export default function PermissionPromptOverlay() {
+  const { mode } = useHudPresentation()
   const gps = useGPS()
   const gpsRef = useRef(gps)
   gpsRef.current = gps
@@ -133,12 +135,15 @@ export default function PermissionPromptOverlay() {
       if (s.geolocation === 'granted' || s.geolocation === 'denied') {
         safeLocalStorageSet(GPS_PERMISSION_KEY, s.geolocation)
       }
-      const shouldShowWizard = !wizardCompleted
+      // CRITICAL FIX: Don't auto-open permission wizard in Balanced/Modern modes
+      // Classic/Legacy mode handles permissions through the Cockpit setup flow
+      const isClassicMode = mode === 'legacy'
+      const shouldShowWizard = !wizardCompleted && isClassicMode
       if (shouldShowWizard) {
         setVisible(true)
       }
     })
-  }, [])
+  }, [mode])
 
   // CONTRACT-SENSITIVE (iOS / PWA loop prevention): this watchdog exists
   // because Safari often leaves GPS in searching/idle/error briefly after

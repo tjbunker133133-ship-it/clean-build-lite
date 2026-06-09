@@ -3,13 +3,16 @@ import { useAppContext } from '../context/AppContext'
 import { useMissionSync } from '../context/MissionSyncContext'
 import { parseTeamMessageVoice, buildTeammateMessageCommandSpecs, listLinkedFieldCallsigns } from '../lib/missionSync/teamComms'
 import { tryHandleMissionCommsVoice } from '../lib/missionSync/missionCommsVoiceBridge'
-import { useCockpit } from '../context/CockpitContext'
+import { useCockpitOptional } from '../context/CockpitContext'
 import { useOverlayContext } from '../context/OverlayContext'
 import { useMapContext } from '../context/MapContext'
 import { usePanelData } from '../context/PanelDataContext'
 import type { LayerType } from '../types'
 import { useGPS } from './useGPS'
 import { formatDistance, haversineDistance, totalRouteDistance } from '../lib/haversine'
+// Phase 2: Intent Unification
+import { WaypointIntentResolver, traceWaypointIntent } from '../lib/mapIntent/WaypointIntentResolver'
+import { createWaypoint } from '../lib/waypoints/createWaypoint'
 import {
   HALF_CORRIDOR_FEET,
   corridorSeverity,
@@ -18,6 +21,7 @@ import {
 } from '../lib/corridor'
 import { fetchWeather } from '../lib/weather'
 import { fetchElevationMeters } from '../lib/elevation'
+import { requestCameraIntent } from '../lib/operationalPerception/perceptionEngine'
 import {
   markCommandResolving,
   recordCommandDispatch,
@@ -126,7 +130,11 @@ export function useHudCommands(): {
   const { map } = useMapContext()
   const gps = useGPS()
   const { state, addWaypoint, removeWaypoint, setWaypoints, setLayer } = useAppContext()
-  const { setScreenHue, resetLayout, raisePanel, updatePanel } = useCockpit()
+  const cockpit = useCockpitOptional()
+  const setScreenHue = cockpit?.setScreenHue ?? (() => {})
+  const resetLayout = cockpit?.resetLayout ?? (() => {})
+  const raisePanel = cockpit?.raisePanel ?? (() => {})
+  const updatePanel = cockpit?.updatePanel ?? (() => {})
   const { setEnabled: setOverlayEnabled } = useOverlayContext()
   const panelData = usePanelData()
   const missionSync = useMissionSync()
@@ -221,8 +229,8 @@ export function useHudCommands(): {
         paletteVisible: true,
         group: 'Navigation',
         run: () => {
-          if (!map || gps.lat == null || gps.lng == null) return fail('GPS center unavailable.')
-          map.easeTo({ center: [gps.lng, gps.lat], duration: 480, essential: true })
+          if (gps.lat == null || gps.lng == null) return fail('GPS center unavailable.')
+          requestCameraIntent({ kind: 'ease_to', center: [gps.lng, gps.lat], durationMs: 480 })
           return ok('Centered on your GPS.')
         },
       },
@@ -232,8 +240,7 @@ export function useHudCommands(): {
         paletteVisible: true,
         group: 'Navigation',
         run: () => {
-          if (!map) return fail('Map unavailable.')
-          map.zoomTo(map.getZoom() + 1, { duration: 250 })
+          requestCameraIntent({ kind: 'zoom_by', delta: 1, durationMs: 250 })
           return ok('Zooming in.')
         },
       },
@@ -243,8 +250,7 @@ export function useHudCommands(): {
         paletteVisible: true,
         group: 'Navigation',
         run: () => {
-          if (!map) return fail('Map unavailable.')
-          map.zoomTo(map.getZoom() - 1, { duration: 250 })
+          requestCameraIntent({ kind: 'zoom_by', delta: -1, durationMs: 250 })
           return ok('Zooming out.')
         },
       },
@@ -258,7 +264,11 @@ export function useHudCommands(): {
           const step = 0.04
           const dLat = dir === 'north' ? step : dir === 'south' ? -step : 0
           const dLng = dir === 'east' ? step : dir === 'west' ? -step : 0
-          map.easeTo({ center: [c.lng + dLng, c.lat + dLat], duration: 220, essential: true })
+          requestCameraIntent({
+            kind: 'ease_to',
+            center: [c.lng + dLng, c.lat + dLat],
+            durationMs: 220,
+          })
           return ok(`Panning ${dir}.`)
         },
       })),
@@ -296,12 +306,12 @@ export function useHudCommands(): {
         label: 'Recenter on attached pin',
         group: 'Pin',
         run: () => {
-          if (!map || !attachedPin) return fail('No attached pin.')
-          map.easeTo({
+          if (!attachedPin) return fail('No attached pin.')
+          requestCameraIntent({
+            kind: 'ease_to',
             center: [attachedPin.lng, attachedPin.lat],
-            zoom: Math.max(14, map.getZoom()),
-            duration: 520,
-            essential: true,
+            zoom: 14,
+            durationMs: 520,
           })
           return ok(`Recentered to ${attachedPin.label}.`)
         },
@@ -320,12 +330,11 @@ export function useHudCommands(): {
         run: () => {
           const first = state.waypoints[0]
           if (!first) return fail('No route pins. Add pins first.')
-          if (!map) return fail('Map unavailable.')
-          map.easeTo({
+          requestCameraIntent({
+            kind: 'ease_to',
             center: [first.lng, first.lat],
-            zoom: Math.max(14, map.getZoom()),
-            duration: 520,
-            essential: true,
+            zoom: 14,
+            durationMs: 520,
           })
           return ok(`Centered on ${first.label}, first pin in route.`)
         },
@@ -370,8 +379,7 @@ export function useHudCommands(): {
         label: 'Calibrate compass',
         group: 'Compass',
         run: () => {
-          if (!map) return fail('Compass unavailable.')
-          map.easeTo({ bearing: 0, duration: 280, essential: true })
+          requestCameraIntent({ kind: 'ease_to', bearing: 0, durationMs: 280 })
           return ok('Compass calibrated.')
         },
       },
@@ -384,16 +392,127 @@ export function useHudCommands(): {
         group: 'Route',
         run: () => {
           if (gps.lat == null || gps.lng == null) return fail('GPS fix required.')
-          const idx = state.waypoints.length + 1
-          addWaypoint({
-            id: `wp_voice_${Date.now()}`,
-            lat: gps.lat,
-            lng: gps.lng,
-            label: `VOICE-${idx}`,
-            type: 'default',
-            createdAt: Date.now(),
-          })
+          // Phase 2: Voice → Intent → createWaypoint
+          const intent = WaypointIntentResolver.fromVoice(
+            { type: 'default', confidence: 1 },
+            { lat: gps.lat, lng: gps.lng }
+          )
+          traceWaypointIntent(intent)
+          const waypoint = createWaypoint(intent)
+          if (!waypoint) return fail('Failed to create waypoint.')
+          addWaypoint(waypoint)
           return ok('Pin added at current location.')
+        },
+      },
+
+      // Phase 2: Voice waypoint type commands via Intent Resolver
+      // Voice → Intent → createWaypoint() unified pattern
+      {
+        id: 'drop camp',
+        label: 'Drop camp waypoint at GPS',
+        aliases: ['add camp', 'drop camp waypoint', 'add camp waypoint', 'camp here'],
+        group: 'Route',
+        run: () => {
+          if (gps.lat == null || gps.lng == null) return fail('GPS fix required.')
+          const intent = WaypointIntentResolver.fromVoice(
+            { type: 'camp', confidence: 1 },
+            { lat: gps.lat, lng: gps.lng }
+          )
+          traceWaypointIntent(intent)
+          const waypoint = createWaypoint(intent)
+          if (!waypoint) return fail('Failed to create waypoint.')
+          addWaypoint(waypoint)
+          return ok('Camp waypoint added at current location.')
+        },
+      },
+      {
+        id: 'drop water',
+        label: 'Drop water waypoint at GPS',
+        aliases: ['add water', 'drop water waypoint', 'add water waypoint', 'water here', 'water cache'],
+        group: 'Route',
+        run: () => {
+          if (gps.lat == null || gps.lng == null) return fail('GPS fix required.')
+          const intent = WaypointIntentResolver.fromVoice(
+            { type: 'water', confidence: 1 },
+            { lat: gps.lat, lng: gps.lng }
+          )
+          traceWaypointIntent(intent)
+          const waypoint = createWaypoint(intent)
+          if (!waypoint) return fail('Failed to create waypoint.')
+          addWaypoint(waypoint)
+          return ok('Water waypoint added at current location.')
+        },
+      },
+      {
+        id: 'drop start',
+        label: 'Drop start waypoint at GPS',
+        aliases: ['add start', 'drop start waypoint', 'add start waypoint', 'start here', 'mark start'],
+        group: 'Route',
+        run: () => {
+          if (gps.lat == null || gps.lng == null) return fail('GPS fix required.')
+          const intent = WaypointIntentResolver.fromVoice(
+            { type: 'start', confidence: 1 },
+            { lat: gps.lat, lng: gps.lng }
+          )
+          traceWaypointIntent(intent)
+          const waypoint = createWaypoint(intent)
+          if (!waypoint) return fail('Failed to create waypoint.')
+          addWaypoint(waypoint)
+          return ok('Start waypoint added at current location.')
+        },
+      },
+      {
+        id: 'drop finish',
+        label: 'Drop finish waypoint at GPS',
+        aliases: ['add finish', 'drop finish waypoint', 'add finish waypoint', 'finish here', 'mark finish', 'end here'],
+        group: 'Route',
+        run: () => {
+          if (gps.lat == null || gps.lng == null) return fail('GPS fix required.')
+          const intent = WaypointIntentResolver.fromVoice(
+            { type: 'finish', confidence: 1 },
+            { lat: gps.lat, lng: gps.lng }
+          )
+          traceWaypointIntent(intent)
+          const waypoint = createWaypoint(intent)
+          if (!waypoint) return fail('Failed to create waypoint.')
+          addWaypoint(waypoint)
+          return ok('Finish waypoint added at current location.')
+        },
+      },
+      {
+        id: 'drop rest',
+        label: 'Drop rest waypoint at GPS',
+        aliases: ['add rest', 'drop rest waypoint', 'add rest waypoint', 'rest here', 'rest stop', 'break here'],
+        group: 'Route',
+        run: () => {
+          if (gps.lat == null || gps.lng == null) return fail('GPS fix required.')
+          const intent = WaypointIntentResolver.fromVoice(
+            { type: 'rest', confidence: 1 },
+            { lat: gps.lat, lng: gps.lng }
+          )
+          traceWaypointIntent(intent)
+          const waypoint = createWaypoint(intent)
+          if (!waypoint) return fail('Failed to create waypoint.')
+          addWaypoint(waypoint)
+          return ok('Rest waypoint added at current location.')
+        },
+      },
+      {
+        id: 'drop poi',
+        label: 'Drop POI waypoint at GPS',
+        aliases: ['add poi', 'drop poi waypoint', 'add poi waypoint', 'poi here', 'point of interest', 'mark poi'],
+        group: 'Route',
+        run: () => {
+          if (gps.lat == null || gps.lng == null) return fail('GPS fix required.')
+          const intent = WaypointIntentResolver.fromVoice(
+            { type: 'poi', confidence: 1 },
+            { lat: gps.lat, lng: gps.lng }
+          )
+          traceWaypointIntent(intent)
+          const waypoint = createWaypoint(intent)
+          if (!waypoint) return fail('Failed to create waypoint.')
+          addWaypoint(waypoint)
+          return ok('Point of interest added at current location.')
         },
       },
       {

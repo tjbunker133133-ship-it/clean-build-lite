@@ -10,3 +10,19 @@ declare module 'virtual:pwa-register' {
     onOfflineReady?: () => void
   }): () => void
 }
+
+interface ERLDevBridge {
+  instance: import('./hud/modernMode/erl/EnvironmentalRelationshipLayer').EnvironmentalRelationshipLayer
+  state: () => import('./hud/modernMode/erl/types').ERLState
+  simulate: (
+    snap: Partial<import('./hud/modernMode/erl/types').FIMRuntimeSnapshot>,
+    patch?: import('./hud/modernMode/erl/types').ERLSimulationPatch,
+  ) => void
+  clear: () => void
+  activate: () => void
+  handleSOSArmed: () => void
+}
+
+interface Window {
+  __erl?: ERLDevBridge
+}

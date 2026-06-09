@@ -53,6 +53,16 @@ export function isSessionActive(id: EnvironmentalOverlayId, sessionId: SessionId
   return activeSessions.get(id) === sessionId
 }
 
+/** Active session id for overlay, if any (used to dedupe spurious re-sync). */
+export function getActiveOverlaySession(id: EnvironmentalOverlayId): SessionId | undefined {
+  return activeSessions.get(id)
+}
+
+/** True while overlay has a loading timeout / in-flight fetch for this session. */
+export function isOverlayFetchInFlight(id: EnvironmentalOverlayId): boolean {
+  return loadingMap.has(id)
+}
+
 /**
  * Clear active session for overlay (called on disable/unmount).
  */
@@ -132,6 +142,33 @@ export function startLoading(
   loadingMap.set(id, entry)
 
   return { state: 'LOADING', enabled: true, startedAt: entry.startedAt }
+}
+
+/**
+ * Extend loading timeout when an overlay waits on a shared queue (e.g. Overpass).
+ * totalBudgetMs is measured from loading start; never shortens an existing deadline.
+ */
+export function ensureLoadingTimeoutAtLeast(
+  id: EnvironmentalOverlayId,
+  sessionId: SessionId,
+  totalBudgetMs: number,
+): void {
+  const entry = loadingMap.get(id)
+  if (!entry || entry.sessionId !== sessionId) return
+
+  const elapsed = Date.now() - entry.startedAt
+  const cappedTotal = Math.min(Math.max(totalBudgetMs, OVERLAY_TIMEOUT_MS), 120_000)
+  const targetRemaining = Math.max(cappedTotal - elapsed, 5_000)
+  const defaultRemaining = Math.max(OVERLAY_TIMEOUT_MS - elapsed, 0)
+  if (targetRemaining <= defaultRemaining) return
+
+  window.clearTimeout(entry.timeoutId)
+  entry.timeoutId = window.setTimeout(() => {
+    logWarn('OVERLAY', `Loading timeout forced for ${id} [session: ${sessionId.slice(0, 8)}]`)
+    if (isSessionActive(id, sessionId)) {
+      entry.onResolve({ state: 'ERROR', enabled: true, error: 'Loading timeout — try again or check network' })
+    }
+  }, targetRemaining)
 }
 
 /**

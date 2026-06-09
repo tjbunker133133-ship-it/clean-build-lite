@@ -2,6 +2,7 @@ import type { GeoJSONSource, Map } from 'maplibre-gl'
 import { traceOverlay } from '../../runtime/runtimeForensics'
 import { logWarn } from '../../runtime/logger'
 import { overlayDef } from './catalog'
+import { readCachedOverlayGeo } from './overlayCache'
 import { rasterPaint, rasterTileUrls } from './sources'
 import type { EnvironmentalOverlayId } from './types'
 
@@ -16,6 +17,24 @@ export function envSourceId(id: EnvironmentalOverlayId): string {
 
 export function envLayerId(id: EnvironmentalOverlayId): string {
   return `${LAYER_PREFIX}${id}`
+}
+
+/** True when HUD overlay layers are already attached (skip redundant re-sync). */
+export function environmentalOverlayOnMap(map: Map, id: EnvironmentalOverlayId): boolean {
+  if (!mapStyleMutable(map)) return false
+  try {
+    if (id === 'camping') {
+      const base = envLayerId(id)
+      return (
+        map.getLayer(`${base}-points`) != null ||
+        map.getLayer(`${base}-polygons-fill`) != null ||
+        map.getLayer(`${base}-polygons-outline`) != null
+      )
+    }
+    return map.getLayer(envLayerId(id)) != null
+  } catch {
+    return false
+  }
 }
 
 /** Style object exists — safe to add HUD overlay sources (do not gate on tile load). */
@@ -275,8 +294,8 @@ export function applyGeojsonOverlay(
           layout: { 'line-join': 'round', 'line-cap': 'round' },
           paint: {
             'line-color': lineColor,
-            'line-width': id === 'hiking_trails' ? 2.2 : 2.8,
-            'line-opacity': 0.88,
+            'line-width': id === 'hiking_trails' ? 2.8 : 3.2,
+            'line-opacity': 0.92,
             ...(id === 'abandoned_rail' ? { 'line-dasharray': [2, 2] } : {}),
           },
         },
@@ -321,6 +340,32 @@ export function applyGeojsonOverlay(
   }
 }
 
+/**
+ * Re-attach overlay sources/layers after basemap setStyle without starting a new fetch session.
+ * Returns true when layers are on-map (already present, raster applied, or cache restored).
+ */
+export function reattachEnvironmentalOverlay(map: Map, id: EnvironmentalOverlayId): boolean {
+  if (environmentalOverlayOnMap(map, id)) return true
+  const def = overlayDef(id)
+  if (def.delivery === 'raster-wms') {
+    const ok = applyRasterOverlay(map, id)
+    traceOverlay(ok ? 'reattach_raster_success' : 'reattach_raster_fail', { overlayId: id })
+    return ok
+  }
+  if (def.delivery === 'geojson-overpass' && def.offlineCacheable) {
+    const bbox = mapBboxFromMap(map)
+    const cached = readCachedOverlayGeo(id, bbox)
+    if (cached && applyGeojsonOverlay(map, id, cached.geojson)) {
+      traceOverlay('reattach_cache_success', {
+        overlayId: id,
+        featureCount: cached.geojson.features.length,
+      })
+      return true
+    }
+  }
+  return false
+}
+
 export function mapBboxFromMap(map: Map): import('./types').MapBbox {
   const b = map.getBounds()
   return {
@@ -331,11 +376,33 @@ export function mapBboxFromMap(map: Map): import('./types').MapBbox {
   }
 }
 
+/**
+ * Check if overlay should be blocked by zoom level.
+ *
+ * SITUATIONAL vs DETAIL RENDER MODE:
+ * - 'situational': Always allow (fires, USGS, boundaries, safety data)
+ * - 'detail': Respect minZoom gate (trails, mines, POIs)
+ */
 export function overlayZoomBlocked(
   map: Map,
   id: EnvironmentalOverlayId,
-): { blocked: boolean; message?: string } {
+): { blocked: boolean; message?: string; bypassedByRenderMode?: boolean } {
   const def = overlayDef(id)
+  const renderMode = def.renderMode ?? 'detail' // Default to detail for backward compatibility
+
+  // SITUATIONAL MODE: Always allow rendering regardless of zoom
+  if (renderMode === 'situational') {
+    const z = map.getZoom()
+    traceOverlay('situational_zoom_bypass', {
+      overlayId: id,
+      currentZoom: z.toFixed(2),
+      minZoom: def.minZoom ?? 0,
+      renderMode,
+    })
+    return { blocked: false, bypassedByRenderMode: true }
+  }
+
+  // DETAIL MODE: Apply minZoom gate
   const minZ = def.minZoom ?? 0
   const z = map.getZoom()
   if (z + 0.05 < minZ) {
@@ -344,6 +411,7 @@ export function overlayZoomBlocked(
       currentZoom: z.toFixed(2),
       requiredZoom: minZ,
       difference: (minZ - z).toFixed(2),
+      renderMode,
       message: `Zoom in closer (map level ${minZ}+) to load ${def.label.toLowerCase()}.`
     })
     return {

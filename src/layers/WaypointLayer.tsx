@@ -12,6 +12,7 @@ import {
   shouldUseWaypointPointerDrag,
 } from '../lib/waypointMarkerDrag'
 import { setWaypointMarkerTouchActive } from '../lib/waypointMarkerTouchGate'
+import { hudConfirm } from '../lib/hudConfirm'
 
 /** Micro-shift so visual circle tip meets route vertex ([y negative] = nudge up). Tune: [0,-1] … [0,-3] or ±x for horizontal. */
 const WAYPOINT_PIN_OFFSET_PX: [number, number] = [0, -2]
@@ -141,8 +142,14 @@ export default function WaypointLayer() {
           marker.getElement().addEventListener('contextmenu', (ev) => {
             ev.preventDefault()
             ev.stopPropagation()
-            const ok = window.confirm(`Delete waypoint "${wp.label}"?`)
-            if (ok) removeWaypoint(wp.id)
+            void hudConfirm({
+              title: 'Delete waypoint?',
+              message: `Delete waypoint "${wp.label}"?`,
+              confirmLabel: 'Delete',
+              destructive: true,
+            }).then((ok) => {
+              if (ok) removeWaypoint(wp.id)
+            })
           })
           markersRef.current[wp.id] = marker
           markerEl.style.opacity = String(dimOpacity)
@@ -170,8 +177,11 @@ export default function WaypointLayer() {
 
         const root = document.createElement('div')
         root.className = 'marker'
+        root.dataset.testid = 'waypoint'
+        root.setAttribute('data-testid', 'waypoint')
         root.dataset.lowPower = lowPowerMode ? '1' : '0'
         root.style.opacity = String(dimOpacity)
+        root.style.cursor = 'pointer'
         if (isActive) {
           root.style.filter = 'drop-shadow(0 0 6px rgba(125,255,138,0.75))'
         }
@@ -191,28 +201,27 @@ export default function WaypointLayer() {
         const deleteBadge = document.createElement('button')
         deleteBadge.type = 'button'
         deleteBadge.className = 'marker-badge'
+        deleteBadge.setAttribute('data-testid', 'waypoint-delete')
         deleteBadge.textContent = '×'
         deleteBadge.setAttribute('aria-label', `Delete waypoint ${wp.label}`)
         root.appendChild(deleteBadge)
 
-        const askDelete = () => {
-          const ok = window.confirm(`Delete waypoint "${wp.label}"?`)
-          if (!ok) return
-          removeWaypoint(wp.id)
-        }
-        deleteBadge.addEventListener('pointerdown', (ev) => {
-          ev.preventDefault()
-          ev.stopPropagation()
-        })
         deleteBadge.addEventListener('click', (ev) => {
           ev.preventDefault()
           ev.stopPropagation()
-          askDelete()
-        })
-        root.addEventListener('contextmenu', (ev) => {
-          ev.preventDefault()
-          ev.stopPropagation()
-          askDelete()
+          ev.stopImmediatePropagation()
+          if (!wp.id || !removeWaypoint) {
+            console.warn('[WaypointLayer] Delete attempted without valid ID or handler')
+            return
+          }
+          void hudConfirm({
+            title: 'Delete waypoint?',
+            message: `Delete waypoint "${wp.label}"?`,
+            confirmLabel: 'Delete',
+            destructive: true,
+          }).then((ok) => {
+            if (ok) removeWaypoint(wp.id)
+          })
         })
 
         const marker = new maplibregl.Marker({

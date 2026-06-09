@@ -30,5 +30,5 @@ export default function DisplayModeOverlay() {
     [prefs, prefs.screen_hue, state.activeLayer],
   )
 
-  return <div id="display-mode-overlay" className={modeClass} style={overlayStyle} aria-hidden />
+  return <div id="display-mode-overlay" className={`${modeClass} hud-pointer-pass-through`} style={overlayStyle} aria-hidden />
 }

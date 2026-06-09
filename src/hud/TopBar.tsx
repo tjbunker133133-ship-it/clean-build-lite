@@ -1,13 +1,18 @@
 import React, { useCallback } from 'react'
-import { useCockpit } from '../context/CockpitContext'
+import { useCockpitOptional } from '../context/CockpitContext'
 import { useMapContext } from '../context/MapContext'
-import { useDeviceHeading } from '../hooks/useDeviceHeading'
+import { useHudPresentation } from '../context/HudPresentationContext'
+import { useDeviceHeading, type DeviceHeadingState } from '../hooks/useDeviceHeading'
 import { deriveGpsUiStatus, useGPS } from '../hooks/useGPS'
 import { useTacticalProfile } from '../hooks/useTacticalProfile'
 import { useTravelSpeed } from '../hooks/useTravelSpeed'
 import { requestDeviceOrientationPermission } from '../lib/deviceHeading'
 import { getDeviceProfile } from '../runtime/deviceProfile'
-import CompassDial from './CompassDial'
+import { requestCameraIntent } from '../lib/operationalPerception/perceptionEngine'
+import ClassicCompass from './compass/ClassicCompass'
+import BalancedCompass from './compass/BalancedCompass'
+import ModernEnvironmentalCompass from './compass/ModernEnvironmentalCompass'
+import { MODERN_MICRO_BAR, BALANCED_MICRO_BAR } from './modernMode/modernVisualTokens'
 import { topBarContentHeightPx } from './hudLayout'
 import { touchFontSm, touchFontMd, touchGapMd, touchMinTarget } from './tokens'
 
@@ -21,9 +26,18 @@ function LocateIcon() {
   )
 }
 
-export default function TopBar() {
+interface TopBarProps {
+  /** Callback to open modern preflight wizard (Modern Mode only) */
+  onOpenPreflight?: () => void
+}
+
+export default function TopBar({ onOpenPreflight }: TopBarProps = {}) {
   const { map } = useMapContext()
-  const { raisePanel, updatePanel } = useCockpit()
+  const { raisePanel, updatePanel } = useCockpitOptional() ?? {
+    raisePanel: () => {},
+    updatePanel: () => {},
+  }
+  const { microStatusBar, mode } = useHudPresentation()
   const { operationalReady } = useTacticalProfile()
   const gps = useGPS()
   const gpsUi = deriveGpsUiStatus(gps)
@@ -43,7 +57,7 @@ export default function TopBar() {
   const isCompact = profile.width < 720 || profile.isCoarsePointer
   const hasFix = gps.lat != null && gps.lng != null
   const dialSize = isCompact ? 54 : 58
-  const barHeight = topBarContentHeightPx()
+  const barHeight = microStatusBar ? 36 : topBarContentHeightPx()
 
   const enableCompass = useCallback(async () => {
     const result = await requestDeviceOrientationPermission()
@@ -52,20 +66,74 @@ export default function TopBar() {
     }
   }, [])
 
-  const locateMe = () => {
-    if (!map || !hasFix) return
-    map.easeTo({
-      center: [gps.lng!, gps.lat!],
-      zoom: Math.max(map.getZoom(), 14),
-      duration: 750,
-      essential: true,
+  const locateMe = useCallback(() => {
+    if (!hasFix || gps.lng == null || gps.lat == null) return
+    requestCameraIntent({
+      kind: 'ease_to',
+      center: [gps.lng, gps.lat],
+      zoom: 14,
+      durationMs: 750,
     })
-  }
+  }, [hasFix, gps.lng, gps.lat])
 
-  const openPreflight = useCallback(() => {
+  // Legacy preflight opener (Classic/Legacy modes only - NOT Balanced)
+  const openLegacyPreflight = useCallback(() => {
     updatePanel('preflight', { docked: false, minimized: false })
     raisePanel('preflight')
   }, [raisePanel, updatePanel])
+
+  // CRITICAL FIX: Balanced mode should NOT use Classic preflight (cross-layer contamination)
+  // - Modern mode: use prop callback
+  // - Classic/Legacy mode: use legacy opener
+  // - Balanced mode (hybrid with microStatusBar): no-op (Balanced has its own UI)
+  const handleOpenPreflight = useCallback(() => {
+    if (onOpenPreflight && mode === 'immersive') {
+      onOpenPreflight()
+    } else if (mode === 'legacy') {
+      // Only use Classic preflight in true Legacy mode, NOT in Balanced (hybrid)
+      openLegacyPreflight()
+    }
+    if (mode === 'hybrid' && !operationalReady) {
+      window.dispatchEvent(new CustomEvent('hud:show-permissions'))
+    }
+  }, [onOpenPreflight, mode, openLegacyPreflight, operationalReady])
+
+  // Micro status bar for hybrid/immersive modes — distinct identity per layer
+  if (microStatusBar) {
+    if (mode === 'immersive') {
+      return (
+        <ModernMicroBar
+          operationalReady={operationalReady}
+          gpsUi={gpsUi}
+          heading={heading}
+          status={status}
+          cardinal={cardinal}
+          hasFix={hasFix}
+          locateMe={locateMe}
+          isCompact={isCompact}
+          dialSize={isCompact ? 28 : 32}
+        />
+      )
+    }
+    return (
+      <BalancedMicroBar
+        operationalReady={operationalReady}
+        gpsUi={gpsUi}
+        speed={speed}
+        heading={heading}
+        status={status}
+        cardinal={cardinal}
+        hasFix={hasFix}
+        locateMe={locateMe}
+        fontSm={fontSm}
+        tapMin={tapMin}
+        isCompact={isCompact}
+        dialSize={isCompact ? 32 : 36}
+        gps={gps}
+        openPreflight={handleOpenPreflight}
+      />
+    )
+  }
 
   const preflightBorder = operationalReady
     ? 'rgba(125,255,138,0.55)'
@@ -105,7 +173,7 @@ export default function TopBar() {
       >
         <button
           type="button"
-          onClick={openPreflight}
+          onClick={handleOpenPreflight}
           aria-label={
             operationalReady
               ? 'Open preflight checklist — profile ready'
@@ -184,7 +252,7 @@ export default function TopBar() {
       </div>
 
       <div style={{ justifySelf: 'center', paddingBottom: 4, overflow: 'visible' }}>
-        <CompassDial
+        <ClassicCompass
           heading={heading}
           status={status}
           cardinal={cardinal}
@@ -267,6 +335,312 @@ export default function TopBar() {
         >
           <LocateIcon />
           {!isCompact && <span>LOCATE</span>}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// Modern micro bar — environment-first, minimal persistent chrome
+function ModernMicroBar({
+  operationalReady,
+  gpsUi,
+  heading,
+  status,
+  cardinal,
+  hasFix,
+  locateMe,
+  isCompact,
+  dialSize,
+}: {
+  operationalReady: boolean
+  gpsUi: ReturnType<typeof deriveGpsUiStatus>
+  heading: number | null
+  status: DeviceHeadingState['status']
+  cardinal: string
+  hasFix: boolean
+  locateMe: () => void
+  isCompact: boolean
+  dialSize: number
+}) {
+  const statusColor = operationalReady
+    ? 'rgba(52, 199, 89, 0.75)'
+    : gpsUi === 'searching'
+      ? 'rgba(255, 149, 0, 0.75)'
+      : 'rgba(255, 100, 100, 0.65)'
+
+  return (
+    <div
+      className="micro-status-bar modern-micro-bar"
+      data-modern-chrome="environment"
+      style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        height: MODERN_MICRO_BAR.height,
+        zIndex: 200,
+        pointerEvents: 'none',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: `calc(env(safe-area-inset-top, 0px) + 2px) ${isCompact ? 12 : 16}px 0`,
+        background: MODERN_MICRO_BAR.background,
+        borderBottom: MODERN_MICRO_BAR.border,
+      }}
+    >
+      <div
+        aria-hidden
+        style={{
+          position: 'absolute',
+          left: isCompact ? 12 : 16,
+          top: '50%',
+          transform: 'translateY(-50%)',
+          width: 6,
+          height: 6,
+          borderRadius: '50%',
+          background: statusColor,
+          boxShadow: operationalReady ? `0 0 8px ${statusColor}` : undefined,
+          pointerEvents: 'none',
+        }}
+        title={operationalReady ? 'System ready' : 'Setup incomplete'}
+      />
+
+      <div style={{ pointerEvents: 'auto' }}>
+        <ModernEnvironmentalCompass
+          heading={heading}
+          status={status}
+          cardinal={cardinal}
+          size={dialSize}
+        />
+      </div>
+
+      {hasFix && (
+        <button
+          type="button"
+          onClick={locateMe}
+          aria-label="Center map on GPS"
+          style={{
+            position: 'absolute',
+            right: isCompact ? 12 : 16,
+            top: '50%',
+            transform: 'translateY(-50%)',
+            width: 28,
+            height: 28,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderRadius: '50%',
+            border: 'none',
+            background: 'rgba(255, 255, 255, 0.08)',
+            color: 'rgba(255, 255, 255, 0.65)',
+            cursor: 'pointer',
+            pointerEvents: 'auto',
+            touchAction: 'manipulation',
+          }}
+        >
+          <LocateIcon />
+        </button>
+      )}
+    </div>
+  )
+}
+
+// Balanced micro bar — operational workspace strip
+function BalancedMicroBar({
+  operationalReady,
+  gpsUi,
+  speed,
+  heading,
+  status,
+  cardinal,
+  hasFix,
+  locateMe,
+  fontSm,
+  tapMin,
+  isCompact,
+  dialSize,
+  gps,
+  openPreflight,
+}: {
+  operationalReady: boolean
+  gpsUi: ReturnType<typeof deriveGpsUiStatus>
+  speed: { primary: string; secondary: string; moving: boolean }
+  heading: number | null
+  status: DeviceHeadingState['status']
+  cardinal: string
+  hasFix: boolean
+  locateMe: () => void
+  fontSm: number
+  tapMin: number
+  isCompact: boolean
+  dialSize: number
+  gps: ReturnType<typeof useGPS>
+  openPreflight: () => void
+}) {
+  const statusColor = operationalReady
+    ? 'rgba(125,255,138,0.8)'
+    : gpsUi === 'searching'
+      ? 'rgba(251, 191, 36, 0.8)'
+      : 'rgba(255, 100, 100, 0.8)'
+
+  return (
+    <div
+      className="micro-status-bar balanced-micro-bar"
+      data-balanced-chrome="operational"
+      style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        height: BALANCED_MICRO_BAR.height,
+        zIndex: 200,
+        pointerEvents: 'auto',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: `calc(env(safe-area-inset-top, 0px) + 4px) ${isCompact ? 10 : 14}px 0`,
+        background: BALANCED_MICRO_BAR.background,
+        borderBottom: BALANCED_MICRO_BAR.border,
+        backdropFilter: 'blur(10px)',
+        boxShadow: '0 2px 12px rgba(0, 0, 0, 0.25)',
+      }}
+    >
+      {/* Left: GPS + Mission status */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+        }}
+      >
+        <button
+          type="button"
+          onClick={openPreflight}
+          aria-label={operationalReady ? 'System ready' : 'System not ready'}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '3px 8px',
+            borderRadius: 4,
+            border: `1px solid ${statusColor}`,
+            background: `${statusColor.replace('0.8', '0.12')}`,
+            cursor: 'pointer',
+            minHeight: tapMin - 8,
+          }}
+        >
+          <span
+            style={{
+              width: 6,
+              height: 6,
+              borderRadius: '50%',
+              background: statusColor,
+            }}
+          />
+          <span
+            style={{
+              fontSize: fontSm - 1,
+              fontWeight: 600,
+              letterSpacing: '0.08em',
+              color: operationalReady ? '#b8f7c1' : '#e8d5b5',
+              fontFamily: 'var(--font-ui, system-ui)',
+            }}
+          >
+            {operationalReady ? 'READY' : gpsUi === 'searching' ? 'GPS…' : 'SETUP'}
+          </span>
+        </button>
+
+        {/* GPS Accuracy micro-indicator */}
+        {gpsUi === 'locked' && gps.accuracy != null && (
+          <span
+            style={{
+              fontSize: fontSm - 2,
+              color: 'rgba(185, 212, 221, 0.6)',
+              fontFamily: 'var(--font-mono, monospace)',
+              letterSpacing: '0.02em',
+            }}
+          >
+            ±{Math.round(gps.accuracy)}m
+          </span>
+        )}
+      </div>
+
+      {/* Center: Minimal compass dial */}
+      <div style={{ position: 'absolute', left: '50%', transform: 'translateX(-50%)' }}>
+        <BalancedCompass
+          heading={heading}
+          status={status}
+          cardinal={cardinal}
+          size={dialSize}
+        />
+      </div>
+
+      {/* Right: Speed + Locate */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+        }}
+      >
+        {/* Speed micro-display */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'baseline',
+            gap: 3,
+            padding: '2px 8px',
+            borderRadius: 4,
+            background: speed.moving
+              ? 'rgba(94, 234, 212, 0.08)'
+              : 'transparent',
+          }}
+        >
+          <span
+            style={{
+              fontSize: fontSm + 1,
+              fontWeight: 700,
+              color: speed.moving ? '#7dffa8' : 'rgba(158, 167, 160, 0.7)',
+              fontFamily: 'var(--font-mono, monospace)',
+            }}
+          >
+            {speed.primary}
+          </span>
+          <span
+            style={{
+              fontSize: fontSm - 2,
+              color: 'rgba(122, 130, 122, 0.6)',
+            }}
+          >
+            {speed.secondary}
+          </span>
+        </div>
+
+        {/* Locate button - compact */}
+        <button
+          type="button"
+          onClick={locateMe}
+          disabled={!hasFix}
+          aria-label={hasFix ? 'Center map' : 'No GPS'}
+          style={{
+            width: 28,
+            height: 28,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderRadius: 6,
+            border: hasFix
+              ? '1px solid rgba(125,255,138,0.4)'
+              : '1px solid rgba(130,138,132,0.25)',
+            background: hasFix
+              ? 'rgba(125,255,138,0.08)'
+              : 'rgba(60,66,62,0.2)',
+            color: hasFix ? '#b8f7c1' : '#6a726a',
+            cursor: hasFix ? 'pointer' : 'not-allowed',
+          }}
+        >
+          <LocateIcon />
         </button>
       </div>
     </div>

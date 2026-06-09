@@ -1,24 +1,36 @@
-import { useEffect, useRef } from 'react'
+import React, { useEffect, useRef } from 'react'
 import type { Map } from 'maplibre-gl'
 import { useMapContext } from '../context/MapContext'
 import { useOverlayContext } from '../context/OverlayContext'
-import { ENVIRONMENTAL_OVERLAY_CATALOG, overlayDef } from '../lib/environmentalOverlays/catalog'
+import { ENVIRONMENTAL_OVERLAY_CATALOG, ENVIRONMENTAL_OVERLAY_IDS, overlayDef } from '../lib/environmentalOverlays/catalog'
+// Overlay debug API - side-effect import extends __hudDebug for E2E testing
+import '../runtime/overlayDebug'
+/** Map subsystems mount via ModernMapSubsystems / BalancedMapSubsystems per mode stack. */
 import {
   applyGeojsonOverlay,
   applyRasterOverlay,
+  environmentalOverlayOnMap,
   mapBboxFromMap,
   mapStyleMutable,
   overlayZoomBlocked,
+  reattachEnvironmentalOverlay,
   removeEnvironmentalOverlay,
 } from '../lib/environmentalOverlays/mapOverlayRuntime'
 import { readCachedOverlayGeo, writeCachedOverlayGeo } from '../lib/environmentalOverlays/overlayCache'
-import { fetchOverpassGeojson } from '../lib/environmentalOverlays/overpass'
+import {
+  estimateOverpassLoadingBudgetMs,
+  fetchOverpassGeojson,
+  getOverpassQueueStats,
+} from '../lib/environmentalOverlays/overpass'
 import { readEnvKey } from '../lib/environmentalOverlays/sources'
 import type { EnvironmentalOverlayId } from '../lib/environmentalOverlays/types'
 import {
   clearLoadingTimeout,
   clearOverlaySession,
   createOverlaySession,
+  ensureLoadingTimeoutAtLeast,
+  getActiveOverlaySession,
+  isOverlayFetchInFlight,
   isSessionActive,
   resolveOverlay,
   startLoading,
@@ -29,6 +41,13 @@ import { runtimePollIntervalMs } from '../runtime/runtimeActivityPolicy'
 import { logWarn } from '../runtime/logger'
 import { verifyOverlayRendered } from '../lib/environmentalOverlays/mapOverlayRuntime'
 import { traceOverlay } from '../runtime/runtimeForensics'
+import {
+  logModernGuardrailApplied,
+  logModernGuardrailTransition,
+  shouldDeferDetailOverlay,
+} from '../lib/modernLayerGuardrails'
+
+logModernGuardrailApplied('EnvironmentalOverlaysLayer')
 
 /**
  * Sync overlay with strict state machine enforcement.
@@ -241,6 +260,15 @@ function syncOverlay(
     // Fetch online data
     traceOverlay('fetch_started', { overlayId: id, sessionId: sessionId.slice(0, 8), delivery: 'geojson-overpass', bbox })
     try {
+      const { pending, inFlight } = getOverpassQueueStats()
+      const queueAhead = pending + inFlight
+      const budgetMs = estimateOverpassLoadingBudgetMs(queueAhead)
+      ensureLoadingTimeoutAtLeast(id, sessionId, budgetMs)
+      traceOverlay('overpass_loading_timeout_extended', {
+        overlayId: id,
+        queueAhead,
+        budgetMs,
+      })
       const geojson = await fetchOverpassGeojson(id, bbox)
       traceOverlay('fetch_resolved', { overlayId: id, sessionId: sessionId.slice(0, 8), featureCount: geojson.features.length })
 
@@ -310,6 +338,29 @@ function syncOverlay(
       }
     } catch (e) {
       traceOverlay('fetch_threw', { overlayId: id, sessionId: sessionId.slice(0, 8), error: (e as Error).message })
+
+      // Prefer cache fallback even after spurious cleanup invalidated the session
+      traceOverlay('offline_fallback_attempt', { overlayId: id, sessionId: sessionId.slice(0, 8) })
+      const cached = def.offlineCacheable ? readCachedOverlayGeo(id, bbox) : null
+      if (cached && applyGeojsonOverlay(map, id, cached.geojson)) {
+        const fallback: TerminalState = {
+          state: 'OFFLINE_FALLBACK',
+          enabled: true,
+          cachedAt: cached.fetchedAt,
+        }
+        if (isSessionActive(id, sessionId) && !isCleanedUp) {
+          safeResolve(fallback)
+        } else {
+          patchStatus(id, stateMachineToLegacy(fallback))
+          traceOverlay('offline_fallback_after_cleanup', {
+            overlayId: id,
+            sessionId: sessionId.slice(0, 8),
+            cachedAt: cached.fetchedAt,
+          })
+        }
+        return
+      }
+
       // Validate session before applying error
       if (!isSessionActive(id, sessionId)) {
         traceOverlay('session_invalidated', { overlayId: id, sessionId: sessionId.slice(0, 8), phase: 'post_fetch_error' })
@@ -317,15 +368,16 @@ function syncOverlay(
         return // Stale session, abort
       }
 
-      // Try fallback to cached
-      traceOverlay('offline_fallback_attempt', { overlayId: id, sessionId: sessionId.slice(0, 8) })
-      const cached = def.offlineCacheable ? readCachedOverlayGeo(id, bbox) : null
-      if (cached && applyGeojsonOverlay(map, id, cached.geojson)) {
-        safeResolve({ state: 'OFFLINE_FALLBACK', enabled: true, cachedAt: cached.fetchedAt })
-        return
-      }
       removeEnvironmentalOverlay(map, id)
       const errorMsg = e instanceof Error ? e.message : 'Load failed'
+      const isAbort =
+        (e instanceof DOMException && e.name === 'AbortError') ||
+        errorMsg.toLowerCase().includes('abort') ||
+        errorMsg.toLowerCase().includes('cancelled')
+      if (isAbort) {
+        safeResolve({ state: 'IDLE', enabled: false })
+        return
+      }
       safeResolve({ state: 'ERROR', enabled: true, error: errorMsg })
     }
   }
@@ -344,58 +396,164 @@ function syncOverlay(
   }
 }
 
+function togglesKey(toggles: Record<EnvironmentalOverlayId, boolean>): string {
+  return ENVIRONMENTAL_OVERLAY_IDS.map((id) => (toggles[id] ? '1' : '0')).join('')
+}
+
 export default function EnvironmentalOverlaysLayer() {
   const { map } = useMapContext()
   const { toggles, online, patchStatus } = useOverlayContext()
   const patchRef = useRef(patchStatus)
   patchRef.current = patchStatus
+  const togglesRef = useRef(toggles)
+  togglesRef.current = toggles
+  const onlineRef = useRef(online)
+  onlineRef.current = online
   const moveTimerRef = useRef<number | null>(null)
   const styleRafRef = useRef<number | null>(null)
+  const styleRehydrateTimerRef = useRef<number | null>(null)
   const cleanupRef = useRef<Partial<Record<EnvironmentalOverlayId, () => void>>>({})
+  const prevTogglesKeyRef = useRef<string | null>(null)
+  const prevOnlineRef = useRef<boolean | null>(null)
+  const syncOneRef = useRef<(id: EnvironmentalOverlayId, enabled: boolean, force?: boolean) => void>(() => {})
 
+  const toggleKey = togglesKey(toggles)
+
+  /** Toggle/online sync only — must NOT tear down unchanged overlays on re-run. */
   useEffect(() => {
     if (!map) return
 
-    const refreshAll = () => {
+    const syncOne = (id: EnvironmentalOverlayId, enabled: boolean, force = false) => {
+      if (enabled) {
+        if (!force && environmentalOverlayOnMap(map, id)) return
+        if (!force && cleanupRef.current[id]) return
+        // In-flight Overpass fetch — reattach only; never abort with a duplicate session
+        if (isOverlayFetchInFlight(id) && getActiveOverlaySession(id)) {
+          if (reattachEnvironmentalOverlay(map, id)) return
+          traceOverlay('sync_skipped_in_flight', { overlayId: id })
+          return
+        }
+        if (force) {
+          if (reattachEnvironmentalOverlay(map, id)) return
+          if (cleanupRef.current[id]) {
+            traceOverlay('sync_skipped_in_flight', { overlayId: id, reason: 'rehydrate_wait' })
+            return
+          }
+        }
+      }
+      cleanupRef.current[id]?.()
+      delete cleanupRef.current[id]
+      if (!enabled) {
+        logModernGuardrailTransition('overlay-toggle', { overlayId: id, enabled: false })
+        removeEnvironmentalOverlay(map, id)
+        return
+      }
+
+      const def = overlayDef(id)
+      const isDetail = (def.renderMode ?? 'detail') === 'detail'
+      const activeDetailCount = ENVIRONMENTAL_OVERLAY_IDS.filter((oid) => {
+        if (oid === id || !togglesRef.current[oid]) return false
+        return (overlayDef(oid).renderMode ?? 'detail') === 'detail'
+      }).length
+      if (isDetail && shouldDeferDetailOverlay(activeDetailCount)) {
+        logModernGuardrailTransition('overlay-toggle-deferred', {
+          overlayId: id,
+          activeDetailCount,
+        })
+        patchRef.current(id, {
+          loading: false,
+          error: 'Too many detail layers — disable one or zoom in',
+          stale: false,
+          fromCache: false,
+        })
+        return
+      }
+
+      logModernGuardrailTransition('overlay-toggle', { overlayId: id, enabled: true })
+      cleanupRef.current[id] = syncOverlay(map, id, true, onlineRef.current, patchRef.current)
+    }
+    syncOneRef.current = syncOne
+
+    const prevKey = prevTogglesKeyRef.current
+    const prevOnline = prevOnlineRef.current
+    prevTogglesKeyRef.current = toggleKey
+    prevOnlineRef.current = online
+
+    if (prevKey === null) {
       for (const def of ENVIRONMENTAL_OVERLAY_CATALOG) {
-        cleanupRef.current[def.id]?.()
-        cleanupRef.current[def.id] = syncOverlay(
-          map,
-          def.id,
-          toggles[def.id],
-          online,
-          patchRef.current,
-        )
+        syncOne(def.id, toggles[def.id])
+      }
+    } else if (prevKey !== toggleKey) {
+      for (const def of ENVIRONMENTAL_OVERLAY_CATALOG) {
+        const was = prevKey[ENVIRONMENTAL_OVERLAY_IDS.indexOf(def.id)] === '1'
+        const now = toggles[def.id]
+        if (was !== now) syncOne(def.id, now)
+      }
+    } else if (prevOnline !== online) {
+      for (const def of ENVIRONMENTAL_OVERLAY_CATALOG) {
+        if (toggles[def.id]) syncOne(def.id, true)
+      }
+    }
+  }, [map, toggleKey, online])
+
+  /** Map listeners — basemap style changes and pan/zoom refresh. */
+  useEffect(() => {
+    if (!map) return
+
+    /** Re-attach only overlays missing from the map (after basemap setStyle). */
+    const rehydrateMissingOverlays = () => {
+      for (const def of ENVIRONMENTAL_OVERLAY_CATALOG) {
+        if (!togglesRef.current[def.id]) continue
+        if (environmentalOverlayOnMap(map, def.id)) continue
+        if (reattachEnvironmentalOverlay(map, def.id)) continue
+        if (isOverlayFetchInFlight(def.id) && getActiveOverlaySession(def.id)) {
+          traceOverlay('rehydrate_deferred_in_flight', { overlayId: def.id })
+          continue
+        }
+        if (cleanupRef.current[def.id]) continue
+        syncOneRef.current(def.id, true)
       }
     }
 
-    const scheduleRefreshAll = () => {
+    const scheduleRehydrate = () => {
       if (styleRafRef.current != null) window.cancelAnimationFrame(styleRafRef.current)
       styleRafRef.current = window.requestAnimationFrame(() => {
         styleRafRef.current = null
-        refreshAll()
+        rehydrateMissingOverlays()
       })
     }
 
-    refreshAll()
-
-    /** Basemap setStyle() wipes custom layers — re-apply enabled overlays like RouteLayer does. */
-    const onStyleData = () => {
-      const anyOn = ENVIRONMENTAL_OVERLAY_CATALOG.some((d) => toggles[d.id])
+    /**
+     * Basemap setStyle() wipes custom layers — defer until idle so we do not
+     * re-sync while our own addLayer calls are still committing.
+     */
+    const onStyleLoad = () => {
+      const anyOn = ENVIRONMENTAL_OVERLAY_CATALOG.some((d) => togglesRef.current[d.id])
       if (!anyOn) return
-      scheduleRefreshAll()
+      if (styleRehydrateTimerRef.current != null) {
+        window.clearTimeout(styleRehydrateTimerRef.current)
+      }
+      styleRehydrateTimerRef.current = window.setTimeout(() => {
+        styleRehydrateTimerRef.current = null
+        const run = () => scheduleRehydrate()
+        if (map.isStyleLoaded()) {
+          map.once('idle', run)
+        } else {
+          run()
+        }
+      }, 250)
     }
 
-    map.on('styledata', onStyleData)
+    map.on('style.load', onStyleLoad)
 
     const onMoveEnd = () => {
       if (moveTimerRef.current != null) window.clearTimeout(moveTimerRef.current)
       moveTimerRef.current = window.setTimeout(() => {
         moveTimerRef.current = null
         for (const def of ENVIRONMENTAL_OVERLAY_CATALOG) {
-          if (!toggles[def.id] || def.delivery !== 'geojson-overpass') continue
-          cleanupRef.current[def.id]?.()
-          cleanupRef.current[def.id] = syncOverlay(map, def.id, true, online, patchRef.current)
+          if (!togglesRef.current[def.id] || def.delivery !== 'geojson-overpass') continue
+          if (cleanupRef.current[def.id]) continue
+          syncOneRef.current(def.id, true)
         }
       }, runtimePollIntervalMs('overlay_debounce'))
     }
@@ -404,14 +562,14 @@ export default function EnvironmentalOverlaysLayer() {
 
     const onVisibility = () => {
       if (document.visibilityState === 'visible') {
-        scheduleRefreshAll()
+        scheduleRehydrate()
       }
     }
     document.addEventListener('visibilitychange', onVisibility)
 
     return () => {
       document.removeEventListener('visibilitychange', onVisibility)
-      map.off('styledata', onStyleData)
+      map.off('style.load', onStyleLoad)
       map.off('moveend', onMoveEnd)
       if (moveTimerRef.current != null) {
         window.clearTimeout(moveTimerRef.current)
@@ -421,13 +579,26 @@ export default function EnvironmentalOverlaysLayer() {
         window.cancelAnimationFrame(styleRafRef.current)
         styleRafRef.current = null
       }
+      if (styleRehydrateTimerRef.current != null) {
+        window.clearTimeout(styleRehydrateTimerRef.current)
+        styleRehydrateTimerRef.current = null
+      }
+    }
+  }, [map])
+
+  /** Full overlay teardown only when map instance unmounts. */
+  useEffect(() => {
+    if (!map) return
+    return () => {
       for (const id of Object.keys(cleanupRef.current) as EnvironmentalOverlayId[]) {
         cleanupRef.current[id]?.()
         delete cleanupRef.current[id]
         removeEnvironmentalOverlay(map, id)
       }
+      prevTogglesKeyRef.current = null
+      prevOnlineRef.current = null
     }
-  }, [map, toggles, online])
+  }, [map])
 
   return null
 }

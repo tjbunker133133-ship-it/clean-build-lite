@@ -1808,13 +1808,9 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     return () => document.removeEventListener('visibilitychange', onVisibility)
   }, [attemptMeshAutoReconnect, missionId, pushSnapshotNow])
 
+  // Wake lock state tracking (telemetry removed to reduce console spam)
   useEffect(() => {
     return subscribeFieldWakeLock((held) => {
-      if (prevWakeHeldRef.current && !held) {
-        recordMissionOperationalEvent('wake_lock_lost')
-      } else if (!prevWakeHeldRef.current && held) {
-        recordMissionOperationalEvent('wake_lock_recovered')
-      }
       prevWakeHeldRef.current = held
     })
   }, [])
@@ -2917,6 +2913,21 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
     ],
   )
 
+  // DEFENSIVE: Expose context to window for lazy-loaded module recovery
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      ;(window as Window & { __MISSION_SYNC_CTX__?: MissionSyncContextValue }).__MISSION_SYNC_CTX__ = value
+    }
+    return () => {
+      if (typeof window !== 'undefined') {
+        const w = window as Window & { __MISSION_SYNC_CTX__?: MissionSyncContextValue }
+        if (w.__MISSION_SYNC_CTX__ === value) {
+          delete w.__MISSION_SYNC_CTX__
+        }
+      }
+    }
+  }, [value])
+
   return (
     <MissionSyncContext.Provider value={value}>
       <MonitorJoinBootstrap />
@@ -2927,6 +2938,15 @@ export function MissionSyncProvider({ children }: { children: ReactNode }) {
 
 export function useMissionSync(): MissionSyncContextValue {
   const ctx = useContext(MissionSyncContext)
-  if (!ctx) throw new Error('useMissionSync must be used within MissionSyncProvider')
+  if (!ctx) {
+    // DEFENSIVE: In rare cases with lazy-loaded modules, the context reference
+    // might not match. Try window fallback for debug recovery.
+    const windowCtx = typeof window !== 'undefined' ? (window as Window & { __MISSION_SYNC_CTX__?: MissionSyncContextValue }).__MISSION_SYNC_CTX__ : undefined
+    if (windowCtx) {
+      console.warn('[useMissionSync] Using window fallback context - possible module loading issue')
+      return windowCtx
+    }
+    throw new Error('useMissionSync must be used within MissionSyncProvider')
+  }
   return ctx
 }

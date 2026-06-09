@@ -1,5 +1,5 @@
 import type { LayerType } from '../types'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   FALLBACK_MAP_STYLE,
   MAP_STYLES,
@@ -11,16 +11,22 @@ import {
   maptilerRasterTileTemplates,
   maptilerTerrainRgbTileJson,
   maptilerBasemapsConfigured,
+  getOpenFreeMapStyleUrl,
   isAppleWebKitMapSwitch,
   resolveBasemapStyle,
+  resolveOpenFreeMapBasemapStyle,
   validatedEmergencyFallbackStyle,
 } from './mapStyles'
 import { __resetDeviceProfileForTests, refreshDeviceProfile } from '../runtime/deviceProfile'
 
 const ALL_LAYERS: LayerType[] = ['streets', 'satellite', 'topo', 'outdoor']
 
+/** MAP_STYLES URLs are baked at module load from import.meta.env (same as Vite build). */
+const maptilerUrlsAtModuleLoad = MAP_STYLES.streets.length > 0
+
 describe('MAP_STYLES (hard-locked registry)', () => {
-  it('MAP_STYLES has one MapTiler style.json per layer key', () => {
+  it('MAP_STYLES has one MapTiler style.json per layer key when key is baked at build', () => {
+    if (!maptilerUrlsAtModuleLoad) return
     for (const layer of ALL_LAYERS) {
       const url = MAP_STYLES[layer]
       expect(url).toContain('api.maptiler.com')
@@ -35,7 +41,8 @@ describe('MAP_STYLES (hard-locked registry)', () => {
     expect(new Set(urls).size).toBe(ALL_LAYERS.length)
   })
 
-  it('terrain-rgb TileJSON includes a MapTiler key query param', () => {
+  it('terrain-rgb TileJSON includes a MapTiler key query param when key is present', () => {
+    if (!maptilerBasemapsConfigured()) return
     const terrain = maptilerTerrainRgbTileJson()
     expect(terrain).toContain('terrain-rgb')
     expect(terrain).toMatch(/[?&]key=[^&]+/)
@@ -46,7 +53,8 @@ describe('MAP_STYLES (hard-locked registry)', () => {
     expect(getStyleUrl('satellite')).toBe(MAP_STYLES.satellite)
   })
 
-  it('mapStyleFingerprint differs between two presets', () => {
+  it('mapStyleFingerprint differs between two presets when MapTiler URLs are baked', () => {
+    if (!maptilerUrlsAtModuleLoad) return
     expect(mapStyleFingerprint(getStyleUrl('streets'))).not.toBe(mapStyleFingerprint(getStyleUrl('outdoor')))
   })
 
@@ -67,7 +75,8 @@ describe('MAP_STYLES (hard-locked registry)', () => {
     expect(src.url).toBeUndefined()
   })
 
-  it('MapTiler raster fallback differs per layer and from vector URLs', () => {
+  it('MapTiler raster fallback differs per layer and from vector URLs when key is present', () => {
+    if (!maptilerBasemapsConfigured()) return
     for (const layer of ALL_LAYERS) {
       const fp = mapTilerRasterFallbackFingerprint(layer)
       expect(fp).toBeTruthy()
@@ -86,6 +95,7 @@ describe('MAP_STYLES (hard-locked registry)', () => {
 describe('resolveBasemapStyle', () => {
   afterEach(() => {
     __resetDeviceProfileForTests()
+    vi.unstubAllEnvs()
     vi.unstubAllGlobals()
   })
 
@@ -104,12 +114,17 @@ describe('resolveBasemapStyle', () => {
     expect(isAppleWebKitMapSwitch()).toBe(true)
     const topo = resolveBasemapStyle('topo')
     expect(topo.delivery).toBe('vector')
-    expect(topo.style).toBe(MAP_STYLES.topo)
-    const streets = resolveBasemapStyle('streets')
-    expect(streets.style).toBe(MAP_STYLES.streets)
+    if (maptilerUrlsAtModuleLoad) {
+      expect(topo.style).toBe(MAP_STYLES.topo)
+      const streets = resolveBasemapStyle('streets')
+      expect(streets.style).toBe(MAP_STYLES.streets)
+    } else {
+      expect(String(topo.style)).toContain('openfreemap.org')
+    }
   })
 
-  it('MapTiler raster fallback uses TileJSON per layer', () => {
+  it('MapTiler raster fallback uses TileJSON per layer when key is present', () => {
+    if (!maptilerBasemapsConfigured()) return
     const topo = getMapTilerRasterFallbackStyle('topo')
     const satellite = getMapTilerRasterFallbackStyle('satellite')
     expect(topo?.sources).toBeTruthy()
@@ -120,5 +135,25 @@ describe('resolveBasemapStyle', () => {
     expect(mapTilerRasterFallbackFingerprint('topo')).not.toBe(
       mapTilerRasterFallbackFingerprint('satellite'),
     )
+  })
+
+  it('without MapTiler key uses OpenFreeMap vector for streets/topo/outdoor', () => {
+    vi.stubEnv('VITE_MAPTILER_KEY', '')
+    expect(getOpenFreeMapStyleUrl('streets')).toContain('openfreemap.org')
+    expect(getOpenFreeMapStyleUrl('satellite')).toBeNull()
+    const streets = resolveBasemapStyle('streets')
+    expect(streets.delivery).toBe('vector')
+    expect(streets.style).toBe('https://tiles.openfreemap.org/styles/liberty')
+    const outdoor = resolveBasemapStyle('outdoor')
+    expect(outdoor.style).toBe('https://tiles.openfreemap.org/styles/liberty')
+    const satellite = resolveBasemapStyle('satellite')
+    expect(satellite.delivery).toBe('maptiler-raster')
+    expect(satellite.style).toEqual(FALLBACK_MAP_STYLE)
+  })
+
+  it('resolveOpenFreeMapBasemapStyle returns vector delivery', () => {
+    const ofm = resolveOpenFreeMapBasemapStyle('topo')
+    expect(ofm?.delivery).toBe('vector')
+    expect(ofm?.style).toContain('positron')
   })
 })

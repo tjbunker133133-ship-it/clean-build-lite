@@ -37,12 +37,14 @@ export function rasterTileUrls(id: EnvironmentalOverlayId): string[] | null {
         'https://basemap.nationalmap.gov/arcgis/services/USGSShadedReliefOnly/MapServer/WMSServer?service=WMS&version=1.1.1&request=GetMap&srs=EPSG:3857&bbox={bbox-epsg-3857}&format=image/png&transparent=true&width=256&height=256&layers=0',
       ]
     case 'forest_usfs':
+      // ArcGIS export tiles — WMSServer returns 400 for MapLibre bbox template on this host.
       return [
-        'https://apps.fs.usda.gov/arcx/services/EDW/EDW_ForestSystemBoundaries_01/MapServer/WMSServer?service=WMS&version=1.1.1&request=GetMap&srs=EPSG:3857&bbox={bbox-epsg-3857}&format=image/png&transparent=true&width=256&height=256&layers=0',
+        'https://apps.fs.usda.gov/arcx/rest/services/EDW/EDW_ForestSystemBoundaries_01/MapServer/export?f=image&format=png32&transparent=true&size=256,256&bbox={bbox-epsg-3857}&bboxSR=3857&imageSR=3857&layers=show:0',
       ]
     case 'public_lands':
+      // BLM_Natl_LandCAD_WGS84 was retired (404). SMA Cached = federal surface managing agency.
       return [
-        'https://gis.blm.gov/arcgis/rest/services/lands/BLM_Natl_LandCAD_WGS84/MapServer/WMSServer?service=WMS&version=1.1.1&request=GetMap&srs=EPSG:3857&bbox={bbox-epsg-3857}&format=image/png&transparent=true&width=256&height=256&layers=0',
+        'https://gis.blm.gov/arcgis/rest/services/lands/BLM_Natl_SMA_Cached_without_PriUnk/MapServer/export?f=image&format=png32&transparent=true&size=256,256&bbox={bbox-epsg-3857}&bboxSR=3857&imageSR=3857&layers=show:1',
       ]
     default:
       return null
@@ -52,11 +54,11 @@ export function rasterTileUrls(id: EnvironmentalOverlayId): string[] | null {
 export function rasterPaint(id: EnvironmentalOverlayId): Record<string, number> {
   switch (id) {
     case 'relief_usgs':
-      return { 'raster-opacity': 0.45 }
+      return { 'raster-opacity': 0.72 }
     case 'forest_usfs':
-      return { 'raster-opacity': 0.35 }
+      return { 'raster-opacity': 0.58 }
     case 'public_lands':
-      return { 'raster-opacity': 0.3 }
+      return { 'raster-opacity': 0.5 }
     case 'fire_firms':
       return { 'raster-opacity': 0.85 }
     default:

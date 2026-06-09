@@ -1,16 +1,18 @@
 import { useState } from 'react'
 import { useTacticalProfile } from '../hooks/useTacticalProfile'
-import { useCockpit } from '../context/CockpitContext'
+import { useCockpitOptional } from '../context/CockpitContext'
+import { useHudPresentation } from '../context/HudPresentationContext'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 import { touchFontSm } from './tokens'
 
 /**
  * Non-blocking banner when tactical identity / contacts are incomplete.
- * Operators can dismiss for the session; emergency panels stay gated separately.
+ * Classic opens preflight panel; Modern/Balanced dispatch runtime events.
  */
 export default function TacticalSetupBanner() {
   const { assessment, operationalReady } = useTacticalProfile()
-  const { raisePanel } = useCockpit()
+  const { mode } = useHudPresentation()
+  const cockpit = useCockpitOptional()
   const [dismissed, setDismissed] = useState(() => {
     try {
       return sessionStorage.getItem('tactical_setup_banner_dismissed_v1') === '1'
@@ -26,6 +28,18 @@ export default function TacticalSetupBanner() {
   const headline = assessment.issues.includes('no_contacts')
     ? 'Emergency setup incomplete — no contacts configured'
     : 'Emergency setup incomplete — profile required for SOS / Deadman / Check-In'
+
+  const openSetup = () => {
+    if (mode === 'immersive') {
+      window.dispatchEvent(new CustomEvent('hud:open-preflight'))
+      return
+    }
+    if (mode === 'hybrid') {
+      window.dispatchEvent(new CustomEvent('hud:show-permissions'))
+      return
+    }
+    cockpit?.raisePanel('preflight')
+  }
 
   return (
     <div
@@ -60,7 +74,7 @@ export default function TacticalSetupBanner() {
       <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
         <button
           type="button"
-          onClick={() => raisePanel('preflight')}
+          onClick={openSetup}
           style={{
             borderRadius: 6,
             border: '1px solid rgba(125, 255, 138, 0.5)',

@@ -9,6 +9,7 @@ import {
 } from 'react'
 import { ENVIRONMENTAL_OVERLAY_IDS, overlayDef } from '../lib/environmentalOverlays/catalog'
 import {
+  applyOverlayTogglePatch,
   loadOverlayToggles,
   saveOverlayToggles,
   setOverlayToggle,
@@ -24,6 +25,9 @@ type OverlayContextValue = {
     id: EnvironmentalOverlayId,
     enabled: boolean,
   ) => { applied: boolean; error?: string }
+  setEnabledBulk: (
+    patch: Partial<Record<EnvironmentalOverlayId, boolean>>,
+  ) => { applied: boolean; errors: string[] }
   patchStatus: (id: EnvironmentalOverlayId, patch: Partial<OverlayRuntimeStatus>) => void
   online: boolean
 }
@@ -78,7 +82,11 @@ export function OverlayProvider({ children }: { children: ReactNode }) {
   const patchStatus = useCallback((id: EnvironmentalOverlayId, patch: Partial<OverlayRuntimeStatus>) => {
     setStatus((prev) => ({
       ...prev,
-      [id]: { ...prev[id], ...patch, enabled: prev[id]?.enabled ?? false },
+      [id]: {
+        ...prev[id],
+        ...patch,
+        enabled: patch.enabled ?? prev[id]?.enabled ?? false,
+      },
     }))
   }, [])
 
@@ -125,10 +133,85 @@ export function OverlayProvider({ children }: { children: ReactNode }) {
     return { applied: true }
   }, [patchStatus])
 
+  const setEnabledBulk = useCallback((patch: Partial<Record<EnvironmentalOverlayId, boolean>>) => {
+    const errors: string[] = []
+    const statusPatches: Partial<Record<EnvironmentalOverlayId, Partial<OverlayRuntimeStatus>>> = {}
+
+    for (const id of ENVIRONMENTAL_OVERLAY_IDS) {
+      const enabled = patch[id]
+      if (typeof enabled !== 'boolean' || enabled === toggles[id]) continue
+      const def = overlayDef(id)
+      if (enabled && def.envKey && !readEnvKey(def.envKey)) {
+        errors.push(`${def.label}: missing ${def.envKey}`)
+        statusPatches[id] = {
+          enabled: false,
+          error: `${def.label} API key missing`,
+          loading: false,
+          stale: false,
+          fromCache: false,
+        }
+        continue
+      }
+      statusPatches[id] = enabled
+        ? {
+            enabled: true,
+            error: null,
+            loading: true,
+            stale: false,
+            fromCache: false,
+          }
+        : {
+            enabled: false,
+            error: null,
+            loading: false,
+            stale: false,
+            fromCache: false,
+          }
+    }
+
+    const nextToggles = applyOverlayTogglePatch(toggles, patch)
+    if (nextToggles === toggles) return { applied: true, errors }
+
+    setToggles(nextToggles)
+    if (Object.keys(statusPatches).length > 0) {
+      setStatus((prev) => {
+        const next = { ...prev }
+        for (const id of Object.keys(statusPatches) as EnvironmentalOverlayId[]) {
+          const sp = statusPatches[id]
+          if (!sp) continue
+          next[id] = {
+            ...defaultStatus(nextToggles[id]),
+            ...prev[id],
+            ...sp,
+            enabled: nextToggles[id],
+          }
+        }
+        return next
+      })
+    }
+    return { applied: errors.length === 0, errors }
+  }, [toggles])
+
   const value = useMemo(
-    () => ({ toggles, status, setEnabled, patchStatus, online }),
-    [toggles, status, setEnabled, patchStatus, online],
+    () => ({ toggles, status, setEnabled, setEnabledBulk, patchStatus, online }),
+    [toggles, status, setEnabled, setEnabledBulk, patchStatus, online],
   )
+
+  // DEBUG: Expose overlay control to window for E2E testing
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const w = window as Window & {
+        __hudOverlayContext?: {
+          setToggle?: (id: EnvironmentalOverlayId, enabled: boolean) => { applied: boolean; error?: string }
+        }
+      }
+      w.__hudOverlayContext = {
+        setToggle: (id: EnvironmentalOverlayId, enabled: boolean) => setEnabled(id, enabled),
+        setEnabled: (id: EnvironmentalOverlayId, enabled: boolean) => setEnabled(id, enabled),
+        setEnabledBulk,
+      }
+    }
+  }, [setEnabled, setEnabledBulk])
 
   return <OverlayContext.Provider value={value}>{children}</OverlayContext.Provider>
 }

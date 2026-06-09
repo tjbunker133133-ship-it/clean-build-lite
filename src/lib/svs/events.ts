@@ -25,6 +25,7 @@
 import type { SvsEvent, SvsEventPayload, SvsEventType, SvsPriority } from './types'
 import { SVS_PRIORITY } from './types'
 import { logInfo, logWarn } from '../../runtime/logger'
+import { traceVoice } from '../../runtime/runtimeForensics'
 
 // ============================================================================
 // THRESHOLD CONFIGURATION
@@ -172,7 +173,12 @@ export function resetEventDetection(): void {
 // ============================================================================
 
 export function detectHeartRateEvent(heartRate: number | null): SvsEvent | null {
-  if (heartRate === null) return null
+  if (heartRate === null) {
+    // NO-OP GUARD: No heart rate data source wired to SVS
+    // Data available from: WAL wearable adapters (not connected to SVS)
+    // To enable: Feed WAL heart rate signals to this detector or wire Health Connect
+    return null
+  }
 
   const now = Date.now()
 
@@ -279,7 +285,12 @@ export function detectMotionEvent(
 // ============================================================================
 
 export function detectBatteryEvent(batteryPercent: number | null): SvsEvent | null {
-  if (batteryPercent === null) return null
+  if (batteryPercent === null) {
+    // NO-OP GUARD: Battery API not wired to SVS in useSvs.ts
+    // BatteryManager API available in most browsers but not connected
+    // To enable: Populate batteryRef in useSvs.ts:98 from navigator.getBattery()
+    return null
+  }
 
   const prevLevel = detectionState.lastBatteryLevel
   detectionState.lastBatteryLevel = batteryPercent
@@ -322,7 +333,12 @@ export function detectElevationEvent(
   elevationFt: number | null,
   elevationGain: number | null,
 ): SvsEvent | null {
-  if (elevationFt === null) return null
+  if (elevationFt === null) {
+    // NO-OP GUARD: Elevation data source not wired (GPS altitude not connected)
+    // Events: ELEVATION_MILESTONE (every 1000ft gain)
+    // To enable: Feed GPS altitude to this detector from useSvs.ts
+    return null
+  }
 
   const now = Date.now()
 
@@ -461,7 +477,12 @@ export function detectWeatherEvent(
   heatIndex: number | null,
   windChill: number | null,
 ): SvsEvent | null {
-  if (temperature === null) return null
+  if (temperature === null) {
+    // NO-OP GUARD: Weather data source not wired (no weather API integration)
+    // Events: HEAT_WARNING, COLD_WARNING
+    // To enable: Integrate weather API and call from useSvs.ts environmental effect
+    return null
+  }
 
   // Heat warning
   if (heatIndex !== null && heatIndex > 90) {
@@ -494,7 +515,12 @@ export function detectSunsetEvent(
   sunsetMinutes: number | null,
   isDark: boolean,
 ): SvsEvent | null {
-  if (sunsetMinutes === null || isDark) return null
+  if (sunsetMinutes === null || isDark) {
+    // NO-OP GUARD: Sunset calculation not wired (requires time/location service)
+    // Events: SUNSET_APPROACHING (30min before sunset)
+    // To enable: Calculate sunset from GPS position + time in useSvs.ts environmental effect
+    return null
+  }
 
   if (
     sunsetMinutes <= DETECTION_THRESHOLDS.SUNSET_WARNING_MINUTES &&
@@ -544,7 +570,12 @@ export function detectSessionStart(): SvsEvent | null {
 }
 
 export function detectWellnessReminders(activityMinutes: number | null): SvsEvent | null {
-  if (activityMinutes === null || detectionState.sessionStartAt === null) return null
+  if (activityMinutes === null || detectionState.sessionStartAt === null) {
+    // NO-OP GUARD: Session timer not integrated (estimateActivityMinutes returns null)
+    // Events: HYDRATION_REMINDER (45min), REST_REMINDER (90min), SESSION_MILESTONE (120min)
+    // To enable: Implement session start tracking in useSvs.ts estimateActivityMinutes()
+    return null
+  }
 
   const now = Date.now()
 

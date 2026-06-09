@@ -1,11 +1,14 @@
-import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type MutableRefObject } from 'react'
 import maplibregl, { type GeoJSONSource } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { useMapContext } from '../context/MapContext'
 import { useAppContext } from '../context/AppContext'
-import { useCockpit } from '../context/CockpitContext'
+import { useCockpitOptional } from '../context/CockpitContext'
 import { useGPS } from '../hooks/useGPS'
-import type { LayerType, Waypoint } from '../types'
+import type { LayerType, Waypoint, WaypointType } from '../types'
+// Phase 2: Intent Unification
+import { WaypointIntentResolver, traceWaypointIntent } from '../lib/mapIntent/WaypointIntentResolver'
+import { createWaypoint } from '../lib/waypoints/createWaypoint'
 import {
   getMapTilerRasterDirectTilesStyle,
   getMapTilerRasterFallbackStyle,
@@ -15,8 +18,10 @@ import {
   logActiveLayerTileDebug,
   mapStyleFingerprint,
   maptilerTerrainRgbTileJson,
+  maptilerBasemapsConfigured,
   isAppleWebKitMapSwitch,
   resolveBasemapStyle,
+  resolveOpenFreeMapBasemapStyle,
   validatedEmergencyFallbackStyle,
   FIELD_MAX_MAP_ZOOM,
 } from '../lib/mapStyles'
@@ -31,7 +36,17 @@ import {
 } from '../lib/mapLayerDiag'
 import { tier1Debug } from '../lib/tier1DebugLog'
 import { isWaypointPlacementAllowed } from '../lib/waypointPlacement'
-import { isWaypointMarkerTouchActive } from '../lib/waypointMarkerTouchGate'
+import { isWaypointMarkerTouchActive, isRadialMenuActive, shouldSuppressMapTapPlacement } from '../lib/waypointMarkerTouchGate'
+import {
+  getPendingWaypointType,
+  routeMapClick,
+  shouldBlockTrailInspect,
+  shouldBlockWaypointPlacement,
+  subscribeMapInteraction,
+} from '../lib/mapInteractionController'
+import { notifyIdleMapTap, shouldShowUserMarker, subscribeMapInteractionRegistry } from '../lib/mapInteractionRegistry'
+import { activateUserCameraOverride } from '../lib/cameraAuthority'
+import { requestCameraIntent } from '../lib/operationalPerception/perceptionEngine'
 import {
   __probeStyleForTrailLayersForTests,
   __resetSnapCapabilityDevLogForTests,
@@ -100,48 +115,27 @@ function resolveHudBasemapStyle(layer: MapStyleKey): ReturnType<typeof resolveBa
   return resolved
 }
 
+function tryOpenFreeMapBasemapStyle(
+  mapCtl: maplibregl.Map | null | undefined,
+  layer: MapStyleKey,
+  reason: string,
+): boolean {
+  const ofm = resolveOpenFreeMapBasemapStyle(layer)
+  if (!ofm) return false
+  console.warn(`[MapCanvas] ${reason} — OpenFreeMap vector fallback for "${layer}"`)
+  mapLayerDiag('openfreemap-fallback', { layer, reason })
+  try {
+    mapCtl?.setStyle(ofm.style, { diff: false })
+    return true
+  } catch {
+    return false
+  }
+}
+
 const HUD_DEBUG_CLICK_SRC = 'hud-debug-click'
 const HUD_DEBUG_CLICK_LAYER = 'hud-debug-click-circle'
 const TERRAIN_SOURCE_ID = 'hud-maptiler-terrain-rgb'
-const MAP_VIEWPORT_KEY = 'hud_map_viewport_v1'
 const LAST_KNOWN_LOCATION_KEY = 'lastKnownLocation'
-
-type PersistedViewport = {
-  lng: number
-  lat: number
-  zoom: number
-  bearing: number
-  pitch: number
-  ts: number
-}
-
-function readPersistedViewport(): PersistedViewport | null {
-  try {
-    const raw = localStorage.getItem(MAP_VIEWPORT_KEY)
-    if (!raw) return null
-    const p = JSON.parse(raw) as Partial<PersistedViewport> | null
-    if (!p) return null
-    if (
-      typeof p.lng !== 'number' ||
-      typeof p.lat !== 'number' ||
-      typeof p.zoom !== 'number' ||
-      typeof p.bearing !== 'number' ||
-      typeof p.pitch !== 'number'
-    ) {
-      return null
-    }
-    return {
-      lng: p.lng,
-      lat: p.lat,
-      zoom: p.zoom,
-      bearing: p.bearing,
-      pitch: p.pitch,
-      ts: typeof p.ts === 'number' ? p.ts : Date.now(),
-    }
-  } catch {
-    return null
-  }
-}
 
 function readCachedOperationalFix(): { lat: number; lng: number } | null {
   try {
@@ -166,16 +160,12 @@ function readInitialMapView(): { lng: number; lat: number; zoom: number } {
   return { lng: STATIC_MAP_CENTER.lng, lat: STATIC_MAP_CENTER.lat, zoom: 10 }
 }
 
-function applyOperationalMapCenter(
-  map: maplibregl.Map,
-  fix: { lat: number; lng: number },
-  persisted: PersistedViewport | null,
-) {
-  map.jumpTo({
+function applyOperationalMapCenter(fix: { lat: number; lng: number }) {
+  requestCameraIntent({
+    kind: 'ease_to',
     center: [fix.lng, fix.lat],
-    zoom: Math.max(14, persisted?.zoom ?? map.getZoom()),
-    bearing: persisted?.bearing ?? 0,
-    pitch: persisted?.pitch ?? 0,
+    zoom: 14,
+    durationMs: 0,
   })
 }
 
@@ -227,19 +217,34 @@ function isJunkSpriteKey(key: string): boolean {
 
 function addSpritePlaceholder(map: maplibregl.Map, key: string, junk: boolean): void {
   const size = junk ? 1 : 32
-  const canvas = document.createElement('canvas')
-  canvas.width = size
-  canvas.height = size
-  const ctx = canvas.getContext('2d')
-  if (!ctx) return
-  ctx.clearRect(0, 0, size, size)
+  const data = new Uint8Array(size * size * 4)
   if (!junk) {
-    ctx.fillStyle = 'rgba(210, 72, 72, 0.9)'
-    ctx.beginPath()
-    ctx.arc(size / 2, size / 2, size / 4, 0, Math.PI * 2)
-    ctx.fill()
+    const cx = size / 2
+    const cy = size / 2
+    const radius = size / 4
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const dist = Math.hypot(x - cx, y - cy)
+        if (dist > radius) continue
+        const i = (y * size + x) * 4
+        data[i] = 210
+        data[i + 1] = 72
+        data[i + 2] = 72
+        data[i + 3] = 230
+      }
+    }
   }
-  map.addImage(key, ctx.getImageData(0, 0, size, size), { pixelRatio: 1 })
+  map.addImage(key, { width: size, height: size, data }, { pixelRatio: 1 })
+}
+
+function isBenignMapTileError(e: unknown): boolean {
+  const err = (e as { error?: { name?: string; message?: string } })?.error
+  const msg = `${err?.name ?? ''} ${err?.message ?? ''}`.toLowerCase()
+  return (
+    msg.includes('could not be decoded') ||
+    msg.includes('failed to load') ||
+    msg.includes('expected value to be of type number')
+  )
 }
 
 /** Placeholder icons when sprite entries fail (network / CORS / ad block). */
@@ -269,7 +274,7 @@ function syncTopoTerrain(map: maplibregl.Map, layer: LayerType) {
   if (!mapRepaintSafe(map)) {
     return
   }
-  if (layer === 'topo') {
+  if (layer === 'topo' && maptilerBasemapsConfigured()) {
     try {
       try {
         map.setTerrain(null)
@@ -395,7 +400,12 @@ function styleFailureWarrantsEmergencyFallback(raw: unknown): boolean {
  * - `setMap` on `load` + `ResizeObserver` + `resize()` after load (layout / Strict Mode).
  * - Do not add `!important` width/height on `.maplibregl-canvas` in global CSS.
  */
-export default function MapCanvas() {
+interface MapCanvasProps {
+  /** Callback to open modern mode overlays from radial menu */
+  onOpenOverlay?: (id: string) => void
+}
+
+export default function MapCanvas({ onOpenOverlay }: MapCanvasProps = {}) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<maplibregl.Map | null>(null)
   const roRef = useRef<ResizeObserver | null>(null)
@@ -423,6 +433,7 @@ export default function MapCanvas() {
   const {
     state,
     addWaypoint,
+    setWaypoints,
     setPendingType,
     setNextWaypointLabel,
     selectWaypoint,
@@ -451,15 +462,28 @@ export default function MapCanvas() {
     snapPreviewGateRef.current.unlock()
   }
 
-  const { panels } = useCockpit()
+  const cockpit = useCockpitOptional()
+  const panels = cockpit?.panels ?? {}
   const waypointDropBlockedRef = useRef(false)
   const wpLayout = panels.waypoints
-  waypointDropBlockedRef.current = wpLayout?.docked === true
+  // Balanced/Modern layers must not inherit Classic cockpit dock gate
+  const runtime =
+    typeof window !== 'undefined' ? window.__HUD_RUNTIME__ : undefined
+  const useCockpitDockGate = runtime?.isLegacy ?? false
+  waypointDropBlockedRef.current =
+    useCockpitDockGate && wpLayout?.docked === true
 
   const activeLayerRef = useRef(activeLayer)
   activeLayerRef.current = activeLayer
-  const pendingTypeRef = useRef(pendingWaypointType)
-  pendingTypeRef.current = pendingWaypointType
+  const osgPendingWaypointType = useSyncExternalStore(
+    subscribeMapInteraction,
+    getPendingWaypointType,
+    getPendingWaypointType,
+  )
+  const pendingTypeRef = useRef<WaypointType>(pendingWaypointType)
+  pendingTypeRef.current = (
+    osgPendingWaypointType === 'default' ? pendingWaypointType : osgPendingWaypointType
+  ) as WaypointType
   const waypointCountRef = useRef(waypoints.length)
   waypointCountRef.current = waypoints.length
   const waypointsRef = useRef(waypoints)
@@ -471,6 +495,9 @@ export default function MapCanvas() {
   keepArmedRef.current = keepWaypointToolArmed
   const clearLabelAfterDropRef = useRef(clearLabelAfterDrop)
   clearLabelAfterDropRef.current = clearLabelAfterDrop
+
+  useSyncExternalStore(subscribeMapInteractionRegistry, shouldShowUserMarker, shouldShowUserMarker)
+
   const styleSwitchGenRef = useRef(0)
   /** Last applied basemap style URL — duplicate `setStyle` guard. */
   const currentStyleRef = useRef<string | null>(null)
@@ -483,23 +510,6 @@ export default function MapCanvas() {
     resizeSuppressedSameBounds: 0,
     loggedAt: 0,
   })
-
-  const persistViewport = (map: maplibregl.Map) => {
-    try {
-      const c = map.getCenter()
-      const body: PersistedViewport = {
-        lng: c.lng,
-        lat: c.lat,
-        zoom: map.getZoom(),
-        bearing: map.getBearing(),
-        pitch: map.getPitch(),
-        ts: Date.now(),
-      }
-      localStorage.setItem(MAP_VIEWPORT_KEY, JSON.stringify(body))
-    } catch {
-      /* ignore */
-    }
-  }
 
   const tryApplyInitialOperationalCenter = useCallback(() => {
     const map = mapRef.current
@@ -515,9 +525,11 @@ export default function MapCanvas() {
         : readCachedOperationalFix()
     if (!seed) return false
 
-    map.jumpTo({
+    requestCameraIntent({
+      kind: 'ease_to',
       center: [seed.lng, seed.lat],
-      zoom: Math.max(14, map.getZoom()),
+      zoom: 14,
+      durationMs: 0,
     })
     autoOperationalCenteringRef.current = true
     window.setTimeout(() => {
@@ -605,9 +617,16 @@ export default function MapCanvas() {
       if (tapDiagnosticsEnabled) console.info(`[tapdiag] ${msg}`)
     }
     let watchdogTimer: number | null = null
+    
     const markUserViewportControl = () => {
       if (userHasTakenViewportControlRef.current) return
       userHasTakenViewportControlRef.current = true
+      activateUserCameraOverride()
+      try {
+        if (map && (map.isMoving() || map.isEasing())) map.stop()
+      } catch {
+        /* ignore */
+      }
     }
 
     // Render blank maps are usually tied to WebGL/context or sizing churn.
@@ -764,7 +783,14 @@ export default function MapCanvas() {
       hudObsMark('hud:map:boot:constructed')
       mapRef.current = map
       // FIELD DIAGNOSTIC: Expose map for runtime overlay verification
-      ;(window as unknown as { __hudMap?: maplibregl.Map }).__hudMap = map
+      const win = window as unknown as {
+        __hudMap?: maplibregl.Map
+        __hudMapBalanced?: maplibregl.Map
+      }
+      win.__hudMap = map
+      if (containerRef.current?.closest?.('[data-balanced-layer]')) {
+        win.__hudMapBalanced = map
+      }
       skipLayerSyncRef.current = true
       map.on('style.load', onStyleLoad)
       styleImageMissingHandler = onStyleImageMissingFactory(map)
@@ -782,11 +808,18 @@ export default function MapCanvas() {
         setStaticFallbackVisible(true)
         setStatus('fallback')
         try {
-          const emerg = validatedEmergencyFallbackStyle()
-          if (emerg) {
-            currentStyleRef.current = null
-            map?.setStyle(emerg, { diff: false })
-          } else console.error('[MapCanvas] Startup timeout: emergency basemap missing')
+          const layer = activeLayerRef.current as MapStyleKey
+          if (
+            tryOpenFreeMapBasemapStyle(map, layer, 'Startup render timeout')
+          ) {
+            currentStyleRef.current = resolveOpenFreeMapBasemapStyle(layer)?.style ?? null
+          } else {
+            const emerg = validatedEmergencyFallbackStyle()
+            if (emerg) {
+              currentStyleRef.current = null
+              map?.setStyle(emerg, { diff: false })
+            } else console.error('[MapCanvas] Startup timeout: emergency basemap missing')
+          }
         } catch {
           /* ignore */
         }
@@ -843,19 +876,26 @@ export default function MapCanvas() {
         // Avoid visible flicker from transient tile/style events after map is already usable.
         // Only force fallback when startup has not reached a ready map yet.
         if (readyOnce || fallbackLocked) {
-          console.warn('[MapCanvas] non-fatal map error', e)
+          if (!isBenignMapTileError(e)) {
+            console.warn('[MapCanvas] non-fatal map error', e)
+          }
           return
         }
-        console.warn('[MapCanvas] startup map error — emergency OSM raster only', e)
+        console.warn('[MapCanvas] startup map error — basemap recovery', e)
         fallbackLocked = true
         setStaticFallbackVisible(true)
         setStatus('fallback')
         try {
-          const fb = validatedEmergencyFallbackStyle()
-          if (fb) {
-            currentStyleRef.current = null
-            map?.setStyle(fb, { diff: false })
-          } else console.error('[MapCanvas] startup error: emergency fallback missing')
+          const layer = activeLayerRef.current as MapStyleKey
+          if (tryOpenFreeMapBasemapStyle(map, layer, 'Startup map error')) {
+            currentStyleRef.current = resolveOpenFreeMapBasemapStyle(layer)?.style ?? null
+          } else {
+            const fb = validatedEmergencyFallbackStyle()
+            if (fb) {
+              currentStyleRef.current = null
+              map?.setStyle(fb, { diff: false })
+            } else console.error('[MapCanvas] startup error: emergency fallback missing')
+          }
         } catch {
           /* ignore */
         }
@@ -869,22 +909,12 @@ export default function MapCanvas() {
         setMapReady(true)
         setMap(map)
         const cachedFix = readCachedOperationalFix()
-        const persisted = readPersistedViewport()
         if (cachedFix) {
-          applyOperationalMapCenter(map, cachedFix, persisted)
+          applyOperationalMapCenter(cachedFix)
           autoOperationalCenteringRef.current = true
           window.setTimeout(() => {
             autoOperationalCenteringRef.current = false
           }, 0)
-          initialOperationalCenterAppliedRef.current = true
-        } else if (persisted) {
-          map.jumpTo({
-            center: [persisted.lng, persisted.lat],
-            zoom: persisted.zoom,
-            bearing: persisted.bearing,
-            pitch: persisted.pitch,
-          })
-          restoredViewportRef.current = true
           initialOperationalCenterAppliedRef.current = true
         } else {
           void tryApplyInitialOperationalCenter()
@@ -995,9 +1025,22 @@ export default function MapCanvas() {
         hardReset()
       })
 
+      const tryInteractionMeasureTap = (e: {
+        lngLat?: { lat: number; lng: number }
+        latlng?: { lat: number; lng: number }
+      }): boolean => {
+        const ll = e?.lngLat ?? e?.latlng
+        if (!ll || typeof ll.lat !== 'number' || typeof ll.lng !== 'number') return false
+        return routeMapClick(ll.lat, ll.lng)
+      }
+
       const placeWaypoint = (e: any, source: 'click' | 'touch'): boolean => {
         if (!map) return false
+        if (shouldBlockWaypointPlacement()) return false
         if (isWaypointMarkerTouchActive()) return false
+        if (shouldSuppressMapTapPlacement()) return false
+        // CRITICAL FIX: Block map clicks while radial menu is active
+        if (isRadialMenuActive()) return false
         // CONTRACT-SENSITIVE (trail snap): while a preview is open, ignore
         // further map taps — operator must use explicit buttons. Never queue
         // multiple previews; gate ensures no duplicate placement from stacked gestures.
@@ -1022,9 +1065,12 @@ export default function MapCanvas() {
 
         // Ignore placement while camera is moving, except deliberate touch taps.
         if (source !== 'touch' && map.isMoving()) return false
-        const nextIdx = waypointCountRef.current + 1
         const type = pendingTypeRef.current
         const manualLabel = nextWaypointLabelRef.current.trim().slice(0, 64)
+
+        // Phase 2: Panel → Intent → createWaypoint() unified pattern
+        // Build label for the intent
+        const nextIdx = waypointCountRef.current + 1
         const autoBase =
           type === 'default'
             ? 'WP'
@@ -1036,19 +1082,27 @@ export default function MapCanvas() {
                   ? 'REST'
                   : type.toUpperCase()
         const label = manualLabel || `${autoBase}-${nextIdx}`
-        const makeId = () => `wp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
 
-        const commitWaypoint = (wp: Waypoint): boolean => {
-          try {
-            addWaypoint(wp)
-          } catch (err) {
-            console.error('[MapCanvas] waypoint add failed', err)
-            return false
-          }
-          setDebugClickRef.current({ lat: wp.lat, lng: wp.lng })
-          if (!keepArmedRef.current) setPendingType('default')
-          if (clearLabelAfterDropRef.current && manualLabel) setNextWaypointLabel('')
-          return true
+        // Panel intent resolver requires GPS - get from GPS ref
+        const gps = gpsRef.current
+        if (gps.lat == null || gps.lng == null) {
+          // Fall back to tap location if GPS not available (panel path legacy behavior)
+          console.warn('[MapCanvas] GPS not available for panel waypoint, using tap location')
+        }
+
+        // Map tap/touch placement always uses the tap coordinates (never device GPS).
+        const intent = WaypointIntentResolver.fromPanel(
+          type,
+          { lat, lng },
+        )
+        const intentWithLabel = { ...intent, label }
+        traceWaypointIntent(intentWithLabel)
+
+        // Transform intent to waypoint
+        let waypoint = createWaypoint(intentWithLabel)
+        if (!waypoint) {
+          console.error('[MapCanvas] Failed to create waypoint from panel intent')
+          return false
         }
 
         const reportWaypointSnapObservation = (
@@ -1089,19 +1143,27 @@ export default function MapCanvas() {
           if (cand) {
             clearTrailSnapPreview()
             lastDropAtRef.current = Date.now()
-            const placed = commitWaypoint({
-              id: makeId(),
-              lng: cand.snappedLng,
+            // Merge snap data into the intent-created waypoint
+            const snappedWaypoint: Waypoint = {
+              ...waypoint,
               lat: cand.snappedLat,
+              lng: cand.snappedLng,
               rawLat: lat,
               rawLng: lng,
               source: 'snapped',
               snapDistanceMeters: cand.distanceMeters,
-              label,
-              type,
-              createdAt: Date.now(),
-            })
+            }
+            let placed = false
+            try {
+              addWaypoint(snappedWaypoint)
+              placed = true
+            } catch (err) {
+              console.error('[MapCanvas] waypoint add failed', err)
+            }
             if (placed) {
+              setDebugClickRef.current({ lat: snappedWaypoint.lat, lng: snappedWaypoint.lng })
+              if (!keepArmedRef.current) setPendingType('default')
+              if (clearLabelAfterDropRef.current && manualLabel) setNextWaypointLabel('')
               reportWaypointSnapObservation({
                 committed: true,
                 source: 'snapped',
@@ -1118,20 +1180,14 @@ export default function MapCanvas() {
           }
         }
 
+        // No snap applied - use intent-created waypoint directly
         try {
-          addWaypoint({
-            id: makeId(),
-            lng,
-            lat,
-            label,
-            type,
-            createdAt: Date.now(),
-          })
+          addWaypoint(waypoint)
         } catch (err) {
           console.error('[MapCanvas] waypoint add failed', err)
           return false
         }
-        setDebugClickRef.current({ lat, lng })
+        setDebugClickRef.current({ lat: waypoint.lat, lng: waypoint.lng })
         if (!keepArmedRef.current) setPendingType('default')
         if (clearLabelAfterDropRef.current && manualLabel) setNextWaypointLabel('')
         reportWaypointSnapObservation({
@@ -1149,6 +1205,7 @@ export default function MapCanvas() {
       }
 
       const maybeDispatchTrailInspect = (e: { lngLat?: { lat: number; lng: number } }) => {
+        if (shouldBlockTrailInspect()) return
         if (activeLayerRef.current !== 'outdoor') return
         if (
           isWaypointPlacementAllowed(
@@ -1166,13 +1223,23 @@ export default function MapCanvas() {
       map.on('click', (e: any) => {
         lastUserInteractionAt = Date.now()
         markUserViewportControl()
+        if (shouldSuppressMapTapPlacement()) return
         // iOS emits synthetic click shortly after a successful touch drop.
         if (Date.now() - lastTouchDropAt < 550) return
+        if (tryInteractionMeasureTap(e)) return
         maybeDispatchTrailInspect(e)
         selectWaypoint(null)
         tapDiag('click placement attempt')
-        placeWaypoint(e, 'click')
+        const placed = placeWaypoint(e, 'click')
+        if (!placed) {
+          const ll = e?.lngLat ?? e?.latlng
+          if (ll && typeof ll.lat === 'number' && typeof ll.lng === 'number') {
+            notifyIdleMapTap({ lat: ll.lat, lng: ll.lng, source: 'click', waypointPlaced: false })
+          }
+        }
       })
+      
+      // Touch handling for waypoint drop (separate from long-press)
       map.on('touchstart', (e: any) => {
         lastUserInteractionAt = Date.now()
         markUserViewportControl()
@@ -1197,12 +1264,15 @@ export default function MapCanvas() {
       })
       map.on('touchend', (e: any) => {
         lastUserInteractionAt = Date.now()
+        if (shouldSuppressMapTapPlacement()) return
+        
         if (multiTouchActive) {
           const remaining = Array.isArray(e?.points) ? e.points.length : 0
           if (remaining <= 1) multiTouchActive = false
           return
         }
         if (touchMoved) return
+        if (tryInteractionMeasureTap(e)) return
         maybeDispatchTrailInspect(e)
         selectWaypoint(null)
         const dropped = placeWaypoint(e, 'touch')
@@ -1216,11 +1286,6 @@ export default function MapCanvas() {
       map.on('movestart', () => {
         if (autoOperationalCenteringRef.current) return
         markUserViewportControl()
-      })
-      map.on('moveend', () => {
-        if (!map) return
-        if (!userHasTakenViewportControlRef.current) return
-        persistViewport(map)
       })
     }
 
@@ -1374,7 +1439,21 @@ export default function MapCanvas() {
 
     const layerKey = activeLayer as MapStyleKey
 
-    const gen = ++styleSwitchGenRef.current
+    const layerBeforeSwitch = currentAppliedLayerRef.current
+
+    function restoreMapUiAfterAbortedSwitch() {
+      if (styleReady) return
+      try {
+        if (!mapCtl.isStyleLoaded?.()) return
+      } catch {
+        return
+      }
+      setStaticFallbackVisible(false)
+      setStatusRef.current('ready')
+      if (currentAppliedLayerRef.current === null && layerBeforeSwitch !== null) {
+        currentAppliedLayerRef.current = layerBeforeSwitch
+      }
+    }
     const prepared = prepareBasemapSwitch(mapCtl, layerKey, currentAppliedLayerRef)
     if (prepared.skip) {
       tier1Debug('map-layer', 'validated-switch-skip-duplicate', {
@@ -1383,8 +1462,11 @@ export default function MapCanvas() {
       })
       syncTopoTerrain(mapCtl, activeLayer)
       nudgeMapRenderAfterStyleChange(mapCtl)
+      setStaticFallbackVisible(false)
+      setStatusRef.current('ready')
       return
     }
+    const gen = ++styleSwitchGenRef.current
     const nextStyle = prepared.style
     const switchDelivery = prepared.delivery
     const vectorStyleUrl = getStyleUrl(layerKey)
@@ -1553,10 +1635,26 @@ export default function MapCanvas() {
       }
     }
 
+    function applyOpenFreeMapVectorFallback(reason: string): boolean {
+      const ofm = resolveOpenFreeMapBasemapStyle(layerKey)
+      if (!ofm) return false
+      console.warn(
+        `[MapCanvas] ${reason} — OpenFreeMap vector fallback for "${activeLayer}"`,
+      )
+      mapLayerDiag('openfreemap-fallback', { layer: activeLayer, reason, ms: msSinceStart() })
+      try {
+        applyStyleTarget(ofm.style, 'none')
+        return true
+      } catch {
+        return false
+      }
+    }
+
     function applyEmergencyFallback(reason: string) {
       if (cancelled || gen !== styleSwitchGenRef.current) return
       if (recoveryMode !== 'none') return
       if (applyMapTilerRasterFallback(reason)) return
+      if (applyOpenFreeMapVectorFallback(reason)) return
       recoveryMode = 'osm-emergency'
       console.warn(`[MapCanvas] ${reason} — emergency OSM raster (MapTiler preset "${activeLayer}" failed)`)
       const r = validatedEmergencyFallbackStyle()
@@ -1680,6 +1778,7 @@ export default function MapCanvas() {
       }
       if (retryVectorStyle('setStyle threw')) return
       if (applyMapTilerRasterFallback('setStyle threw')) return
+      if (applyOpenFreeMapVectorFallback('setStyle threw')) return
       try {
         const r = validatedEmergencyFallbackStyle()
         if (!r) {
@@ -1700,6 +1799,7 @@ export default function MapCanvas() {
 
     return () => {
       cancelled = true
+      restoreMapUiAfterAbortedSwitch()
       window.removeEventListener('pageshow', onLayerPageshow)
       if (styleFallbackTimer != null) {
         window.clearTimeout(styleFallbackTimer)
@@ -1807,6 +1907,13 @@ export default function MapCanvas() {
     const map = mapInstance
     if (!mapReady) return
     if (!map) return
+
+    if (!shouldShowUserMarker()) {
+      userMarkerRef.current?.remove()
+      userMarkerRef.current = null
+      return
+    }
+
     if (gps.lat == null || gps.lng == null) return
     if (!userMarkerRef.current) {
       const el = createUserMarkerEl()
@@ -1873,6 +1980,7 @@ export default function MapCanvas() {
       {showMapFallbackBubble && (
         <div
           aria-hidden
+          data-map-loading-bubble="true"
           style={{
             position: 'absolute',
             inset: 0,
@@ -1906,6 +2014,7 @@ export default function MapCanvas() {
       )}
       <div
         ref={containerRef}
+        data-testid="map-canvas"
         style={{
           position: 'absolute',
           inset: 0,
@@ -1942,6 +2051,7 @@ export default function MapCanvas() {
           ZOOM {zoomLevel.toFixed(1)}
         </div>
       )}
+
     </div>
   )
 }

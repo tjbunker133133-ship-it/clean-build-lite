@@ -52,6 +52,29 @@ export function maptilerBasemapsConfigured(): boolean {
 }
 
 /**
+ * Keyless OpenFreeMap vector styles — additive fallback when MapTiler is missing or rejected.
+ * Satellite has no OpenFreeMap preset; callers fall through to OSM emergency raster.
+ */
+const OPENFREEMAP_STYLE_URL: Partial<Record<MapStyleKey, string>> = Object.freeze({
+  streets: 'https://tiles.openfreemap.org/styles/liberty',
+  topo: 'https://tiles.openfreemap.org/styles/positron',
+  outdoor: 'https://tiles.openfreemap.org/styles/liberty',
+})
+
+export function getOpenFreeMapStyleUrl(layer: MapStyleKey): string | null {
+  return OPENFREEMAP_STYLE_URL[layer] ?? null
+}
+
+export function resolveOpenFreeMapBasemapStyle(layer: MapStyleKey): {
+  style: string
+  delivery: 'vector'
+} | null {
+  const url = getOpenFreeMapStyleUrl(layer)
+  if (!url) return null
+  return { style: url, delivery: 'vector' }
+}
+
+/**
  * Android field HUD: Outdoor direct raster matches corridor prefetch tile URLs.
  * Vector outdoor uses different tile URLs and breaks offline corridor reuse.
  */
@@ -219,7 +242,7 @@ export function isAppleWebKitMapSwitch(): boolean {
 
 /**
  * Primary basemap: MapTiler vector style.json per layer.
- * Falls back to per-layer raster TileJSON, then caller may use OSM emergency.
+ * Falls back to MapTiler raster, OpenFreeMap vector (keyless), then OSM emergency.
  */
 export function resolveBasemapStyle(layer: MapStyleKey): {
   style: string | StyleSpecification
@@ -233,6 +256,8 @@ export function resolveBasemapStyle(layer: MapStyleKey): {
   if (vectorUrl) return { style: vectorUrl, delivery: 'vector' }
   const raster = getMapTilerRasterFallbackStyle(layer)
   if (raster) return { style: raster, delivery: 'maptiler-raster' }
+  const openFreeMap = resolveOpenFreeMapBasemapStyle(layer)
+  if (openFreeMap) return openFreeMap
   const emerg = validatedEmergencyFallbackStyle()
   if (emerg) return { style: emerg, delivery: 'maptiler-raster' }
   return { style: '', delivery: 'vector' }

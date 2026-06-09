@@ -14,6 +14,7 @@
 import { useEffect, useRef } from 'react'
 import { useGPS, type GPSData } from './useGPS'
 import { pushForensicTrace } from '../runtime/runtimeForensics'
+import { getResumeReconciliationEngine } from '../lib/resumeReconciliationEngine'
 
 // ============================================================================
 // GUARDRAIL: GPS Lifecycle Tracing
@@ -85,6 +86,12 @@ export function useGPSWithGuardrails(): ReturnType<typeof useGPS> {
       gps.lng != null
     ) {
       previousFixRef.current = { lat: gps.lat, lng: gps.lng }
+      guardrailState.lastGoodFixAt = Date.now()
+      const engine = getResumeReconciliationEngine()
+      engine.onGpsTick()
+      if (engine.isPending()) {
+        engine.onPostResumeGpsTick()
+      }
     }
   }, [gps.locationState, gps.lat, gps.lng, gps.accuracy])
 
@@ -128,7 +135,41 @@ export function useGPSWithGuardrails(): ReturnType<typeof useGPS> {
     return () => window.clearInterval(interval)
   }, [gps.locationState])
 
+  // E2E-only: wire injected GPS fixes into guardrail forensics (does not alter Tier 1 useGPS)
+  useEffect(() => {
+    if (!isE2eAutomation()) return
+    const w = window as Window & {
+      __gpsListeners?: Array<(fix: GeolocationPosition) => void>
+      __lastGps?: GeolocationPosition
+      __e2eGpsDeliveryCount?: number
+    }
+    w.__gpsListeners = w.__gpsListeners ?? []
+    w.__e2eGpsDeliveryCount = w.__e2eGpsDeliveryCount ?? 0
+
+    const onInject = (fix: GeolocationPosition) => {
+      w.__lastGps = fix
+      w.__e2eGpsDeliveryCount = (w.__e2eGpsDeliveryCount ?? 0) + 1
+      guardrailState.lastGoodFixAt = Date.now()
+      pushForensicTrace('gps', 'e2e_inject', {
+        lat: fix.coords.latitude,
+        lng: fix.coords.longitude,
+      })
+    }
+    w.__gpsListeners.push(onInject)
+    return () => {
+      w.__gpsListeners = w.__gpsListeners?.filter((cb) => cb !== onInject)
+    }
+  }, [])
+
   return gps
+}
+
+function isE2eAutomation(): boolean {
+  if (typeof window === 'undefined') return false
+  return (
+    (navigator as Navigator & { webdriver?: boolean }).webdriver === true ||
+    new URLSearchParams(window.location.search).has('e2e')
+  )
 }
 
 // ============================================================================

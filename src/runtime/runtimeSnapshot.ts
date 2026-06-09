@@ -141,7 +141,13 @@ export interface PolicySnapshot {
 
 export type AppLifecycleState = 'foreground' | 'background' | 'hidden' | 'suspended' | 'resuming'
 export type VoiceRecoveryState = 'idle' | 'suspended' | 'recovering' | 'resumed' | 'failed'
-export type GpsRecoveryState = 'healthy' | 'stale' | 'recovering' | 'denied' | 'suspended'
+export type GpsRecoveryState =
+  | 'healthy'
+  | 'stale'
+  | 'degraded'
+  | 'recovering'
+  | 'denied'
+  | 'suspended'
 export type PersistenceHealth = 'healthy' | 'recovering' | 'corrupt_recovered' | 'error'
 export type RecoveryCoordinatorState = 'idle' | 'background' | 'resuming' | 'recovering' | 'stable'
 
@@ -586,6 +592,17 @@ export function updateVoiceRecoveryState(state: VoiceRecoveryState): void {
   notify()
 }
 
+/** Last time a live GPS fix tick arrived (fed by `custom:gps-update` from useGPS). */
+let gpsWatchdogLastFixMs = Date.now()
+/** Stall watchdog runs only after at least one confirmed fix (avoids desktop cold-start false positives). */
+let gpsWatchdogArmed = false
+/** Suppress repeat stall telemetry until the next live fix. */
+let gpsWatchdogStallActive = false
+
+export function getGPSHealthState(): GpsRecoveryState {
+  return snapshot.runtimeContinuity.gpsRecoveryState
+}
+
 export function updateGpsRecoveryState(state: GpsRecoveryState): void {
   if (snapshot.runtimeContinuity.gpsRecoveryState === state) return
   snapshot.runtimeContinuity = {
@@ -593,7 +610,9 @@ export function updateGpsRecoveryState(state: GpsRecoveryState): void {
     gpsRecoveryState: state,
     recoveryCoordinatorState: state === 'recovering' ? 'recovering' : snapshot.runtimeContinuity.recoveryCoordinatorState,
   }
-  recordEvent('runtime', state === 'stale' ? 'WARN' : state === 'denied' ? 'CRITICAL' : 'INFO', `gps -> ${state}`)
+  const severity =
+    state === 'denied' ? 'CRITICAL' : state === 'stale' || state === 'degraded' ? 'WARN' : 'INFO'
+  recordEvent('runtime', severity, `gps -> ${state}`)
   notify()
 }
 
@@ -1138,6 +1157,72 @@ export function installRuntimeSnapshot(): void {
   }
   window.addEventListener('online', onOnline)
   window.addEventListener('offline', onOffline)
+
+  // GPS WATCHDOG — stall thresholds drive gpsRecoveryState (not log-only).
+  const GPS_STALE_THRESHOLD_MS = 10_000
+  const GPS_DEGRADED_THRESHOLD_MS = 30_000
+
+  // Live fix ticks from useGPS (one event per applied coordinate update).
+  window.addEventListener('custom:gps-update', () => {
+    gpsWatchdogLastFixMs = Date.now()
+    gpsWatchdogArmed = true
+    gpsWatchdogStallActive = false
+    const recovery = snapshot.runtimeContinuity.gpsRecoveryState
+    if (recovery === 'stale' || recovery === 'degraded') {
+      logInfo('RUNTIME', 'GPS recovered from stall', { previousState: recovery })
+      updateGpsRecoveryState('healthy')
+    }
+  })
+
+  // Watchdog timer: check GPS staleness every 5 seconds
+  const GPS_WATCHDOG_INTERVAL_MS = 5_000
+  window.setInterval(() => {
+    if (!gpsWatchdogArmed) return
+
+    const recovery = snapshot.runtimeContinuity.gpsRecoveryState
+    if (recovery === 'recovering' || recovery === 'suspended' || recovery === 'denied') {
+      return
+    }
+
+    const timeSinceLastGps = Date.now() - gpsWatchdogLastFixMs
+    const isVisible = !document.hidden && document.visibilityState === 'visible'
+    if (!isVisible) return
+
+    let targetState: GpsRecoveryState = 'healthy'
+    if (timeSinceLastGps >= GPS_DEGRADED_THRESHOLD_MS) {
+      targetState = 'degraded'
+    } else if (timeSinceLastGps >= GPS_STALE_THRESHOLD_MS) {
+      targetState = 'stale'
+    }
+
+    if (targetState === snapshot.runtimeContinuity.gpsRecoveryState) return
+
+    const previousState = snapshot.runtimeContinuity.gpsRecoveryState
+    updateGpsRecoveryState(targetState)
+
+    if (targetState !== 'healthy') {
+      const firstStallEpisode = !gpsWatchdogStallActive
+      gpsWatchdogStallActive = true
+      logWarn('RUNTIME', 'GPS stall detected — health downgraded', {
+        stallDurationMs: timeSinceLastGps,
+        previousState,
+        currentState: targetState,
+      })
+      if (firstStallEpisode || targetState === 'degraded') {
+        recordEvent(
+          'runtime',
+          'WARN',
+          `GPS stall — gpsRecoveryState -> ${targetState}`,
+          { stallDurationMs: timeSinceLastGps, previousState },
+        )
+        window.dispatchEvent(
+          new CustomEvent('custom:gps-stall-detected', {
+            detail: { stallDurationMs: timeSinceLastGps, gpsRecoveryState: targetState },
+          }),
+        )
+      }
+    }
+  }, GPS_WATCHDOG_INTERVAL_MS)
 
   // Cross-device validation: every 10 s, surface long-lived inconsistencies
   // (voice armed but recognizer never reached `listening`; controller/device mismatch).

@@ -42,6 +42,8 @@ export default function CockpitHudShell({ children }: { children: ReactNode }) {
         inset: 0,
         zIndex: 100,
         pointerEvents: 'none',
+        isolation: 'isolate',
+        contain: 'layout paint',
         ...screenHueFilter(prefs.screen_hue, prefs),
       }}
     >

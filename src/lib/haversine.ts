@@ -33,6 +33,14 @@ export function formatDistance(miles: number): string {
   return `${miles.toFixed(2)} mi`
 }
 
+export function formatDistanceMeters(meters: number, units: 'imperial' | 'metric' = 'imperial'): string {
+  if (units === 'metric') {
+    if (meters < 1000) return `${Math.round(meters)} m`
+    return `${(meters / 1000).toFixed(1)} km`
+  }
+  return formatDistance(meters / METERS_PER_MILE)
+}
+
 export function totalRouteDistance(
   points: Array<{ lat: number; lng: number }>
 ): { miles: number; feet: number } {

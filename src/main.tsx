@@ -1,7 +1,16 @@
+/**
+ * HUD RUNTIME — MUST BE FIRST
+ * Unified context-aware mode system
+ */
+import './lib/hudRuntime'
+
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
 import './index.css'
+import './styles/modern-motion.css'
+import './styles/modern-runtime.css'
+import './styles/modern-visual-override.css'
 import { registerSW } from 'virtual:pwa-register'
 import { getDeviceEnvironment } from './utils/device'
 import {
@@ -11,6 +20,10 @@ import {
   updatePendingSwUpdate,
 } from './runtime/runtimeSnapshot'
 import { installHudSystemHealth } from './runtime/hudSystemHealth'
+import { installBootValidation, publishBootHealth } from './runtime/bootValidation'
+import { installLifecycleRecovery, publishLifecycleRecovery } from './runtime/lifecycleRecovery'
+import { installFieldPowerProfile, publishFieldPowerProfile } from './runtime/fieldPowerProfile'
+import { installFieldSoakDiagnostics, publishFieldSoakDiagnostics } from './runtime/fieldSoakDiagnostics'
 import { installWcelDiagnostics } from './lib/wearables/wcel/store'
 import { installDcrlRuntime } from './runtime/dcrlRuntime'
 import { logInfo, logWarn } from './runtime/logger'
@@ -63,6 +76,14 @@ if (import.meta.env.DEV && typeof window !== 'undefined') {
 // Install runtime truth beacon as early as possible so any subsequent
 // subsystem (SW registration, voice, permissions) can update it.
 installRuntimeSnapshot()
+installBootValidation()
+installLifecycleRecovery()
+installFieldPowerProfile()
+installFieldSoakDiagnostics()
+publishBootHealth()
+publishLifecycleRecovery()
+publishFieldPowerProfile()
+publishFieldSoakDiagnostics()
 installHudSystemHealth()
 installWcelDiagnostics()
 installDcrlRuntime()
@@ -222,6 +243,14 @@ if (typeof window !== 'undefined') {
 
   if ('serviceWorker' in navigator) {
     const flushDeferredReloadIfSafe = () => {
+      let deferred = false
+      try {
+        deferred = sessionStorage.getItem(SW_DEFERRED_RELOAD_KEY) === '1'
+      } catch {
+        deferred = false
+      }
+      if (!deferred) return
+
       traceAction('sw_controllerchange_reload', 'handler_enter', { source: 'deferred_flush_check' })
       const snap = getRuntimeSnapshot()
       const inFlight =
@@ -231,12 +260,6 @@ if (typeof window !== 'undefined') {
         snap.runtimeContinuity.voiceRecoveryState === 'recovering' ||
         snap.runtimeContinuity.appLifecycleState === 'resuming'
       const gestureActive = snap.runtimeContinuity.gestureActive
-      let deferred = false
-      try {
-        deferred = sessionStorage.getItem(SW_DEFERRED_RELOAD_KEY) === '1'
-      } catch {
-        deferred = false
-      }
       if (
         !shouldFlushDeferredReload({
           deferredReloadFlag: deferred,

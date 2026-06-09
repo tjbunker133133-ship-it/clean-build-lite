@@ -1,23 +1,21 @@
-import { useMapContext } from '../context/MapContext'
 import { useGPS } from '../hooks/useGPS'
+import { requestCameraIntent } from '../lib/operationalPerception/perceptionEngine'
 import { getDeviceProfile } from '../runtime/deviceProfile'
 import { touchFontSm, touchMinTarget } from './tokens'
 
 export default function TrackingControl() {
-  const { map } = useMapContext()
   const gps = useGPS()
   const isMobile = getDeviceProfile().interactionMode === 'mobile'
   const fontSm = touchFontSm(isMobile)
   const tapMin = touchMinTarget(isMobile)
 
   const handleRecenter = () => {
-    if (!map) return
-    if (gps.locationState !== 'granted' || gps.lat === null || gps.lng === null) return
-
-    map.flyTo({
+    if (gps.locationState !== 'granted' || gps.lat == null || gps.lng == null) return
+    requestCameraIntent({
+      kind: 'ease_to',
       center: [gps.lng, gps.lat],
       zoom: 15,
-      essential: true,
+      durationMs: 680,
     })
   }
 

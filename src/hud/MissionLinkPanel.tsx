@@ -414,6 +414,130 @@ export default function MissionLinkPanel() {
           </div>
         </details>
 
+        {/* PROMINENT MISSION STATUS HEADER - End Mission always accessible at top */}
+        {inMission ? (
+          <div
+            style={{
+              padding: '12px 14px',
+              borderRadius: 12,
+              border: '1px solid rgba(94, 234, 212, 0.4)',
+              background: 'linear-gradient(135deg, rgba(4, 48, 42, 0.9) 0%, rgba(15, 23, 42, 0.9) 100%)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 10,
+              marginBottom: 4,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div
+                  style={{
+                    width: 40,
+                    height: 40,
+                    borderRadius: '50%',
+                    background: 'rgba(94, 234, 212, 0.2)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: 20,
+                  }}
+                >
+                  {isObserver ? '👁️' : '👥'}
+                </div>
+                <div>
+                  <div style={{ color: '#5eead4', fontWeight: 800, fontSize: 15, letterSpacing: '0.02em' }}>
+                    {isObserver ? 'Monitoring Active' : sync.isMissionHost ? 'Mission Host' : 'Mission Active'}
+                  </div>
+                  <div style={{ color: '#94a3b8', fontSize: 12, marginTop: 2 }}>
+                    {sync.missionName || (isObserver ? sync.monitorTargetCallsign : sync.callsign)}
+                  </div>
+                </div>
+              </div>
+              <div
+                style={{
+                  width: 10,
+                  height: 10,
+                  borderRadius: '50%',
+                  background: '#34d399',
+                  boxShadow: '0 0 8px #34d399',
+                  animation: 'pulseIndicator 2s ease-in-out infinite',
+                }}
+              />
+            </div>
+
+            {/* Primary End Mission Button - Always visible at top */}
+            <button
+              type="button"
+              style={{
+                ...btnStyle(false, true),
+                width: '100%',
+                padding: '12px 16px',
+                fontSize: 13,
+                fontWeight: 800,
+                letterSpacing: '0.04em',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
+              }}
+              onClick={() => (isObserver ? sync.endMonitor() : sync.endMission())}
+            >
+              <span style={{ fontSize: 16 }}>🛑</span>
+              {isObserver ? 'Stop Monitoring' : 'End Mission'}
+            </button>
+
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {sync.joinCode ? (
+                <div
+                  style={{
+                    flex: 1,
+                    minWidth: 120,
+                    padding: '8px 12px',
+                    borderRadius: 8,
+                    background: 'rgba(15, 23, 42, 0.6)',
+                    border: '1px solid rgba(94, 234, 212, 0.2)',
+                    textAlign: 'center',
+                  }}
+                >
+                  <div style={{ color: '#64748b', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                    Mission Code
+                  </div>
+                  <div style={{ color: '#5eead4', fontWeight: 700, fontSize: 18, letterSpacing: 2 }}>
+                    {sync.joinCode}
+                  </div>
+                </div>
+              ) : null}
+              {linked && (
+                <div
+                  style={{
+                    flex: 1,
+                    minWidth: 100,
+                    padding: '8px 12px',
+                    borderRadius: 8,
+                    background: 'rgba(15, 23, 42, 0.6)',
+                    border: '1px solid rgba(52, 211, 153, 0.3)',
+                    textAlign: 'center',
+                  }}
+                >
+                  <div style={{ color: '#64748b', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                    Teammates
+                  </div>
+                  <div style={{ color: '#34d399', fontWeight: 700, fontSize: 18 }}>
+                    {fieldPeers.length + 1}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        ) : null}
+
+        <style>{`
+          @keyframes pulseIndicator {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.7; transform: scale(0.9); }
+          }
+        `}</style>
+
         {sync.phase === 'failed' ? (
           <div
             style={{
@@ -1157,16 +1281,6 @@ export default function MissionLinkPanel() {
               </p>
             ) : null}
           </StepCard>
-        ) : null}
-
-        {inMission ? (
-          <button
-            type="button"
-            style={{ ...btnStyle(false, true), width: '100%' }}
-            onClick={() => (isObserver ? sync.endMonitor() : sync.endMission())}
-          >
-            {isObserver ? 'Stop monitoring' : 'End mission link'}
-          </button>
         ) : null}
 
         {filterTeammatePresence(sync.teamPresence, sync.deviceId).length > 0 ? (

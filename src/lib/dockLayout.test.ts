@@ -1,10 +1,18 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CockpitPanelRect } from '../types/cockpit'
 import { relayoutDockedPanels } from '../context/CockpitContext'
 
 vi.mock('../lib/viewport', () => ({
   cockpitViewport: () => ({ vw: 390, vh: 844 }),
 }))
+
+beforeEach(() => {
+  vi.stubGlobal('window', {
+    __HUD_RUNTIME__: {
+      layout: { dock: true, panels: true, cockpit: true, overlays: true },
+    },
+  })
+})
 
 function dockedPanel(y: number, side: 'left' | 'right' = 'left'): CockpitPanelRect {
   return {
