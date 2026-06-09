@@ -1,0 +1,13 @@
+{
+  "displayName": "HUD V.1",
+  "shortName": "HUD V1",
+  "slug": "hud-v1",
+  "version": "1.0.0",
+  "canonicalVercelProject": "hud-v1",
+  "productionBranch": "stable/2026-05-23",
+  "legacyVercelProjects": [],
+  "repo": {
+    "upstream": "tjbunker133133-ship-it/clean-build-lite",
+    "fieldBranch": "stable/2026-05-23"
+  }
+}
