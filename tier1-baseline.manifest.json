@@ -8,7 +8,7 @@
   },
   "production": {
     "src/hooks/useGPS.ts": "7049295ef7c037a9a2bc274d680a722b5114bcae3e2313d172ced1a566c48c6c",
-    "src/components/MapCanvas.tsx": "58789d0e2b92c5d10219272f06f07eb686061b106a90d6c95375422a13246f07",
+    "src/components/MapCanvas.tsx": "945cba13eb32d1660f772408510a246bac61003ec4a07348630c99c272a89937",
     "src/lib/mapStyles.ts": "40d052f54144ac2b7b612a9a79e4c958ec98e0dd08dbc3810e22f66de30addef",
     "src/hud/SOSPanel.tsx": "473ee124e832c1ac8039d1c18b7b35d6f6d7a98f19d68dfa9c28ff308555f916",
     "src/hud/DeadManPanel.tsx": "8dada3e4541f93fd651e22502680e16dc9c72fd69e94ed91f3db8bc5fde8b1b4",

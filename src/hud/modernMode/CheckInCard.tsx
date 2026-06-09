@@ -15,11 +15,13 @@ import React, { useState } from 'react'
 import { ModePortal } from '../../lib/presentationIsolation'
 import { logModernGuardrailApplied } from '../../lib/modernLayerGuardrails'
 import { useMissionSync } from '../../context/MissionSyncContext'
+import { getDeviceProfile } from '../../runtime/deviceProfile'
 
 logModernGuardrailApplied('CheckInCard')
 
 interface CheckInCardProps {
   onClose: () => void
+  variant?: 'modern' | 'balanced'
 }
 
 type CheckInStatus = 'ok' | 'delayed' | 'need-help' | 'emergency'
@@ -63,8 +65,10 @@ const CHECKIN_OPTIONS: CheckInOption[] = [
   },
 ]
 
-export default function CheckInCard({ onClose }: CheckInCardProps) {
+export default function CheckInCard({ onClose, variant = 'modern' }: CheckInCardProps) {
   const mission = useMissionSync()
+  const isBalanced = variant === 'balanced'
+  const isMobile = getDeviceProfile().interactionMode === 'mobile'
   const [selectedStatus, setSelectedStatus] = useState<CheckInStatus | null>(null)
   const [note, setNote] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -88,24 +92,56 @@ export default function CheckInCard({ onClose }: CheckInCardProps) {
     }, 1500)
   }
 
-  const viewportSafeShell: React.CSSProperties = {
-    position: 'fixed',
-    inset: 0,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 'max(16px, env(safe-area-inset-top, 0px)) 16px max(16px, env(safe-area-inset-bottom, 0px))',
-    zIndex: 5000,
-    pointerEvents: 'auto',
-    overflowY: 'auto',
-    WebkitOverflowScrolling: 'touch',
+  const viewportSafeShell: React.CSSProperties = isBalanced
+    ? {
+        position: 'absolute',
+        inset: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        justifyContent: 'flex-end',
+        alignItems: 'center',
+        padding: `0 ${isMobile ? 0 : 16}px calc(${isMobile ? 8 : 20}px + env(safe-area-inset-bottom))`,
+        zIndex: 1,
+        pointerEvents: 'auto',
+        background: 'rgba(0,0,0,0.42)',
+      }
+    : {
+        position: 'fixed',
+        inset: 0,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 'max(16px, env(safe-area-inset-top, 0px)) 16px max(16px, env(safe-area-inset-bottom, 0px))',
+        zIndex: 5000,
+        pointerEvents: 'auto',
+        overflowY: 'auto',
+        WebkitOverflowScrolling: 'touch',
+      }
+
+  const cardShell = (children: React.ReactNode, portalId: string) => {
+    const card = (
+      <div
+        className="checkin-card-container"
+        style={viewportSafeShell}
+        onClick={isBalanced ? onClose : undefined}
+        data-sheet-layer={variant}
+      >
+        <div onClick={isBalanced ? (e) => e.stopPropagation() : undefined} style={{ width: '100%', display: 'flex', justifyContent: 'center' }}>
+          {children}
+        </div>
+      </div>
+    )
+    if (isBalanced) return card
+    return <ModePortal portalId={portalId}>{card}</ModePortal>
   }
 
   if (showConfirmation) {
     const option = CHECKIN_OPTIONS.find(o => o.status === selectedStatus)!
-    return (
-      <ModePortal portalId="modern-checkin-confirm">
-      <div className="checkin-confirmation" style={viewportSafeShell}>
+    return cardShell(
+      <div
+        className="checkin-confirmation"
+        style={isBalanced ? { width: '100%', maxWidth: isMobile ? '100%' : 420 } : undefined}
+      >
         <div
           style={{
             padding: '40px 48px',
@@ -187,32 +223,35 @@ export default function CheckInCard({ onClose }: CheckInCardProps) {
             100% { transform: scale(1); opacity: 1; }
           }
         `}</style>
-      </div>
-      </ModePortal>
+      </div>,
+      'modern-checkin-confirm',
     )
   }
 
-  return (
-    <ModePortal portalId="modern-checkin">
-    <div className="checkin-card-container" style={viewportSafeShell}>
-      <div
-        className="checkin-card"
-        style={{
-          width: 'min(90vw, 380px)',
-          maxHeight: 'min(85vh, 560px)',
-          background: 'rgba(28, 28, 30, 0.98)',
-          borderRadius: 24,
-          border: '1px solid rgba(255, 255, 255, 0.1)',
-          backdropFilter: 'blur(30px) saturate(1.5)',
-          WebkitBackdropFilter: 'blur(30px) saturate(1.5)',
-          boxShadow: '0 20px 60px rgba(0, 0, 0, 0.5)',
-          overflowY: 'auto',
-          overflowX: 'hidden',
-          WebkitOverflowScrolling: 'touch',
-          animation: 'cardEnter 350ms cubic-bezier(0.25, 0.46, 0.45, 0.94)',
-          flexShrink: 0,
-        }}
-      >
+  return cardShell(
+    <div
+      className="checkin-card"
+      style={{
+        width: isBalanced ? '100%' : 'min(90vw, 380px)',
+        maxWidth: isBalanced && isMobile ? '100%' : undefined,
+        maxHeight: isBalanced
+          ? (isMobile ? 'min(88vh, 640px)' : 'min(80vh, 560px)')
+          : 'min(85vh, 560px)',
+        background: 'rgba(28, 28, 30, 0.98)',
+        borderRadius: isBalanced
+          ? `${isMobile ? 20 : 24}px ${isMobile ? 20 : 24}px 0 0`
+          : 24,
+        border: '1px solid rgba(255, 255, 255, 0.1)',
+        backdropFilter: 'blur(30px) saturate(1.5)',
+        WebkitBackdropFilter: 'blur(30px) saturate(1.5)',
+        boxShadow: '0 20px 60px rgba(0, 0, 0, 0.5)',
+        overflowY: 'auto',
+        overflowX: 'hidden',
+        WebkitOverflowScrolling: 'touch',
+        animation: 'cardEnter 350ms cubic-bezier(0.25, 0.46, 0.45, 0.94)',
+        flexShrink: 0,
+      }}
+    >
         {/* Header */}
         <div
           style={{
@@ -463,21 +502,20 @@ export default function CheckInCard({ onClose }: CheckInCardProps) {
             </div>
           )}
         </div>
-      </div>
 
-      <style>{`
-        @keyframes cardEnter {
-          from {
-            opacity: 0;
-            transform: scale(0.95) translateY(20px);
+        <style>{`
+          @keyframes cardEnter {
+            from {
+              opacity: 0;
+              transform: scale(0.95) translateY(20px);
+            }
+            to {
+              opacity: 1;
+              transform: scale(1) translateY(0);
+            }
           }
-          to {
-            opacity: 1;
-            transform: scale(1) translateY(0);
-          }
-        }
-      `}</style>
-    </div>
-    </ModePortal>
+        `}</style>
+      </div>,
+    'modern-checkin',
   )
 }

@@ -889,6 +889,30 @@ export function osgClearMeasurePoints(): void {
   )
 }
 
+/** Remove completed or abandoned measurement geometry from session. */
+export function osgClearActiveMeasurement(): void {
+  if (!graph.session.activeMeasurement) return
+  transitionOperationalState(
+    { session: { activeMeasurement: null } },
+    'measure_dismiss',
+  )
+}
+
+export function osgUpdateMeasurePoint(index: number, lat: number, lng: number): boolean {
+  const existing = graph.session.activeMeasurement
+  if (!existing || index < 0 || index >= existing.points.length) return false
+  const nextPts = existing.points.map((p, i) => (i === index ? { lat, lng } : p))
+  transitionOperationalState(
+    {
+      session: {
+        activeMeasurement: buildMeasurement(existing.surface, nextPts, existing),
+      },
+    },
+    'measure_drag',
+  )
+  return true
+}
+
 // ─── Mission adapters (formerly missionController) ─────────────────────────────
 
 function generateMissionId(): string {

@@ -16,6 +16,7 @@
 import React, { useCallback, useState } from 'react'
 import type { ToolMode } from './hooks/useBalancedWorkspace'
 import { colors, spacing, typography, effects, zIndex } from './lib/balancedTokens'
+import { getDeviceProfile } from '../../runtime/deviceProfile'
 
 interface BalancedQuickActionsProps {
   activeTool: ToolMode
@@ -66,6 +67,8 @@ export default function BalancedQuickActions({
   onClearTool,
 }: BalancedQuickActionsProps) {
   const [hoveredTool, setHoveredTool] = useState<ToolMode | null>(null)
+  const isMobile = getDeviceProfile().interactionMode === 'mobile'
+  const isCompact = isMobile || (typeof window !== 'undefined' && window.innerWidth < 480)
 
   // Tool click handler - immediate activation
   const handleToolClick = useCallback((tool: ToolMode) => {
@@ -121,10 +124,13 @@ export default function BalancedQuickActions({
           display: 'flex',
           flexDirection: 'row',
           alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: spacing.lg,
+          justifyContent: isCompact ? 'flex-start' : 'space-between',
+          gap: isCompact ? spacing.sm : spacing.lg,
           padding: `${spacing.sm}px ${spacing.md}px`,
           width: '100%',
+          overflowX: isCompact ? 'auto' : 'visible',
+          WebkitOverflowScrolling: 'touch',
+          scrollbarWidth: 'none',
           background: colors.bg.panel,
           backdropFilter: effects.blur.md,
           borderRadius: effects.radius.lg,
@@ -186,6 +192,7 @@ export default function BalancedQuickActions({
                 color: isActive ? colors.accent.primary : colors.text.secondary,
                 fontFamily: typography.fontFamily,
                 transition: effects.transition.fast,
+                display: isCompact ? 'none' : 'inline',
               }}>
                 {tool.label}
               </span>
@@ -194,9 +201,7 @@ export default function BalancedQuickActions({
         })}
       </div>
 
-      {/* ═══════════════════════════════════════════════════════════════════════
-          CENTER: Active state indicator
-         ═══════════════════════════════════════════════════════════════════════ */}
+      {!isCompact && (
       <div style={{
         display: 'flex',
         alignItems: 'center',
@@ -205,6 +210,8 @@ export default function BalancedQuickActions({
         background: colors.bg.card,
         borderRadius: effects.radius.md,
         border: `1px solid ${colors.border.default}`,
+        flexShrink: 1,
+        minWidth: 0,
       }}>
         <div style={{
           width: 8,
@@ -218,15 +225,20 @@ export default function BalancedQuickActions({
                 ? colors.accent.primary
                 : colors.accent.purple,
           animation: activeTool !== 'inspect' ? 'pulse 2s ease-in-out infinite' : 'none',
+          flexShrink: 0,
         }} />
         <span style={{
           fontSize: typography.size.sm,
           color: colors.text.secondary,
           fontFamily: typography.fontFamily,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
         }}>
           {statusText}
         </span>
       </div>
+      )}
 
       {/* ═══════════════════════════════════════════════════════════════════════
           RIGHT: Panel toggles
@@ -235,6 +247,8 @@ export default function BalancedQuickActions({
         display: 'flex',
         alignItems: 'center',
         gap: spacing.xs,
+        flexShrink: 0,
+        marginLeft: isCompact ? 'auto' : undefined,
       }}>
         {PANELS.map((panel) => {
           const isVisible = panelsVisible[panel.panelKey]
@@ -275,6 +289,7 @@ export default function BalancedQuickActions({
                 fontWeight: isVisible ? typography.weight.medium : typography.weight.regular,
                 color: isVisible ? colors.text.primary : colors.text.secondary,
                 fontFamily: typography.fontFamily,
+                display: isCompact ? 'none' : 'inline',
               }}>
                 {panel.label}
               </span>

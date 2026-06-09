@@ -24,12 +24,24 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useMissionSync } from '../context/MissionSyncContext'
+import { useTacticalProfile } from '../hooks/useTacticalProfile'
 import { layerZ } from '../lib/presentationIsolation/zIndexLayers'
+import { dispatchModernRescue } from '../lib/modernRescueBridge'
+import { emitHaptic } from '../runtime/haptics'
+import { cockpitSafeAreaInsets, cockpitViewport } from '../lib/viewport'
+import { MODERN_MOBILE_LAYOUT } from './modernMode/modernMobileLayout'
 import {
+  magnetizeSosPosition,
   sosAnchorFromRect,
   sosPositionFromPointer,
   type SosScreenPosition,
+  type SosViewport,
 } from './modernSafetyZoneDrag'
+
+function sosViewportFromCockpit(): SosViewport {
+  const { vw, vh } = cockpitViewport()
+  return { width: vw, height: vh }
+}
 
 interface ModernSafetyZoneProps {
   /** DeadMan timer state from parent */
@@ -37,6 +49,8 @@ interface ModernSafetyZoneProps {
   deadmanMaxSeconds?: number
   deadmanState?: 'idle' | 'armed' | 'warning' | 'critical'
   onDeadmanPing?: () => void
+  /** Fired when SOS countdown completes — parent may set emergency flags */
+  onSosActivated?: () => void
 }
 
 // Storage key for SOS position preference
@@ -55,7 +69,9 @@ function loadSavedPosition(): SavedSosPosition {
     if (saved) {
       const parsed = JSON.parse(saved) as { x?: unknown; y?: unknown }
       if (typeof parsed.x === 'number' && typeof parsed.y === 'number') {
-        return { x: parsed.x, y: parsed.y }
+        const viewport = sosViewportFromCockpit()
+        const insets = cockpitSafeAreaInsets()
+        return magnetizeSosPosition({ x: parsed.x, y: parsed.y }, viewport, insets)
       }
     }
   } catch {
@@ -77,9 +93,12 @@ export function ModernSafetyZone({
   deadmanMaxSeconds = 300,
   deadmanState = 'idle',
   onDeadmanPing,
+  onSosActivated,
 }: ModernSafetyZoneProps) {
   const [sosArming, setSosArming] = useState(false)
   const [sosCountdown, setSosCountdown] = useState(3)
+  const [dispatchStatus, setDispatchStatus] = useState<string | null>(null)
+  const { operationalReady } = useTacticalProfile()
 
   // Draggable SOS state
   const [sosPosition, setSosPosition] = useState<SavedSosPosition>(loadSavedPosition())
@@ -93,17 +112,30 @@ export function ModernSafetyZone({
   const mission = useMissionSync()
   const inMission = mission.role !== 'idle'
 
+  useEffect(() => {
+    if (sosPosition == null) return
+    const viewport = sosViewportFromCockpit()
+    const insets = cockpitSafeAreaInsets()
+    const snapped = magnetizeSosPosition(sosPosition, viewport, insets)
+    if (snapped.x !== sosPosition.x || snapped.y !== sosPosition.y) {
+      setSosPosition(snapped)
+      savePosition(snapped)
+    }
+  }, [])
+
   // SOS activation with countdown
   const handleSosPress = useCallback(() => {
     if (sosArming) {
-      // Cancel if already arming
       setSosArming(false)
       setSosCountdown(3)
+      window.dispatchEvent(new CustomEvent('hud:sos-disarm'))
+      emitHaptic('commandSuccess')
       return
     }
 
     setSosArming(true)
     setSosCountdown(3)
+    emitHaptic('criticalAlert')
   }, [sosArming])
 
   // Countdown effect
@@ -111,12 +143,16 @@ export function ModernSafetyZone({
     if (!sosArming) return
 
     if (sosCountdown <= 0) {
-      // SOS ACTIVATED - Dispatch actual SOS
-      console.log('[SOS] EMERGENCY ACTIVATED')
-      // TODO: Wire to actual SOS dispatch system
-      // window.dispatchEvent(new CustomEvent('hud-sos-activate'))
       setSosArming(false)
       setSosCountdown(3)
+      onSosActivated?.()
+      window.dispatchEvent(new CustomEvent('hud:sos-arm'))
+      void dispatchModernRescue('SOS', { profileOperational: operationalReady }).then((result) => {
+        setDispatchStatus(result.ok ? `SOS sent — ${result.message}` : result.message)
+        if (import.meta.env.DEV) {
+          console.log('[ModernSafetyZone] SOS dispatch', result)
+        }
+      })
       return
     }
 
@@ -125,7 +161,7 @@ export function ModernSafetyZone({
     }, 1000)
 
     return () => clearTimeout(timer)
-  }, [sosArming, sosCountdown])
+  }, [sosArming, sosCountdown, onSosActivated, operationalReady])
 
   // DeadMan progress calculation
   const deadmanProgress = deadmanMaxSeconds > 0
@@ -170,12 +206,14 @@ export function ModernSafetyZone({
     }
 
     if (isDragging || distance > DRAG_THRESHOLD) {
-      const viewport = { width: window.innerWidth, height: window.innerHeight }
+      const viewport = sosViewportFromCockpit()
+      const insets = cockpitSafeAreaInsets()
       const next = sosPositionFromPointer(
         e.clientX,
         e.clientY,
         dragOffsetRef.current,
         viewport,
+        insets,
       )
       setSosPosition(next)
     }
@@ -193,7 +231,11 @@ export function ModernSafetyZone({
 
     // Save position if we dragged
     if (wasDragging && sosPosition) {
-      savePosition(sosPosition)
+      const viewport = sosViewportFromCockpit()
+      const insets = cockpitSafeAreaInsets()
+      const snapped = magnetizeSosPosition(sosPosition, viewport, insets)
+      setSosPosition(snapped)
+      savePosition(snapped)
     } else {
       // It was a click/tap - trigger SOS
       handleSosPress()
@@ -207,13 +249,18 @@ export function ModernSafetyZone({
     return (
       <div
         className="sos-escalation-overlay"
+        role="alertdialog"
+        aria-modal="true"
+        aria-label="Emergency SOS countdown"
         style={{
           position: 'fixed',
           inset: 0,
           background: 'rgba(0, 0, 0, 0.88)',
           backdropFilter: 'blur(24px) saturate(1.2)',
           WebkitBackdropFilter: 'blur(24px) saturate(1.2)',
-          zIndex: 100000,
+          zIndex: layerZ('CRITICAL_ALERT'),
+          pointerEvents: 'auto',
+          touchAction: 'manipulation',
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
@@ -296,6 +343,12 @@ export function ModernSafetyZone({
           Cancel SOS
         </button>
 
+        {dispatchStatus && (
+          <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.65)', maxWidth: 280, textAlign: 'center' }}>
+            {dispatchStatus}
+          </div>
+        )}
+
         <style>{`
           @keyframes sosPulse {
             0%, 100% { transform: scale(1); box-shadow: 0 0 60px rgba(255, 59, 48, 0.5); }
@@ -311,8 +364,8 @@ export function ModernSafetyZone({
   const sosButtonStyle: React.CSSProperties = sosUsesDefaultAnchor
     ? {
         position: 'fixed',
-        right: `max(16px, env(safe-area-inset-right))`,
-        bottom: `calc(16px + max(16px, env(safe-area-inset-bottom)))`,
+        right: MODERN_MOBILE_LAYOUT.sosDefaultRight,
+        bottom: MODERN_MOBILE_LAYOUT.sosDefaultBottom,
       }
     : {
         position: 'fixed',
@@ -336,7 +389,7 @@ export function ModernSafetyZone({
           position: 'fixed',
           bottom: 0,
           left: 0,
-          padding: `12px 16px calc(12px + max(16px, env(safe-area-inset-bottom)))`,
+          padding: `12px 16px ${MODERN_MOBILE_LAYOUT.deadManBottom}`,
           display: 'flex',
           alignItems: 'center',
           gap: 16,
@@ -352,6 +405,8 @@ export function ModernSafetyZone({
             gap: 10,
             padding: '8px 14px',
             borderRadius: 20,
+            minHeight: MODERN_MOBILE_LAYOUT.touchMin,
+            cursor: deadmanState !== 'idle' ? 'pointer' : 'default',
             background: deadmanState === 'critical' 
               ? 'rgba(255, 59, 48, 0.2)' 
               : deadmanState === 'warning'
@@ -367,6 +422,9 @@ export function ModernSafetyZone({
             boxShadow: '0 4px 20px rgba(0, 0, 0, 0.3)',
             transition: 'all 300ms ease',
           }}
+          onClick={deadmanState !== 'idle' ? onDeadmanPing : undefined}
+          role={deadmanState !== 'idle' ? 'button' : undefined}
+          aria-label={deadmanState !== 'idle' ? 'Reset dead man timer' : 'Dead man watch status'}
         >
           {/* DeadMan icon/status dot */}
           <div
@@ -439,7 +497,7 @@ export function ModernSafetyZone({
           style={{
             position: 'fixed',
             left: '50%',
-            bottom: `calc(16px + max(16px, env(safe-area-inset-bottom)))`,
+            bottom: MODERN_MOBILE_LAYOUT.sosDefaultBottom,
             transform: 'translateX(-50%)',
             pointerEvents: 'auto',
             display: 'flex',

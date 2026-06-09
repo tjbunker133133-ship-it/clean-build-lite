@@ -36,6 +36,8 @@ import {
   osgShouldBlockTrailInspect,
   osgShouldBlockWaypointPlacement,
   osgClearMeasurePoints,
+  osgClearActiveMeasurement,
+  osgUpdateMeasurePoint,
   osgSyncBalancedTool,
   osgSyncModernMeasure,
   subscribeOperationalGraph,
@@ -189,6 +191,8 @@ export const syncBalancedTool = osgSyncBalancedTool
 export const syncModernMeasure = osgSyncModernMeasure
 
 export const clearMeasurePoints = osgClearMeasurePoints
+export const clearActiveMeasurement = osgClearActiveMeasurement
+export const updateMeasurePoint = osgUpdateMeasurePoint
 export const setRadialAnchor = osgSetRadialAnchor
 export const getRadialAnchor = osgGetRadialAnchor
 export const setPendingWaypointType = osgSetPendingWaypointType
@@ -220,11 +224,16 @@ export function osgModeToBalancedTool(
 
 export function getBalancedToolFromOsg(): 'inspect' | 'route' | 'waypoint' | 'measure' | 'none' {
   const osg = getOperationalGraphSnapshot()
-  return osgModeToBalancedTool(
+  const tool = osgModeToBalancedTool(
     osgGetInteractionMode(),
     osg.interaction.toolVariant,
     osg.interaction.pendingWaypointType,
   )
+  const measurePts = osg.session.activeMeasurement?.points.length ?? 0
+  if (tool === 'none' && measurePts > 0 && osg.session.activeMeasurement?.surface === 'balanced') {
+    return 'measure'
+  }
+  return tool
 }
 
 export function __resetMapInteractionControllerForTests(): void {

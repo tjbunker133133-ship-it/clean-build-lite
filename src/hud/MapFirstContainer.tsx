@@ -362,6 +362,44 @@ export function MapFirstContainer({ children, mapComponent }: MapFirstContainerP
             border: 1px solid rgba(232, 244, 248, 0.5) !important;
           }
         }
+
+        /* ═══════════════════════════════════════════════
+           ADAPTIVE IMMERSION — situational density/focus
+           ═══════════════════════════════════════════════ */
+
+        [data-mode-root="modern"][data-modern-density="minimal"] [data-modern-passive="true"] {
+          opacity: 0.45 !important;
+        }
+
+        [data-mode-root="modern"][data-modern-focus="emergency"] [data-modern-decorative="true"],
+        [data-mode-root="modern"][data-modern-focus="navigation"] [data-modern-decorative="true"],
+        [data-mode-root="modern"][data-modern-focus="driving"] [data-modern-decorative="true"] {
+          display: none !important;
+        }
+
+        [data-mode-root="modern"][data-modern-focus="emergency"] [data-modern-transient="true"] {
+          opacity: 0.35 !important;
+        }
+
+        [data-mode-root="modern"][data-modern-motion="urgent"] button,
+        [data-mode-root="modern"][data-modern-focus="emergency"] button {
+          min-height: 44px !important;
+          min-width: 44px !important;
+        }
+
+        [data-mode-root="modern"][data-modern-glance="true"] [data-modern-passive="true"] {
+          opacity: 0.2 !important;
+        }
+
+        [data-mode-root="modern"][data-modern-glance="true"] [data-modern-transient="true"] {
+          opacity: 0.55 !important;
+        }
+
+        [data-mode-root="modern"][data-modern-tone="urgent"] [data-modern-decorative="true"],
+        [data-mode-root="modern"][data-modern-activity="driving"] [data-modern-decorative="true"],
+        [data-mode-root="modern"][data-modern-activity="biking"] [data-modern-decorative="true"] {
+          display: none !important;
+        }
       `
       document.head.appendChild(style)
     }

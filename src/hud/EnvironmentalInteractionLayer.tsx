@@ -25,13 +25,15 @@
  * readability and touch accessibility.
  */
 
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useMemo } from 'react'
 import { useHudPresentation } from '../context/HudPresentationContext'
 import { useGPS } from '../hooks/useGPS'
-import { useMissionSync } from '../context/MissionSyncContext'
 import { useOverlayContext } from '../context/OverlayContext'
 import { useMovementEngine } from '../hooks/useMovementEngine'
 import { useReducedMotion } from '../hooks/useReducedMotion'
+import { useModernSituational } from './modernMode/ModernSituationalContext'
+import type { ModernFieldActivity } from './modernMode/modernActivityInference'
+import { MODERN_MOBILE_LAYOUT } from './modernMode/modernMobileLayout'
 import { MODERN_FLOATING } from './modernMode/modernVisualTokens'
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -40,6 +42,23 @@ import { MODERN_FLOATING } from './modernMode/modernVisualTokens'
 
 type MovementState = 'idle' | 'walking' | 'cycling' | 'driving' | 'unknown'
 type ActivityContext = 'planning' | 'navigating' | 'paused' | 'emergency'
+
+function activityToContext(activity: ModernFieldActivity): ActivityContext {
+  if (activity === 'emergency') return 'emergency'
+  if (
+    activity === 'navigation' ||
+    activity === 'driving' ||
+    activity === 'biking' ||
+    activity === 'hiking' ||
+    activity === 'rafting'
+  ) {
+    return 'navigating'
+  }
+  if (activity === 'stationary' || activity === 'observation' || activity === 'fishing') {
+    return 'planning'
+  }
+  return 'paused'
+}
 type EnvironmentalHazard = 'fire' | 'weather' | 'air_quality' | 'terrain' | null
 
 interface EnvironmentalState {
@@ -81,36 +100,27 @@ function useMovementState(): { state: MovementState; speed: number } {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ACTIVITY CONTEXT DETECTION
-// ═══════════════════════════════════════════════════════════════════════════════
-
-function useActivityContext(movement: MovementState): ActivityContext {
-  const mission = useMissionSync()
-
-  return useMemo(() => {
-    if (mission.role === 'idle') {
-      return movement === 'idle' ? 'planning' : 'navigating'
-    }
-    if (movement !== 'idle' && movement !== 'unknown') {
-      return 'navigating'
-    }
-    return 'paused'
-  }, [movement, mission.role])
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
 // CONTEXTUAL INDICATOR COMPONENTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
  * Movement Indicator - Shows current movement state with subtle animation
  */
-function MovementIndicator({ state, speed }: { state: MovementState; speed: number }) {
+function MovementIndicator({
+  state,
+  speed,
+  activity,
+}: {
+  state: MovementState
+  speed: number
+  activity: ModernFieldActivity
+}) {
   const { mode } = useHudPresentation()
   const reducedMotion = useReducedMotion()
 
   if (mode !== 'immersive') return null
   if (state === 'idle' || state === 'unknown') return null
+  if (activity === 'driving' || activity === 'stationary' || activity === 'fishing') return null
 
   const formatSpeed = (s: number): string => {
     const mph = s * 2.237
@@ -139,7 +149,7 @@ function MovementIndicator({ state, speed }: { state: MovementState; speed: numb
     <div
       style={{
         position: 'fixed',
-        bottom: 88,
+        bottom: MODERN_MOBILE_LAYOUT.centerRailBottom,
         left: '50%',
         transform: 'translateX(-50%)',
         zIndex: 90,
@@ -185,72 +195,7 @@ function MovementIndicator({ state, speed }: { state: MovementState; speed: numb
   )
 }
 
-/**
- * Voice Activity Indicator - Subtle pulse when voice system is active
- */
-function VoiceActivityIndicator() {
-  const { mode } = useHudPresentation()
-  const [isListening, setIsListening] = useState(false)
-  const [isProcessing, setIsProcessing] = useState(false)
-  
-  // TODO: Wire to actual voice state from context
-  // For now, simulating with keyboard shortcut for testing
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'v' && e.shiftKey) {
-        setIsListening(true)
-        setTimeout(() => {
-          setIsListening(false)
-          setIsProcessing(true)
-          setTimeout(() => setIsProcessing(false), 2000)
-        }, 3000)
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [])
-  
-  if (mode !== 'immersive') return null
-  if (!isListening && !isProcessing) return null
-
-  return (
-    <div
-      style={{
-        position: 'fixed',
-        bottom: 90,
-        left: '50%',
-        transform: 'translateX(-50%)',
-        zIndex: 100,
-        padding: '8px 16px',
-        borderRadius: 20,
-        background: isListening 
-          ? 'rgba(255, 59, 48, 0.9)' 
-          : 'rgba(0, 122, 255, 0.9)',
-        backdropFilter: 'blur(20px)',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10,
-        fontFamily: '-apple-system, SF Pro Text, system-ui, sans-serif',
-        fontSize: 13,
-        fontWeight: 600,
-        color: 'white',
-        boxShadow: isListening 
-          ? '0 4px 20px rgba(255, 59, 48, 0.4)' 
-          : '0 4px 20px rgba(0, 122, 255, 0.4)',
-        animation: 'voicePulse 1.5s ease-in-out infinite',
-      }}
-    >
-      <span style={{ fontSize: 16 }}>{isListening ? '🎤' : '⚙️'}</span>
-      <span>{isListening ? 'Listening...' : 'Processing...'}</span>
-      <style>{`
-        @keyframes voicePulse {
-          0%, 100% { opacity: 0.85; transform: translateX(-50%) scale(1); }
-          50% { opacity: 1; transform: translateX(-50%) scale(1.02); }
-        }
-      `}</style>
-    </div>
-  )
-}
+/** Voice UI runs globally via SVS/VoicePanel — no duplicate Modern indicator. */
 
 /**
  * Environmental Hazard Indicator - Shows when environmental overlays indicate risk
@@ -433,7 +378,7 @@ function NavigationProminence({
       <div
         style={{
           position: 'fixed',
-          bottom: 84,
+          bottom: MODERN_MOBILE_LAYOUT.reactionBottom,
           left: 16,
           zIndex: 90,
           padding: '4px 8px',
@@ -460,9 +405,12 @@ function NavigationProminence({
 
 export function EnvironmentalInteractionLayer() {
   const { mode } = useHudPresentation()
+  const situational = useModernSituational()
   const { state: movement, speed } = useMovementState()
-  const activity = useActivityContext(movement)
+  const activity = activityToContext(situational.activity)
   const { toggles } = useOverlayContext()
+
+  const suppressPassive = situational.sensory.suppressPassive
 
   // Derive active overlay set from real toggle state
   const activeOverlays = useMemo(
@@ -487,8 +435,9 @@ export function EnvironmentalInteractionLayer() {
 
   return (
     <div data-env-interaction-layer="modern" aria-hidden style={{ pointerEvents: 'none' }}>
-      <MovementIndicator state={movement} speed={speed} />
-      <VoiceActivityIndicator />
+      {!suppressPassive && (
+        <MovementIndicator state={movement} speed={speed} activity={situational.activity} />
+      )}
       <EnvironmentalHazardIndicator activeOverlays={activeOverlays} />
       <NavigationProminence movement={movement} activity={activity} />
     </div>

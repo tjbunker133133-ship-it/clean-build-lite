@@ -29,7 +29,8 @@ import { useBalancedValidation } from './lib/balancedAssertions'
 import { getDeviceProfile } from '../../runtime/deviceProfile'
 import { zIndex, panelPosition, spacing } from './lib/balancedTokens'
 import { useBalancedInteractionGuard } from './lib/balancedInteractionGuard'
-import { armBalancedWaypointDrop } from '../../lib/balancedToolBridge'
+import { useBalancedSoftGuardrails } from './lib/balancedSoftGuardrails'
+import { armBalancedWaypointDrop, clearBalancedMeasurement } from '../../lib/balancedToolBridge'
 import { BalancedInteractionHost } from '../../balanced/interaction/BalancedInteractionHost'
 
 const MapCanvas = lazy(() => import('../../components/MapCanvas'))
@@ -48,6 +49,8 @@ const BalancedMapTools = lazy(() => import('./BalancedMapTools'))
 const BalancedQuickActions = lazy(() => import('./BalancedQuickActions'))
 const WeatherSheet = lazy(() => import('../modernMode/WeatherSheet'))
 const MissionSheet = lazy(() => import('../modernMode/MissionSheet'))
+const CheckInCard = lazy(() => import('../modernMode/CheckInCard'))
+const BalancedMeasureChip = lazy(() => import('./BalancedMeasureChip'))
 
 type BalancedSheetId = 'weather' | 'mission' | 'checkin'
 
@@ -77,6 +80,7 @@ export default function BalancedLayer({
   // Dev mode validation
   useBalancedValidation({ enabled: import.meta.env.DEV, logOnly: true })
   useBalancedInteractionGuard({ enabled: import.meta.env.DEV })
+  useBalancedSoftGuardrails({ enabled: import.meta.env.DEV })
 
   // Device profile for responsive layout
   const deviceProfile = useMemo(() => getDeviceProfile(), [])
@@ -111,6 +115,7 @@ export default function BalancedLayer({
   )
 
   const clearMapTool = useCallback(() => {
+    clearBalancedMeasurement()
     workspace.clearTool()
     disarmWaypointDrop()
   }, [workspace, disarmWaypointDrop])
@@ -260,32 +265,52 @@ export default function BalancedLayer({
   const showRoute = workspace.isPanelVisible('route')
   const showWaypoints = workspace.isPanelVisible('waypoints')
   const showOverlays = workspace.isPanelVisible('overlays')
-  const missionSheetOpen = activeSheet === 'mission' || activeSheet === 'checkin'
+  const missionSheetOpen = activeSheet === 'mission'
 
   // Responsive positioning
+  const workspaceBarBottom = isMobile
+    ? spacing.safe.workspaceBarBottom + 12
+    : spacing.safe.workspaceBarBottom
+
   const leftPanelStyle = useMemo(() => ({
     position: 'absolute' as const,
     ...(isMobile
-      ? { left: 8, right: 8, bottom: 88, maxHeight: 260, zIndex: zIndex.panels }
+      ? {
+          left: 8,
+          right: 8,
+          bottom: `calc(${workspaceBarBottom}px + env(safe-area-inset-bottom, 0px))`,
+          maxHeight: 'min(52vh, 340px)',
+          zIndex: zIndex.panels,
+          overflowY: 'auto' as const,
+          WebkitOverflowScrolling: 'touch' as const,
+        }
       : { left: panelPosition.desktop.left.left, top: panelPosition.desktop.left.top, bottom: panelPosition.desktop.left.bottom, zIndex: zIndex.panels }
     ),
     display: 'flex',
     flexDirection: 'column' as const,
     gap: 12,
     pointerEvents: 'none' as const,
-  }), [isMobile])
+  }), [isMobile, workspaceBarBottom])
 
   const rightPanelStyle = useMemo(() => ({
     position: 'absolute' as const,
     ...(isMobile
-      ? { left: 8, right: 8, bottom: 88, maxHeight: 260, zIndex: zIndex.panels }
+      ? {
+          left: 8,
+          right: 8,
+          bottom: `calc(${workspaceBarBottom}px + env(safe-area-inset-bottom, 0px))`,
+          maxHeight: 'min(52vh, 340px)',
+          zIndex: zIndex.panels,
+          overflowY: 'auto' as const,
+          WebkitOverflowScrolling: 'touch' as const,
+        }
       : { right: panelPosition.desktop.right.right, top: panelPosition.desktop.right.top, bottom: panelPosition.desktop.right.bottom, zIndex: zIndex.panels }
     ),
     display: 'flex',
     flexDirection: 'column' as const,
     gap: 12,
     pointerEvents: 'none' as const,
-  }), [isMobile])
+  }), [isMobile, workspaceBarBottom])
 
   const quickActionsStyle = useMemo(() => ({
     position: 'absolute' as const,
@@ -440,8 +465,11 @@ export default function BalancedLayer({
             {activeSheet === 'weather' && (
               <WeatherSheet onClose={closeActiveSheet} variant="balanced" />
             )}
-            {(activeSheet === 'mission' || activeSheet === 'checkin') && (
+            {(activeSheet === 'mission') && (
               <MissionSheet onClose={closeActiveSheet} variant="balanced" />
+            )}
+            {activeSheet === 'checkin' && (
+              <CheckInCard onClose={closeActiveSheet} variant="balanced" />
             )}
           </Suspense>
         </div>
@@ -466,8 +494,10 @@ export default function BalancedLayer({
               <BalancedMapTools
                 activeTool={workspace.activeTool}
                 onClearTool={clearMapTool}
+                onClearMeasure={clearMapTool}
                 pendingWaypointType={panels.state.waypoints.pendingWaypointType}
                 onSetWaypointType={panels.setPendingWaypointType}
+                measurePointCount={measurePoints.length}
                 measureSummary={
                   measurePoints.length === 2
                     ? formatDistance(
@@ -489,6 +519,10 @@ export default function BalancedLayer({
       )}
 
       <BalancedInteractionHost onOpenOverlay={handleOpenOverlay} />
+
+      <Suspense fallback={null}>
+        <BalancedMeasureChip />
+      </Suspense>
     </div>
   )
 }

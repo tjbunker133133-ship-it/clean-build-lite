@@ -4,14 +4,14 @@
 
 import { FieldEngineLoop } from '../field/FieldEngineLoop'
 import { MapMeasureLayer } from './MapMeasureLayer'
-import { WeatherRadarLayer } from './WeatherRadarLayer'
+import { BalancedWeatherRadarLayer } from './BalancedWeatherRadarLayer'
 
 export function BalancedMapSubsystems() {
   return (
     <>
       <FieldEngineLoop />
       <MapMeasureLayer />
-      <WeatherRadarLayer />
+      <BalancedWeatherRadarLayer />
     </>
   )
 }

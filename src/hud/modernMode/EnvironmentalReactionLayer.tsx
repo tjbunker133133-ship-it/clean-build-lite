@@ -27,6 +27,7 @@ import { useMovementEngine } from '../../hooks/useMovementEngine'
 import { useWeatherAtmosphere } from '../../hooks/useWeatherAtmosphere'
 import { useReducedMotion } from '../../hooks/useReducedMotion'
 import { MODERN_FLOATING, modernFloatingTransition } from './modernVisualTokens'
+import { MODERN_MOBILE_LAYOUT } from './modernMobileLayout'
 import { haversineMeters } from '../../hooks/useMovementEngine'
 import {
   logModernGuardrailApplied,
@@ -235,7 +236,7 @@ export function EnvironmentalReactionLayer() {
         data-testid="environmental-reaction-layer"
         style={{
           position: 'fixed',
-          bottom: 'calc(84px + env(safe-area-inset-bottom))',
+          bottom: MODERN_MOBILE_LAYOUT.reactionBottom,
           left: 16,
           zIndex: 150,
           display: 'flex',

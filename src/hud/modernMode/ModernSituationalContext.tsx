@@ -8,15 +8,25 @@ import React, {
   useContext,
   useEffect,
   useMemo,
+  useState,
   type ReactNode,
 } from 'react'
 import { useHudPresentation } from '../../context/HudPresentationContext'
-import { useGPS } from '../../hooks/useGPS'
+import { useAppContext } from '../../context/AppContext'
 import { useMissionSync } from '../../context/MissionSyncContext'
 import { useOverlayContext } from '../../context/OverlayContext'
 import { useMovementEngine } from '../../hooks/useMovementEngine'
 import { useOperationalSession } from '../../context/OperationalSessionContext'
+import { useWeatherAtmosphere } from '../../hooks/useWeatherAtmosphere'
+import { getRadarEnabled } from '../../lib/modernRadarStore'
 import { logModernGuardrailApplied } from '../../lib/modernLayerGuardrails'
+import {
+  inferModernFieldActivity,
+  resolveSensoryProfile,
+  type ModernFieldActivity,
+  type ModernRuntimeTone,
+  type ModernSensoryProfile,
+} from './modernActivityInference'
 
 logModernGuardrailApplied('ModernSituationalContext')
 
@@ -39,6 +49,10 @@ export type ModernSituationalState = {
   motionProfile: 'calm' | 'responsive' | 'urgent'
   isMoving: boolean
   speedMs: number
+  /** Tier 3 inferred field activity — orchestration bus for sensory + UI adaptation */
+  activity: ModernFieldActivity
+  tone: ModernRuntimeTone
+  sensory: ModernSensoryProfile
 }
 
 const DEFAULT_STATE: ModernSituationalState = {
@@ -48,6 +62,16 @@ const DEFAULT_STATE: ModernSituationalState = {
   motionProfile: 'calm',
   isMoving: false,
   speedMs: 0,
+  activity: 'stationary',
+  tone: 'calm',
+  sensory: {
+    glanceMode: false,
+    suppressDecor: false,
+    suppressPassive: false,
+    hapticGuidance: false,
+    voicePriority: 'normal',
+    tone: 'calm',
+  },
 }
 
 const ModernSituationalContext = createContext<ModernSituationalState>(DEFAULT_STATE)
@@ -118,8 +142,22 @@ export function ModernSituationalProvider({ children }: { children: ReactNode })
   const movement = useMovementEngine()
   const mission = useMissionSync()
   const { toggles } = useOverlayContext()
-  const gps = useGPS()
   const { session } = useOperationalSession()
+  const { state: appState } = useAppContext()
+  const atmosphere = useWeatherAtmosphere()
+  const [sosArmed, setSosArmed] = useState(false)
+
+  useEffect(() => {
+    if (mode !== 'immersive') return
+    const onArm = () => setSosArmed(true)
+    const onDisarm = () => setSosArmed(false)
+    window.addEventListener('hud:sos-arm', onArm)
+    window.addEventListener('hud:sos-disarm', onDisarm)
+    return () => {
+      window.removeEventListener('hud:sos-arm', onArm)
+      window.removeEventListener('hud:sos-disarm', onDisarm)
+    }
+  }, [mode])
 
   const state = useMemo<ModernSituationalState>(() => {
     if (mode !== 'immersive') return DEFAULT_STATE
@@ -127,27 +165,63 @@ export function ModernSituationalProvider({ children }: { children: ReactNode })
     const speedMs = movement.speedMs
     const missionActive = mission.role !== 'idle'
     const routeNavigating = session.phase === 'navigating'
-    const weatherOverlay = false
+    const emergency = appState.deadManActive || sosArmed
+    const weatherOverlay =
+      getRadarEnabled() ||
+      atmosphere.hasActiveWeather ||
+      atmosphere.level === 'intense' ||
+      atmosphere.tone === 'storm' ||
+      atmosphere.tone === 'rain'
     const hazardOverlay = Boolean(toggles.fire_firms || toggles.relief_usgs)
 
     const focus = resolveFocus({
       speedMs,
       missionActive,
       routeNavigating,
-      emergency: false,
+      emergency,
       weatherOverlay,
       hazardOverlay,
     })
 
+    const density = resolveDensity(focus)
+    const hourLocal = new Date().getHours()
+    const activity = inferModernFieldActivity({
+      speedMs,
+      emergency,
+      routeNavigating,
+      missionActive,
+      weatherIntense: atmosphere.level === 'intense',
+      weatherStorm: atmosphere.tone === 'storm' || atmosphere.isThunderstorm,
+      hazardOverlay,
+      terrainOverlay: Boolean(toggles.relief_usgs),
+      hourLocal,
+    })
+    const sensory = resolveSensoryProfile(activity, focus, density, speedMs)
+
     return {
       focus,
       attentionTier: resolveAttention(focus),
-      density: resolveDensity(focus),
+      density,
       motionProfile: resolveMotion(focus),
       isMoving: speedMs >= 0.5,
       speedMs,
+      activity,
+      tone: sensory.tone,
+      sensory,
     }
-  }, [mode, movement.speedMs, mission.role, session.phase, toggles, gps.lat, gps.lng])
+  }, [
+    mode,
+    movement.speedMs,
+    mission.role,
+    session.phase,
+    appState.deadManActive,
+    sosArmed,
+    toggles,
+    atmosphere.hasActiveWeather,
+    atmosphere.level,
+    atmosphere.tone,
+    atmosphere.isThunderstorm,
+  ])
 
   useEffect(() => {
     if (typeof document === 'undefined' || mode !== 'immersive') return
@@ -158,12 +232,18 @@ export function ModernSituationalProvider({ children }: { children: ReactNode })
     root.setAttribute('data-modern-density', state.density)
     root.setAttribute('data-modern-motion', state.motionProfile)
     root.setAttribute('data-modern-attention', state.attentionTier)
+    root.setAttribute('data-modern-activity', state.activity)
+    root.setAttribute('data-modern-tone', state.tone)
+    root.setAttribute('data-modern-glance', state.sensory.glanceMode ? 'true' : 'false')
 
     return () => {
       root.removeAttribute('data-modern-focus')
       root.removeAttribute('data-modern-density')
       root.removeAttribute('data-modern-motion')
       root.removeAttribute('data-modern-attention')
+      root.removeAttribute('data-modern-activity')
+      root.removeAttribute('data-modern-tone')
+      root.removeAttribute('data-modern-glance')
     }
   }, [mode, state])
 

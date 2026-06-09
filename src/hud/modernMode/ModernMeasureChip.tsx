@@ -8,6 +8,7 @@ import {
   getMapInteractionSnapshot,
   subscribeMapInteraction,
 } from '../../lib/mapInteractionController'
+import { MODERN_MOBILE_LAYOUT } from './modernMobileLayout'
 
 export function ModernMeasureChip() {
   const snapshot = useSyncExternalStore(subscribeMapInteraction, getMapInteractionSnapshot, getMapInteractionSnapshot)
@@ -28,7 +29,7 @@ export function ModernMeasureChip() {
       onClick={() => exitMeasure('chip_cancel')}
       style={{
         position: 'fixed',
-        bottom: 'calc(72px + env(safe-area-inset-bottom))',
+        bottom: MODERN_MOBILE_LAYOUT.measureChipBottom,
         left: '50%',
         transform: 'translateX(-50%)',
         zIndex: 4500,

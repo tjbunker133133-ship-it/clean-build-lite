@@ -23,6 +23,13 @@ import { ModernSheetCloseButton, ModernSheetDragHandle } from './ModernSheetChro
 import { MODERN_SHEET } from './modernVisualTokens'
 import { logModernGuardrailApplied } from '../../lib/modernLayerGuardrails'
 import { getDeviceProfile } from '../../runtime/deviceProfile'
+import {
+  getRadarEnabled,
+  getRadarOpacity,
+  setRadarEnabled,
+  setRadarOpacity,
+  subscribeRadar,
+} from '../../lib/modernRadarStore'
 
 logModernGuardrailApplied('WeatherSheet')
 
@@ -454,9 +461,83 @@ function HourlyTab({ forecast, loading }: { forecast: HourlyRow[]; loading: bool
   )
 }
 
-function RadarTab() {
+function RadarTab({ variant = 'modern' }: { variant?: 'modern' | 'balanced' }) {
   const fieldIntent = useSyncExternalStore(subscribeFieldIntent, getFieldIntent)
   const fieldState = useMemo(() => computeFieldState(fieldIntent), [fieldIntent])
+  const radarEnabled = useSyncExternalStore(subscribeRadar, getRadarEnabled, getRadarEnabled)
+  const radarOpacity = useSyncExternalStore(subscribeRadar, getRadarOpacity, getRadarOpacity)
+  const isBalanced = variant === 'balanced'
+
+  if (isBalanced) {
+    return (
+      <div style={{ padding: '16px 20px 28px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div
+          style={{
+            padding: '20px 18px',
+            background: 'rgba(255,255,255,0.04)',
+            borderRadius: 18,
+            border: '1px solid rgba(255,255,255,0.06)',
+          }}
+        >
+          <div style={{ fontSize: 16, fontWeight: 600, color: 'rgba(255,255,255,0.92)', fontFamily: FONT_TEXT }}>
+            Precipitation radar
+          </div>
+          <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.5)', fontFamily: FONT_TEXT, marginTop: 6, lineHeight: 1.55 }}>
+            Live RainViewer tiles on the map. Toggle from Layers or here.
+          </div>
+        </div>
+
+        <button
+          type="button"
+          data-testid="balanced-radar-toggle"
+          onClick={() => setRadarEnabled(!radarEnabled)}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '14px 16px',
+            borderRadius: 14,
+            border: `1px solid ${radarEnabled ? 'rgba(10,132,255,0.5)' : 'rgba(255,255,255,0.08)'}`,
+            background: radarEnabled ? 'rgba(10,132,255,0.12)' : 'rgba(255,255,255,0.04)',
+            color: 'rgba(255,255,255,0.92)',
+            cursor: 'pointer',
+            fontFamily: FONT_TEXT,
+            fontSize: 14,
+            fontWeight: 600,
+          }}
+        >
+          <span>Radar on map</span>
+          <span style={{ color: radarEnabled ? '#0a84ff' : 'rgba(255,255,255,0.45)' }}>
+            {radarEnabled ? 'On' : 'Off'}
+          </span>
+        </button>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <label
+            htmlFor="balanced-radar-opacity"
+            style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', fontFamily: FONT_TEXT }}
+          >
+            Radar opacity
+          </label>
+          <input
+            id="balanced-radar-opacity"
+            type="range"
+            min={0.15}
+            max={0.85}
+            step={0.05}
+            value={radarOpacity}
+            disabled={!radarEnabled}
+            onChange={(e) => setRadarOpacity(parseFloat(e.target.value))}
+            style={{ width: '100%' }}
+          />
+        </div>
+
+        <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.4)', fontFamily: FONT_TEXT, lineHeight: 1.5 }}>
+          Radar data © RainViewer. Coverage varies by region and refresh interval (~5 min).
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div style={{ padding: '16px 20px 28px', display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -640,7 +721,7 @@ export default function WeatherSheet({ onClose, variant = 'modern' }: WeatherShe
         {tab === 'hourly' && (
           <HourlyTab forecast={forecast} loading={forecastLoading} />
         )}
-        {tab === 'radar' && <RadarTab />}
+        {tab === 'radar' && <RadarTab variant={variant} />}
       </div>
 
       <style>{`

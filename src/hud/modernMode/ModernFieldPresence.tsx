@@ -9,9 +9,11 @@ import { useHudPresentation } from '../../context/HudPresentationContext'
 import { computeFieldState, FIELD_TILE_EXPRESSION_MIN } from '../../lib/fieldIntentModel'
 import { getFieldIntent, subscribeFieldIntent } from '../../lib/fieldIntentStore'
 import { RadarAtmosphericNoise } from './RadarAtmosphericNoise'
+import { useModernSituational } from './ModernSituationalContext'
 
 export function ModernFieldPresence() {
   const { mode } = useHudPresentation()
+  const situational = useModernSituational()
   const { map } = useMapContext()
   const fieldIntent = useSyncExternalStore(subscribeFieldIntent, getFieldIntent)
   const fieldState = useMemo(() => computeFieldState(fieldIntent), [fieldIntent])
@@ -35,6 +37,7 @@ export function ModernFieldPresence() {
     : 'regional' as const
 
   if (mode !== 'immersive') return null
+  if (situational.sensory.suppressDecor || situational.focus === 'emergency') return null
 
   return (
     <RadarAtmosphericNoise

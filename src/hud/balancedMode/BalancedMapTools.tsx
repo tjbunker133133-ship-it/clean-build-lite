@@ -20,9 +20,11 @@ import type { ToolMode } from './hooks/useBalancedWorkspace'
 interface BalancedMapToolsProps {
   activeTool: ToolMode
   onClearTool: () => void
+  onClearMeasure?: () => void
   pendingWaypointType: string | null
   onSetWaypointType: (type: string | null) => void
   measureSummary?: string | null
+  measurePointCount?: number
 }
 
 const BALANCED_TOKENS = {
@@ -66,9 +68,11 @@ const WAYPOINT_TYPE_LABELS: Record<string, string> = {
 export default function BalancedMapTools({
   activeTool,
   onClearTool,
+  onClearMeasure,
   pendingWaypointType,
   onSetWaypointType,
   measureSummary,
+  measurePointCount = 0,
 }: BalancedMapToolsProps) {
   // Don't show if no tool active
   if (activeTool === 'inspect' || activeTool === 'none') {
@@ -247,6 +251,7 @@ export default function BalancedMapTools({
                   fontFamily: '-apple-system, BlinkMacSystemFont, SF Pro Display, Segoe UI, system-ui, sans-serif',
                 }}>
                   {measureSummary ?? 'Tap first point on map'}
+                  {measurePointCount > 0 ? ' · drag points to adjust' : ''}
                 </span>
               </div>
             </div>
@@ -280,9 +285,9 @@ export default function BalancedMapTools({
       {/* Active Tool UI */}
       {renderToolUI()}
 
-      {/* Cancel Button */}
+      {/* Cancel / Clear Button */}
       <button
-        onClick={onClearTool}
+        onClick={activeTool === 'measure' && measurePointCount > 0 && onClearMeasure ? onClearMeasure : onClearTool}
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -295,6 +300,7 @@ export default function BalancedMapTools({
           cursor: 'pointer',
           marginTop: 4,
         }}
+        data-testid={activeTool === 'measure' ? 'balanced-measure-clear-tool' : undefined}
       >
         <span style={{ fontSize: 12, color: BALANCED_TOKENS.accent.danger }}>✕</span>
         <span style={{
@@ -303,7 +309,7 @@ export default function BalancedMapTools({
           color: BALANCED_TOKENS.accent.danger,
           fontFamily: '-apple-system, BlinkMacSystemFont, SF Pro Display, Segoe UI, system-ui, sans-serif',
         }}>
-          Cancel Tool
+          {activeTool === 'measure' && measurePointCount > 0 ? 'Clear measurement' : 'Cancel Tool'}
         </span>
       </button>
     </div>

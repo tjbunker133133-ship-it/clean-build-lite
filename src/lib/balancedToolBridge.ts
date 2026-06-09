@@ -4,7 +4,11 @@
 
 import {
   armWaypointDrop,
+  clearActiveMeasurement,
+  clearMeasurePoints,
+  exitMeasure,
   getInteractionMode,
+  getMeasurePoints,
   syncBalancedTool,
 } from './mapInteractionController'
 
@@ -34,4 +38,16 @@ export function setBalancedMeasureTapHandler(_handler: ((lat: number, lng: numbe
 /** @deprecated */
 export function dispatchBalancedMeasureTap(lat: number, lng: number): boolean {
   return false
+}
+
+/** Clear in-progress or completed balanced measurement. */
+export function clearBalancedMeasurement(): void {
+  if (getInteractionMode() === 'measure') {
+    clearMeasurePoints()
+    exitMeasure()
+    return
+  }
+  if (getMeasurePoints().length > 0) {
+    clearActiveMeasurement()
+  }
 }

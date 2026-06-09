@@ -1028,10 +1028,21 @@ export default function MapCanvas({ onOpenOverlay }: MapCanvasProps = {}) {
       const tryInteractionMeasureTap = (e: {
         lngLat?: { lat: number; lng: number }
         latlng?: { lat: number; lng: number }
+        point?: { x: number; y: number }
       }): boolean => {
+        let lat: number | undefined
+        let lng: number | undefined
         const ll = e?.lngLat ?? e?.latlng
-        if (!ll || typeof ll.lat !== 'number' || typeof ll.lng !== 'number') return false
-        return routeMapClick(ll.lat, ll.lng)
+        if (ll && typeof ll.lat === 'number' && typeof ll.lng === 'number') {
+          lat = ll.lat
+          lng = ll.lng
+        } else if (e?.point && map) {
+          const unprojected = map.unproject([e.point.x, e.point.y])
+          lat = unprojected.lat
+          lng = unprojected.lng
+        }
+        if (lat == null || lng == null) return false
+        return routeMapClick(lat, lng)
       }
 
       const placeWaypoint = (e: any, source: 'click' | 'touch'): boolean => {

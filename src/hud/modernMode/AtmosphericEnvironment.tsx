@@ -26,6 +26,7 @@ import { useReducedMotion } from '../../hooks/useReducedMotion'
 import { useAtmosphericContinuity } from '../../hooks/useAtmosphericContinuity'
 import { useFieldEmergence } from '../../field/useFieldEmergence'
 import { cssTransition } from '../../perception/motion/motionLanguage'
+import { useModernSituational } from './ModernSituationalContext'
 
 // ─── Lightning pulse ─────────────────────────────────────────────────────────
 
@@ -87,8 +88,10 @@ export function AtmosphericEnvironment() {
   const emergence = useFieldEmergence()
   const continuity = useAtmosphericContinuity()
   const erl = useSyncExternalStore(subscribeERLState, getERLState)
+  const situational = useModernSituational()
 
   if (mode !== 'immersive') return null
+  if (situational.focus === 'emergency') return null
 
   const isCalm = atm.level === 'calm' && !atm.hasActiveWeather
   const { dimFactor, ambientRgba, level } = atm
@@ -97,7 +100,8 @@ export function AtmosphericEnvironment() {
   const hasLandLayers = toggles.forest_usfs || toggles.public_lands
   const hasFireLayer = toggles.fire_firms
 
-  const fadeMul = emergence.overlayFadeMultiplier * continuity.breathFactor
+  const glanceDampen = situational.sensory.glanceMode ? 0.55 : 1
+  const fadeMul = emergence.overlayFadeMultiplier * continuity.breathFactor * glanceDampen
   const fieldPressureBoost = erl.fieldPressure * ERL_PHASE_CALIBRATION.fieldPressure
   const vignetteOpacity =
     ((level === 'intense' ? 0.16 : level === 'active' ? 0.11 : 0.07) +

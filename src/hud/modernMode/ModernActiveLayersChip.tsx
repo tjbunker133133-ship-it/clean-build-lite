@@ -7,6 +7,7 @@ import { useOverlayContext } from '../../context/OverlayContext'
 import { useReducedMotion } from '../../hooks/useReducedMotion'
 import { ENVIRONMENTAL_OVERLAY_CATALOG } from '../../lib/environmentalOverlays/catalog'
 import { MODERN_FLOATING, modernFloatingTransition } from './modernVisualTokens'
+import { MODERN_MOBILE_LAYOUT } from './modernMobileLayout'
 
 interface ModernActiveLayersChipProps {
   onOpenLayers: () => void
@@ -37,7 +38,7 @@ export function ModernActiveLayersChip({ onOpenLayers }: ModernActiveLayersChipP
       onClick={onOpenLayers}
       style={{
         position: 'fixed',
-        bottom: 'calc(24px + env(safe-area-inset-bottom))',
+        bottom: MODERN_MOBILE_LAYOUT.chipBottom,
         left: 16,
         zIndex: 120,
         display: 'flex',

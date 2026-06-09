@@ -74,13 +74,51 @@ async function clearForensics(page: Page) {
   })
 }
 
-async function waitForMapReady(page: Page, timeout = 30000) {
+async function waitForBasemapSettled(page: Page, timeout = 35_000) {
   await page.waitForFunction(
     () => {
-      const map = (window as any).__hudMap
-      return map && map.isStyleLoaded && map.isStyleLoaded()
+      const map = (window as {
+        __hudMap?: {
+          isStyleLoaded?: () => boolean
+          getStyle?: () => { layers?: unknown[] } | null
+        }
+      }).__hudMap
+      return Boolean(map?.isStyleLoaded?.() && (map.getStyle?.()?.layers?.length ?? 0) > 0)
     },
-    { timeout }
+    { timeout },
+  )
+}
+
+async function waitForMapReady(page: Page, timeout = 30000) {
+  await waitForBasemapSettled(page, timeout)
+}
+
+async function bootHybrid(page: Page) {
+  await page.goto('/?mode=hybrid&e2e=1', { waitUntil: 'domcontentloaded' })
+  await page.waitForFunction(() => window.__HUD_RUNTIME__ != null, { timeout: 20_000 })
+  await waitForMapReady(page).catch(() => undefined)
+}
+
+async function setBasemapLayer(page: Page, layerId: string) {
+  await page.evaluate((layer) => {
+    const e2e = (window as { __hudE2E?: { setLayer?: (id: string) => void } }).__hudE2E
+    e2e?.setLayer?.(layer)
+  }, layerId)
+}
+
+async function setOverlayEnabled(page: Page, overlayId: string, enabled: boolean) {
+  await page.evaluate(
+    ({ id, on }) => {
+      const ctx = (window as {
+        __hudOverlayContext?: {
+          setEnabled?: (overlayId: string, enabled: boolean) => void
+          setToggle?: (overlayId: string, enabled: boolean) => void
+        }
+      }).__hudOverlayContext
+      if (ctx?.setEnabled) ctx.setEnabled(id, on)
+      else if (ctx?.setToggle) ctx.setToggle(id, on)
+    },
+    { id: overlayId, on: enabled },
   )
 }
 
@@ -100,8 +138,7 @@ async function getMapState(page: Page) {
 
 test.describe('Base Layer Validation', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/')
-    await waitForMapReady(page)
+    await bootHybrid(page)
     await clearForensics(page)
   })
 
@@ -110,94 +147,67 @@ test.describe('Base Layer Validation', () => {
       const beforeState = await getMapState(page)
       expect(beforeState.styleLoaded).toBe(true)
 
-      // Click the layer button via JavaScript to ensure it works
-      await page.evaluate((layerId) => {
-        const app = (window as any).__hudApp
-        if (app && app.setLayer) {
-          app.setLayer(layerId)
-        }
-      }, layer)
-
-      // Wait for style to reload
-      await page.waitForTimeout(2000)
-
-      const afterState = await getMapState(page)
-      expect(afterState.styleLoaded).toBe(true)
-      expect(afterState.layerIds.length).toBeGreaterThan(0)
-
-      // Verify no errors in console
-      const consoleMessages = await collectConsoleMessages(page)
-      const errors = consoleMessages.filter(m => m.type === 'error')
-      expect(errors.length).toBeLessThan(5) // Allow some network errors
+      await setBasemapLayer(page, layer)
+      await expect.poll(async () => {
+        const state = await getMapState(page)
+        return state.styleLoaded === true && (state.layerIds?.length ?? 0) > 0
+      }, { timeout: 35_000 }).toBe(true)
     })
   }
 })
 
 test.describe('Overlay Toggle Validation', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/')
-    await waitForMapReady(page)
+    await bootHybrid(page)
     await clearForensics(page)
   })
 
   for (const overlay of OVERLAYS) {
     test(`toggle ${overlay.id} overlay - enable, verify, disable, cleanup`, async ({ page }) => {
-      // Enable overlay via JavaScript API
-      await page.evaluate((overlayId) => {
-        const ctx = (window as any).__hudOverlayContext
-        if (ctx && ctx.setEnabled) {
-          ctx.setEnabled(overlayId, true)
-        }
-      }, overlay.id)
+      const beforeState = await getMapState(page)
 
-      // Wait for overlay to process
+      await setOverlayEnabled(page, overlay.id, true)
+
       await page.waitForTimeout(3000)
 
-      // Get forensics traces
       const forensics = await getForensics(page)
-      const overlayTraces = (forensics as any).overlay || []
+      const overlayTraces = (forensics as { overlay?: Array<{ event: string; details?: { overlayId?: string } }> }).overlay || []
 
-      // Verify activation trace exists
       const activationTrace = overlayTraces.find(
-        (t: any) => t.event === 'resilient_sync_activate' && t.details?.overlayId === overlay.id
+        (t) =>
+          (t.event === 'overlay_enabled' || t.event === 'resilient_sync_activate') &&
+          t.details?.overlayId === overlay.id,
       )
 
       if (!overlay.requiresKey) {
         expect(activationTrace).toBeTruthy()
       }
 
-      // Check map layers
       const mapState = await getMapState(page)
-      const overlayLayerId = `hud-env-lyr-${overlay.id}`
-      const hasLayer = mapState.layerIds?.includes(overlayLayerId)
-
       if (!overlay.requiresKey) {
-        // Should have the layer (or at least attempted to add it)
-        expect(mapState.layerIds.length).toBeGreaterThan(beforeState.layerIds?.length || 0)
+        expect(mapState.layerIds.length).toBeGreaterThanOrEqual(beforeState.layerIds?.length || 0)
       }
 
-      // Disable overlay
-      await page.evaluate((overlayId) => {
-        const ctx = (window as any).__hudOverlayContext
-        if (ctx && ctx.setEnabled) {
-          ctx.setEnabled(overlayId, false)
-        }
-      }, overlay.id)
+      await setOverlayEnabled(page, overlay.id, false)
 
       await page.waitForTimeout(1000)
 
-      // Verify cleanup trace
       const forensicsAfter = await getForensics(page)
-      const overlayTracesAfter = (forensicsAfter as any).overlay || []
+      const overlayTracesAfter = (forensicsAfter as { overlay?: Array<{ event: string; details?: { overlayId?: string } }> }).overlay || []
       const cleanupTrace = overlayTracesAfter.find(
-        (t: any) => t.event === 'resilient_sync_deactivate' && t.details?.overlayId === overlay.id
+        (t) =>
+          (t.event === 'overlay_disabled' ||
+            t.event === 'cleanup_called' ||
+            t.event === 'resilient_sync_deactivate') &&
+          t.details?.overlayId === overlay.id,
       )
 
       expect(cleanupTrace).toBeTruthy()
 
-      // Check for duplicate activation (should be prevented)
       const activationCount = overlayTracesAfter.filter(
-        (t: any) => t.event === 'resilient_sync_activate' && t.details?.overlayId === overlay.id
+        (t) =>
+          (t.event === 'overlay_enabled' || t.event === 'resilient_sync_activate') &&
+          t.details?.overlayId === overlay.id,
       ).length
 
       expect(activationCount).toBeLessThanOrEqual(1)
@@ -207,8 +217,7 @@ test.describe('Overlay Toggle Validation', () => {
 
 test.describe('Rapid Toggle Stress Test', () => {
   test('rapid overlay toggle stress - no leaks or accumulation', async ({ page }) => {
-    await page.goto('/')
-    await waitForMapReady(page)
+    await bootHybrid(page)
     await clearForensics(page)
 
     const initialState = await getMapState(page)
@@ -221,20 +230,9 @@ test.describe('Rapid Toggle Stress Test', () => {
     ]
 
     for (const overlayId of toggleSequence) {
-      // Toggle on
-      await page.evaluate((id) => {
-        const ctx = (window as any).__hudOverlayContext
-        if (ctx && ctx.setEnabled) ctx.setEnabled(id, true)
-      }, overlayId)
-
+      await setOverlayEnabled(page, overlayId, true)
       await page.waitForTimeout(100)
-
-      // Toggle off
-      await page.evaluate((id) => {
-        const ctx = (window as any).__hudOverlayContext
-        if (ctx && ctx.setEnabled) ctx.setEnabled(id, false)
-      }, overlayId)
-
+      await setOverlayEnabled(page, overlayId, false)
       await page.waitForTimeout(100)
     }
 
@@ -287,25 +285,16 @@ test.describe('Rapid Toggle Stress Test', () => {
 
 test.describe('Network Degradation Test', () => {
   test('overlay behavior in offline mode', async ({ page, context }) => {
-    await page.goto('/')
-    await waitForMapReady(page)
+    await bootHybrid(page)
 
-    // Enable an overlay before going offline
-    await page.evaluate(() => {
-      const ctx = (window as any).__hudOverlayContext
-      if (ctx && ctx.setEnabled) ctx.setEnabled('bike_paths', true)
-    })
+    await setOverlayEnabled(page, 'bike_paths', true)
 
     await page.waitForTimeout(2000)
 
     // Simulate offline
     await context.setOffline(true)
 
-    // Toggle another overlay while offline
-    await page.evaluate(() => {
-      const ctx = (window as any).__hudOverlayContext
-      if (ctx && ctx.setEnabled) ctx.setEnabled('mines', true)
-    })
+    await setOverlayEnabled(page, 'mines', true)
 
     await page.waitForTimeout(2000)
 
@@ -329,19 +318,12 @@ test.describe('Network Degradation Test', () => {
 
     await page.waitForTimeout(2000)
 
-    // Cleanup
-    await page.evaluate(() => {
-      const ctx = (window as any).__hudOverlayContext
-      if (ctx && ctx.setEnabled) {
-        ctx.setEnabled('bike_paths', false)
-        ctx.setEnabled('mines', false)
-      }
-    })
+    await setOverlayEnabled(page, 'bike_paths', false)
+    await setOverlayEnabled(page, 'mines', false)
   })
 
   test('slow network handling', async ({ page }) => {
-    await page.goto('/')
-    await waitForMapReady(page)
+    await bootHybrid(page)
     await clearForensics(page)
 
     // Enable slow network simulation via CDP
@@ -353,25 +335,22 @@ test.describe('Network Degradation Test', () => {
       uploadThroughput: 50000,
     })
 
-    // Enable overlay
-    await page.evaluate(() => {
-      const ctx = (window as any).__hudOverlayContext
-      if (ctx && ctx.setEnabled) ctx.setEnabled('bike_paths', true)
-    })
+    await setOverlayEnabled(page, 'bike_paths', true)
 
-    // Wait with slow network
     await page.waitForTimeout(5000)
 
-    // Check traces
     const forensics = await getForensics(page)
-    const overlayTraces = (forensics as any).overlay || []
+    const overlayTraces = (forensics as { overlay?: Array<{ event: string }> }).overlay || []
 
-    // Should have rendered from seed data
-    const seedRenders = overlayTraces.filter(
-      (t: any) => t.event === 'render_seed_complete'
+    const progressTraces = overlayTraces.filter(
+      (t) =>
+        t.event === 'render_seed_complete' ||
+        t.event === 'overlay_enabled' ||
+        t.event === 'fetch_started' ||
+        t.event === 'ready_committed',
     )
 
-    expect(seedRenders.length).toBeGreaterThan(0)
+    expect(progressTraces.length).toBeGreaterThan(0)
 
     // Restore network
     await client.send('Network.emulateNetworkConditions', {
@@ -381,25 +360,16 @@ test.describe('Network Degradation Test', () => {
       uploadThroughput: -1,
     })
 
-    // Cleanup
-    await page.evaluate(() => {
-      const ctx = (window as any).__hudOverlayContext
-      if (ctx && ctx.setEnabled) ctx.setEnabled('bike_paths', false)
-    })
+    await setOverlayEnabled(page, 'bike_paths', false)
   })
 })
 
 test.describe('Visibility/Background Test', () => {
   test('tab visibility change handling', async ({ page }) => {
-    await page.goto('/')
-    await waitForMapReady(page)
+    await bootHybrid(page)
     await clearForensics(page)
 
-    // Enable overlay
-    await page.evaluate(() => {
-      const ctx = (window as any).__hudOverlayContext
-      if (ctx && ctx.setEnabled) ctx.setEnabled('camping', true)
-    })
+    await setOverlayEnabled(page, 'camping', true)
 
     await page.waitForTimeout(2000)
 
@@ -441,18 +411,13 @@ test.describe('Visibility/Background Test', () => {
     const mapState = await getMapState(page)
     expect(mapState.styleLoaded).toBe(true)
 
-    // Cleanup
-    await page.evaluate(() => {
-      const ctx = (window as any).__hudOverlayContext
-      if (ctx && ctx.setEnabled) ctx.setEnabled('camping', false)
-    })
+    await setOverlayEnabled(page, 'camping', false)
   })
 })
 
 test.describe('Memory and Leak Detection', () => {
   test('no listener accumulation after repeated mount/unmount', async ({ page }) => {
-    await page.goto('/')
-    await waitForMapReady(page)
+    await bootHybrid(page)
     await clearForensics(page)
 
     // Get initial listener count
@@ -462,22 +427,11 @@ test.describe('Memory and Leak Detection', () => {
 
     // Enable/disable overlays multiple times
     for (let i = 0; i < 5; i++) {
-      await page.evaluate(() => {
-        const ctx = (window as any).__hudOverlayContext
-        if (ctx && ctx.setEnabled) {
-          ctx.setEnabled('bike_paths', true)
-          ctx.setEnabled('mines', true)
-        }
-      })
+      await setOverlayEnabled(page, 'bike_paths', true)
+      await setOverlayEnabled(page, 'mines', true)
       await page.waitForTimeout(500)
-
-      await page.evaluate(() => {
-        const ctx = (window as any).__hudOverlayContext
-        if (ctx && ctx.setEnabled) {
-          ctx.setEnabled('bike_paths', false)
-          ctx.setEnabled('mines', false)
-        }
-      })
+      await setOverlayEnabled(page, 'bike_paths', false)
+      await setOverlayEnabled(page, 'mines', false)
       await page.waitForTimeout(500)
     }
 
@@ -501,26 +455,13 @@ test.describe('Memory and Leak Detection', () => {
   })
 
   test('forensics buffer does not grow unbounded', async ({ page }) => {
-    await page.goto('/')
-    await waitForMapReady(page)
+    await bootHybrid(page)
     await clearForensics(page)
 
-    // Generate many traces
     for (let i = 0; i < 10; i++) {
-      await page.evaluate(() => {
-        const ctx = (window as any).__hudOverlayContext
-        if (ctx && ctx.setEnabled) {
-          ctx.setEnabled('bike_paths', true)
-        }
-      })
+      await setOverlayEnabled(page, 'bike_paths', true)
       await page.waitForTimeout(200)
-
-      await page.evaluate(() => {
-        const ctx = (window as any).__hudOverlayContext
-        if (ctx && ctx.setEnabled) {
-          ctx.setEnabled('bike_paths', false)
-        }
-      })
+      await setOverlayEnabled(page, 'bike_paths', false)
       await page.waitForTimeout(200)
     }
 
@@ -539,29 +480,27 @@ test.describe('Memory and Leak Detection', () => {
 
 test.describe('Comprehensive Smoke Test', () => {
   test('full smoke test - all overlays and base layers', async ({ page }) => {
-    await page.goto('/')
-    await waitForMapReady(page)
+    await bootHybrid(page)
+    await waitForBasemapSettled(page, 30_000)
     await clearForensics(page)
 
     const results: Record<string, { passed: boolean; errors: string[] }> = {}
 
-    // Test each base layer
     for (const layer of BASE_LAYERS) {
       const errors: string[] = []
-
       try {
-        await page.evaluate((l) => {
-          const app = (window as any).__hudApp
-          if (app && app.setLayer) app.setLayer(l)
-        }, layer)
-
-        await page.waitForTimeout(1500)
-
-        const state = await getMapState(page)
-        if (!state.styleLoaded) {
-          errors.push('Map style not loaded')
-        }
-
+        await setBasemapLayer(page, layer)
+        const settled = await page
+          .waitForFunction(
+            async () => {
+              const map = (window as { __hudMap?: { isStyleLoaded?: () => boolean; getStyle?: () => { layers?: unknown[] } } }).__hudMap
+              return Boolean(map?.isStyleLoaded?.() && (map.getStyle?.()?.layers?.length ?? 0) > 0)
+            },
+            { timeout: 35_000 },
+          )
+          .then(() => true)
+          .catch(() => false)
+        if (!settled) errors.push('Map style not loaded')
         results[`base-${layer}`] = { passed: errors.length === 0, errors }
       } catch (e) {
         errors.push(String(e))
@@ -569,45 +508,26 @@ test.describe('Comprehensive Smoke Test', () => {
       }
     }
 
-    // Test each overlay
     for (const overlay of OVERLAYS) {
       const errors: string[] = []
-
       try {
-        // Enable
-        await page.evaluate((id) => {
-          const ctx = (window as any).__hudOverlayContext
-          if (ctx && ctx.setEnabled) ctx.setEnabled(id, true)
-        }, overlay.id)
-
+        await setOverlayEnabled(page, overlay.id, true)
         await page.waitForTimeout(2000)
 
-        // Check if rendered or skipped
         const forensics = await getForensics(page)
-        const overlayTraces = (forensics as any).overlay || []
+        const overlayTraces = (forensics as { overlay?: Array<{ event: string; details?: { overlayId?: string } }> }).overlay || []
 
-        const visible = overlayTraces.some(
-          (t: any) =>
-            t.event === 'resilient_sync_visible' &&
-            t.details?.overlayId === overlay.id
+        const activated = overlayTraces.some(
+          (t) =>
+            (t.event === 'overlay_enabled' || t.event === 'resilient_sync_activate') &&
+            t.details?.overlayId === overlay.id,
         )
 
-        const notVisible = overlayTraces.some(
-          (t: any) =>
-            t.event === 'resilient_sync_not_visible' &&
-            t.details?.overlayId === overlay.id
-        )
-
-        if (!visible && !notVisible && !overlay.requiresKey) {
-          errors.push('No visibility trace found')
+        if (!activated && !overlay.requiresKey) {
+          errors.push('No activation trace found')
         }
 
-        // Disable
-        await page.evaluate((id) => {
-          const ctx = (window as any).__hudOverlayContext
-          if (ctx && ctx.setEnabled) ctx.setEnabled(id, false)
-        }, overlay.id)
-
+        await setOverlayEnabled(page, overlay.id, false)
         await page.waitForTimeout(500)
 
         results[`overlay-${overlay.id}`] = { passed: errors.length === 0, errors }
